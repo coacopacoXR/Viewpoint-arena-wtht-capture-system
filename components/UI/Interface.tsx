@@ -1,9 +1,10 @@
-import React from 'react';
+
+import React, { useState } from 'react';
 import { 
   Play, Pause, RefreshCw, Eye, EyeOff, 
   Video, User, Map, Activity, Flame, Footprints,
   SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
-  CheckCircle2, Power, Layers
+  CheckCircle2, Power, Layers, Network
 } from 'lucide-react';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
@@ -11,6 +12,8 @@ import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
 import SceneTree from './SceneTree';
 import MeetingSummary from './MeetingSummary';
+import DataFlowDrawer from './DataFlowDrawer';
+import ViewConfigExplainer from './ViewConfigExplainer';
 
 const Button: React.FC<{ 
   active?: boolean; 
@@ -51,6 +54,9 @@ const Interface: React.FC = () => {
     endMeeting
   } = useStore();
 
+  const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
+  const [showExplainer, setShowExplainer] = useState(false);
+
   const handleSplitToggle = () => {
       if (viewMode === ViewMode.SPLIT_SCREEN) {
           setViewMode(ViewMode.FREE);
@@ -79,12 +85,21 @@ const Interface: React.FC = () => {
   const showAIControls = viewMode === ViewMode.AI_GUIDED;
 
   return (
-    <div className="w-full h-full p-6 relative">
+    <div className="w-full h-full p-6 relative pointer-events-none">
       
-      <MeetingSummary />
+      {/* High Z-Index Overlays - Pointer Events Auto handled inside components */}
+      <div className="relative z-[200]">
+          <MeetingSummary />
+          {showExplainer && <ViewConfigExplainer onClose={() => setShowExplainer(false)} />}
+      </div>
+      
+      {/* Drawer Layer */}
+      <div className="relative z-[100]">
+          <DataFlowDrawer isOpen={isDataFlowOpen} onClose={() => setIsDataFlowOpen(false)} />
+      </div>
 
       {/* Header / Meta / Tree */}
-      <div className="flex flex-col items-start pointer-events-none z-20 absolute top-6 left-6 max-h-[90vh]">
+      <div className="flex flex-col items-start pointer-events-none z-[30] absolute top-6 left-6 max-h-[90vh]">
           <header className="flex flex-col gap-1 mb-2 shrink-0">
             <h1 className="font-bold tracking-tight text-lg text-neutral-900 flex items-center gap-2">
                 <div className={`w-3 h-3 rounded-full transition-colors ${isPlaying ? 'bg-orange-500 animate-pulse' : 'bg-gray-400'}`}></div>
@@ -130,7 +145,7 @@ const Interface: React.FC = () => {
       </div>
 
       {/* Right Header Area (Agent Status / End Meeting) */}
-      <div className="absolute top-6 right-6 flex flex-col items-end gap-2 pointer-events-auto z-20">
+      <div className="absolute top-6 right-6 flex flex-col items-end gap-2 pointer-events-auto z-[40]">
            
            <button 
                 onClick={() => endMeeting(true)}
@@ -146,16 +161,15 @@ const Interface: React.FC = () => {
                   <button onClick={() => { setActiveAgent(null); setViewMode(ViewMode.FREE); }} className="ml-2 hover:text-gray-300">✕</button>
                </div>
            )}
-           
-           {/* Leader Button Removed from here */}
       </div>
 
       {/* RIGHT PANEL: Conversation & Agent List */}
+      {/* DIRECT CHILD: Positioned via absolute classes inside the component relative to this container */}
       <ConversationPanel />
       
       {/* OVERLAY: AI View Sliders */}
       {showAIControls && (
-         <div className="absolute top-20 right-[340px] z-20 pointer-events-auto w-52 bg-white/90 backdrop-blur-md border border-gray-200 rounded shadow-sm p-3 animate-in slide-in-from-right-4">
+         <div className="absolute top-20 right-[340px] z-[40] pointer-events-auto w-52 bg-white/90 backdrop-blur-md border border-gray-200 rounded shadow-sm p-3 animate-in slide-in-from-right-4">
              <div className="flex items-center gap-2 mb-3 border-b border-gray-100 pb-2">
                  <Sparkles size={14} className="text-purple-600"/>
                  <span className="text-xs font-bold text-gray-700">AI Camera Weights</span>
@@ -182,8 +196,24 @@ const Interface: React.FC = () => {
          </div>
       )}
 
+      {/* DATA FLOW TOGGLE (Lower Left) */}
+      <div className="absolute bottom-6 left-6 z-[40] pointer-events-auto">
+          <button 
+            onClick={() => setIsDataFlowOpen(!isDataFlowOpen)}
+            className={clsx(
+                "flex items-center gap-2 px-3 py-2 rounded-full border shadow-sm transition-all hover:scale-105",
+                isDataFlowOpen 
+                    ? "bg-black text-white border-black" 
+                    : "bg-white/90 backdrop-blur text-gray-600 border-gray-200 hover:border-gray-400"
+            )}
+          >
+              <Network size={14} className={isDataFlowOpen ? "text-emerald-400" : "text-gray-400"} />
+              <span className="text-[10px] font-bold uppercase tracking-wide">Data Flow</span>
+          </button>
+      </div>
+
       {/* Bottom Controls Panel (Centered Dock) */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-end justify-center pointer-events-none gap-6 z-20"> 
+      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-end justify-center pointer-events-none gap-6 z-[30]"> 
         
         {/* Left: Playback Controls */}
         <div className="flex gap-2 pointer-events-auto bg-white/90 backdrop-blur-md p-1.5 rounded-md border border-gray-200 shadow-sm transition-all hover:shadow-md">
@@ -209,7 +239,12 @@ const Interface: React.FC = () => {
 
         {/* Center: View Modes */}
         <div className="flex flex-col items-center gap-2 pointer-events-auto">
-            <div className="text-[10px] font-mono uppercase text-gray-400 tracking-widest mb-1 bg-white/40 px-2 py-0.5 rounded backdrop-blur-sm shadow-sm">View Configuration</div>
+            <button 
+                onClick={() => setShowExplainer(true)}
+                className="text-[10px] font-mono uppercase text-gray-400 tracking-widest mb-1 bg-white/40 px-2 py-0.5 rounded backdrop-blur-sm shadow-sm hover:bg-white/80 hover:text-black transition-colors"
+            >
+                View Configuration
+            </button>
             <div className="flex gap-2 bg-white/90 backdrop-blur-md p-1.5 rounded-md border border-gray-200 shadow-sm transition-all hover:shadow-md">
                 <Button 
                     active={viewMode === ViewMode.FREE && !leaderId} 

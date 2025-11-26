@@ -1,13 +1,16 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store';
 import { 
     MessageSquare, Info, SplitSquareHorizontal, 
     ChevronRight, ChevronLeft, FileText, Database, Link as LinkIcon,
-    CheckCircle2, AlertTriangle, Lightbulb, Activity, LocateFixed, BookOpen
+    CheckCircle2, AlertTriangle, Lightbulb, Activity, LocateFixed, BookOpen,
+    HelpCircle
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ViewMode, InsightCard } from '../../types';
 import InsightDetailModal from './InsightDetailModal';
+import InsightExplainer from './InsightExplainer';
 
 // --- MAIN PANEL ---
 
@@ -25,6 +28,7 @@ const ConversationPanel: React.FC = () => {
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedCard, setSelectedCard] = useState<InsightCard | null>(null);
   const [activeTab, setActiveTab] = useState<'LIVE' | 'DOCS'>('LIVE');
+  const [showExplainer, setShowExplainer] = useState(false);
   
   // Hover state for "Source Tracing" (Array of IDs)
   const [hoveredSourceIds, setHoveredSourceIds] = useState<string[]>([]);
@@ -97,7 +101,7 @@ const ConversationPanel: React.FC = () => {
           // Only start inactivity timer if we are NOT currently hovering an insight card (reading context)
           if (hoveredSourceIds.length === 0) {
             activityTimeoutRef.current = setTimeout(() => {
-                setIsSticky(true);
+                setIsSticky(true), 4000;
             }, 4000); // Resume auto-scroll after 4s inactivity
           }
       }
@@ -105,7 +109,7 @@ const ConversationPanel: React.FC = () => {
 
   if (!isExpanded) {
       return (
-        <div className="absolute right-0 top-20 bottom-20 w-10 flex flex-col items-center gap-4 pointer-events-auto z-30">
+        <div className="absolute right-0 top-20 bottom-20 w-10 flex flex-col items-center gap-4 pointer-events-auto z-[40]">
             <button 
                 onClick={() => setIsExpanded(true)}
                 className="w-8 h-12 bg-white border border-gray-300 rounded-l-md shadow-md flex items-center justify-center hover:bg-gray-50 transition-colors"
@@ -136,14 +140,19 @@ const ConversationPanel: React.FC = () => {
     <>
         {/* MODAL RENDER */}
         {selectedCard && (
-            <InsightDetailModal 
-                card={selectedCard} 
-                onClose={() => setSelectedCard(null)}
-                agentColor={agents.find(a => a.id === selectedCard.agentId)?.color}
-            />
+            <div className="relative z-[200]">
+                 <InsightDetailModal 
+                    card={selectedCard} 
+                    onClose={() => setSelectedCard(null)}
+                    agentColor={agents.find(a => a.id === selectedCard.agentId)?.color}
+                />
+            </div>
         )}
+        
+        {/* EXPLAINER RENDER */}
+        {showExplainer && <InsightExplainer onClose={() => setShowExplainer(false)} />}
 
-        <div className="absolute right-6 top-20 bottom-20 w-80 flex flex-col gap-3 pointer-events-none z-30 animate-in slide-in-from-right-8 duration-300">
+        <div className="absolute right-6 top-20 bottom-20 w-80 flex flex-col gap-3 pointer-events-none z-[40] animate-in slide-in-from-right-8 duration-300">
             
             {/* HEADER / TOGGLE */}
             <div className="flex justify-end pointer-events-auto">
@@ -190,10 +199,15 @@ const ConversationPanel: React.FC = () => {
             {/* --- INSIGHTS DECK (AI Analysis) --- */}
             <div className="flex-1 min-h-0 flex flex-col pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm overflow-hidden transition-colors">
                 <div className="p-2 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center">
-                    <h3 className="text-[10px] font-bold uppercase text-gray-500 flex items-center gap-2">
-                        <Info size={12} />
+                    <button 
+                        onClick={() => setShowExplainer(true)}
+                        className="text-[10px] font-bold uppercase text-gray-500 flex items-center gap-2 hover:text-blue-600 transition-colors group"
+                        title="View AI System Logic"
+                    >
+                        <Info size={12} className="group-hover:text-blue-500" />
                         Detected Insights
-                    </h3>
+                        <HelpCircle size={10} className="text-gray-300 group-hover:text-blue-400" />
+                    </button>
                     <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full font-mono">
                         {insightCards.length}
                     </span>
