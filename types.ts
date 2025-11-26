@@ -1,20 +1,116 @@
 import { Vector3 } from 'three';
 import React from 'react';
 
-// Augment React's JSX namespace (for React 18+ / TS 5+)
-declare module 'react' {
-  namespace JSX {
-    interface IntrinsicElements {
-      [elemName: string]: any;
-    }
-  }
-}
-
-// Augment Global JSX namespace (for older setups or specific TS configs)
+// Augment Global JSX namespace (permissive for stability)
 declare global {
   namespace JSX {
     interface IntrinsicElements {
       [elemName: string]: any;
+      // Core
+      primitive: any;
+      group: any;
+      mesh: any;
+      scene: any;
+      
+      // Geometries
+      boxGeometry: any;
+      cylinderGeometry: any;
+      planeGeometry: any;
+      sphereGeometry: any;
+      capsuleGeometry: any;
+      ringGeometry: any;
+      circleGeometry: any;
+      coneGeometry: any;
+      dodecahedronGeometry: any;
+      icosahedronGeometry: any;
+      octahedronGeometry: any;
+      tetrahedronGeometry: any;
+      torusGeometry: any;
+      torusKnotGeometry: any;
+      tubeGeometry: any;
+
+      // Materials
+      meshStandardMaterial: any;
+      meshBasicMaterial: any;
+      meshPhysicalMaterial: any;
+      meshPhongMaterial: any;
+      meshLambertMaterial: any;
+      meshNormalMaterial: any;
+      meshDepthMaterial: any;
+      meshToonMaterial: any;
+      pointsMaterial: any;
+      
+      // Lights
+      pointLight: any;
+      ambientLight: any;
+      directionalLight: any;
+      spotLight: any;
+      hemisphereLight: any;
+      rectAreaLight: any;
+
+      // Helpers & Misc
+      fog: any;
+      color: any;
+      gridHelper: any;
+      axesHelper: any;
+      arrowHelper: any;
+    }
+  }
+}
+
+// Augment React module JSX namespace (needed for some TS configurations)
+declare module 'react' {
+  namespace JSX {
+    interface IntrinsicElements {
+      [elemName: string]: any;
+      // Core
+      primitive: any;
+      group: any;
+      mesh: any;
+      scene: any;
+      
+      // Geometries
+      boxGeometry: any;
+      cylinderGeometry: any;
+      planeGeometry: any;
+      sphereGeometry: any;
+      capsuleGeometry: any;
+      ringGeometry: any;
+      circleGeometry: any;
+      coneGeometry: any;
+      dodecahedronGeometry: any;
+      icosahedronGeometry: any;
+      octahedronGeometry: any;
+      tetrahedronGeometry: any;
+      torusGeometry: any;
+      torusKnotGeometry: any;
+      tubeGeometry: any;
+
+      // Materials
+      meshStandardMaterial: any;
+      meshBasicMaterial: any;
+      meshPhysicalMaterial: any;
+      meshPhongMaterial: any;
+      meshLambertMaterial: any;
+      meshNormalMaterial: any;
+      meshDepthMaterial: any;
+      meshToonMaterial: any;
+      pointsMaterial: any;
+      
+      // Lights
+      pointLight: any;
+      ambientLight: any;
+      directionalLight: any;
+      spotLight: any;
+      hemisphereLight: any;
+      rectAreaLight: any;
+
+      // Helpers & Misc
+      fog: any;
+      color: any;
+      gridHelper: any;
+      axesHelper: any;
+      arrowHelper: any;
     }
   }
 }
