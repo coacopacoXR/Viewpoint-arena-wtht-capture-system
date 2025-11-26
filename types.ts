@@ -49,7 +49,7 @@ export interface PointOfInterest {
 
 export type AgentRole = 'PRESENTER' | 'REVIEWER' | 'OBSERVER';
 
-export type AgentBehaviorState = 'IDLE' | 'MOVING' | 'INSPECTING' | 'DISCUSSING' | 'FOLLOWING';
+export type AgentBehaviorState = 'IDLE' | 'MOVING' | 'INSPECTING' | 'DISCUSSING' | 'FOLLOWING' | 'FOLLOWING_AGENT';
 
 export interface AgentState {
   id: string;
@@ -75,6 +75,9 @@ export interface ChatMessage {
 
 export type InsightType = 'RISK' | 'RATIONALE' | 'ACTION';
 
+// DETAILED DESIGN TYPES
+export type DecisionRole = "TRIGGER" | "RATIONALE" | "INTERMEDIATE_DECISION" | "FINAL_DECISION";
+
 export interface InsightDetails {
   priority: 'Critical' | 'High' | 'Medium' | 'Low';
   status: 'Open' | 'In Review' | 'Approved' | 'Rejected';
@@ -82,6 +85,10 @@ export interface InsightDetails {
   dueDate?: string;
   componentReference?: string; // The name of the component from the tree
   
+  // Design Review Metadata
+  designStage?: "DETAILED_DESIGN";
+  decisionRole?: DecisionRole;
+
   // Risk Specific
   impact?: string;
   mitigationStrategy?: string;

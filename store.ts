@@ -87,6 +87,9 @@ interface AppState {
   splitScreenTargetId: string | null; 
   userInteractionPoint: Vector3; 
   isLaserActive: boolean;
+  
+  // Follow Request System
+  followRequest: { agentId: string; timestamp: number } | null;
 
   // Heatmap
   heatmapValues: Record<string, number>;
@@ -117,6 +120,7 @@ interface AppState {
   setSplitScreenTarget: (id: string | null) => void;
   setUserInteractionPoint: (pos: Vector3) => void;
   setLaserActive: (active: boolean) => void;
+  setFollowRequest: (req: { agentId: string; timestamp: number } | null) => void;
   
   setAgentStyle: (style: AgentStyle) => void;
   setAgentWeight: (id: string, weight: number) => void;
@@ -153,6 +157,7 @@ export const useStore = create<AppState>((set) => ({
   splitScreenTargetId: null,
   userInteractionPoint: new Vector3(),
   isLaserActive: false,
+  followRequest: null,
   heatmapValues: {},
   chatHistory: [],
   insightCards: [],
@@ -179,6 +184,7 @@ export const useStore = create<AppState>((set) => ({
   setSplitScreenTarget: (id) => set({ splitScreenTargetId: id }),
   setUserInteractionPoint: (pos) => set({ userInteractionPoint: pos }),
   setLaserActive: (active) => set({ isLaserActive: active }),
+  setFollowRequest: (req) => set({ followRequest: req }),
   
   setAgentStyle: (style) => set({ agentStyle: style }),
   setAgentWeight: (id, weight) => set((state) => ({
@@ -194,7 +200,6 @@ export const useStore = create<AppState>((set) => ({
   })),
 
   addChatMessage: (msg) => set((state) => ({
-    // Increase history buffer to 150 to prevent source messages from being deleted too quickly
     chatHistory: [...state.chatHistory, msg].slice(-150)
   })),
   
@@ -225,11 +230,9 @@ export const useStore = create<AppState>((set) => ({
   })),
   selectNode: (id) => set((state) => {
       const newStates = { ...state.objectStates };
-      // Deselect all
       Object.keys(newStates).forEach(key => {
           newStates[key] = { ...newStates[key], selected: false };
       });
-      // Select target
       if (id && newStates[id]) {
           newStates[id] = { ...newStates[id], selected: true };
       }

@@ -1,10 +1,9 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Play, Pause, RefreshCw, Eye, EyeOff, 
   Video, User, Map, Activity, Flame, Footprints,
   SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
-  CheckCircle2, Power, Layers, Network
+  CheckCircle2, Power, Layers, Network, Link, BellRing, X
 } from 'lucide-react';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
@@ -51,11 +50,15 @@ const Interface: React.FC = () => {
     agents,
     agentStyle, setAgentStyle,
     agentWeights, setAgentWeight,
-    endMeeting
+    endMeeting,
+    followRequest, setFollowRequest
   } = useStore();
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
+
+  // Derived state for HUD: Who is following me?
+  const myFollowers = agents.filter(a => a.behavior === 'FOLLOWING' || (leaderId === 'USER'));
 
   const handleSplitToggle = () => {
       if (viewMode === ViewMode.SPLIT_SCREEN) {
@@ -80,6 +83,14 @@ const Interface: React.FC = () => {
       const styles = [AgentStyle.BOX, AgentStyle.CAPSULE, AgentStyle.ROBOT];
       const next = styles[(styles.indexOf(agentStyle) + 1) % styles.length];
       setAgentStyle(next);
+  };
+
+  const handleAcceptFollow = () => {
+      if (followRequest) {
+          setActiveAgent(followRequest.agentId);
+          setViewMode(ViewMode.POV_AGENT);
+          setFollowRequest(null);
+      }
   };
 
   const showAIControls = viewMode === ViewMode.AI_GUIDED;
@@ -142,7 +153,60 @@ const Interface: React.FC = () => {
                     </div>
                 )}
           </div>
+
+          {/* FOLLOWERS HUD */}
+          {myFollowers.length > 0 && !leaderId && (
+              <div className="mt-4 animate-in slide-in-from-left-4 fade-in duration-500">
+                  <div className="text-[10px] font-mono uppercase text-gray-400 tracking-widest mb-1 bg-white/40 px-2 py-0.5 rounded backdrop-blur-sm shadow-sm w-fit">
+                        Linked Viewers
+                  </div>
+                  <div className="w-64 flex flex-col gap-1">
+                      {myFollowers.map(agent => (
+                          <div key={agent.id} className="bg-white/80 backdrop-blur border border-gray-200 p-2 rounded flex items-center gap-2 shadow-sm">
+                              <div className="relative">
+                                  <div className="w-2 h-2 rounded-full animate-pulse" style={{backgroundColor: agent.color}}></div>
+                                  <div className="absolute inset-0 w-2 h-2 rounded-full animate-ping opacity-20" style={{backgroundColor: agent.color}}></div>
+                              </div>
+                              <span className="text-xs font-bold text-gray-700">{agent.name}</span>
+                              <span className="text-[9px] text-gray-400 font-mono ml-auto">FOLLOWING</span>
+                          </div>
+                      ))}
+                  </div>
+              </div>
+          )}
       </div>
+
+      {/* REQUEST TOAST (Center Top) */}
+      {followRequest && (
+          <div className="absolute top-8 left-1/2 -translate-x-1/2 z-[200] pointer-events-auto flex flex-col items-center animate-in slide-in-from-top-4 fade-in">
+              <div className="bg-black/90 text-white backdrop-blur-md px-4 py-3 rounded-lg shadow-2xl flex items-center gap-4 border border-gray-700">
+                  <div className="flex items-center gap-2">
+                      <BellRing className="text-orange-400 animate-bounce" size={18} />
+                      <div className="flex flex-col">
+                          <span className="text-xs font-bold uppercase tracking-wide">Request to Follow</span>
+                          <span className="text-[10px] text-gray-400 font-mono">
+                              {agents.find(a => a.id === followRequest.agentId)?.name} wants to show you something.
+                          </span>
+                      </div>
+                  </div>
+                  <div className="h-8 w-px bg-gray-700"></div>
+                  <div className="flex gap-2">
+                      <button 
+                        onClick={handleAcceptFollow}
+                        className="px-3 py-1.5 bg-white text-black rounded text-xs font-bold hover:bg-gray-200 transition-colors"
+                      >
+                          Accept
+                      </button>
+                      <button 
+                        onClick={() => setFollowRequest(null)}
+                        className="px-2 py-1.5 text-gray-400 hover:text-white transition-colors"
+                      >
+                          <X size={14} />
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
 
       {/* Right Header Area (Agent Status / End Meeting) */}
       <div className="absolute top-6 right-6 flex flex-col items-end gap-2 pointer-events-auto z-[40]">
@@ -164,7 +228,6 @@ const Interface: React.FC = () => {
       </div>
 
       {/* RIGHT PANEL: Conversation & Agent List */}
-      {/* DIRECT CHILD: Positioned via absolute classes inside the component relative to this container */}
       <ConversationPanel />
       
       {/* OVERLAY: AI View Sliders */}
