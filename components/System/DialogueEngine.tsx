@@ -10,24 +10,25 @@ interface PhraseTemplate {
   summary?: string; 
 }
 
+// Tuned for Detailed Design Review (Geometry, Tolerances, Mfg)
 const PHRASE_LIBRARY: PhraseTemplate[] = [
   // NEUTRAL (Observations / Measurements)
-  { text: "Verifying the draft angle on the {poi}.", type: 'neutral' },
-  { text: "Checking the surface continuity of the {poi}.", type: 'neutral' },
-  { text: "Measuring the gap tolerance around the {poi}.", type: 'neutral' },
-  { text: "Inspecting the {poi} for molding feasibility.", type: 'neutral' },
-  { text: "Looking at the sub-assembly connection for the {poi}.", type: 'neutral' },
+  { text: "Verifying the draft angle on the {poi} surface.", type: 'neutral' },
+  { text: "Checking the surface continuity G2 curvature on the {poi}.", type: 'neutral' },
+  { text: "Measuring the gap tolerance around the {poi} perimeter.", type: 'neutral' },
+  { text: "Inspecting the {poi} parting line location.", type: 'neutral' },
+  { text: "Looking at the sub-assembly mounting points for the {poi}.", type: 'neutral' },
 
-  // RISK (Concerns)
-  { text: "The wall thickness on the {poi} looks uneven – might be risky for molding.", type: 'risk', summary: "Wall Thickness Concern" },
-  { text: "This undercut on the {poi} will require a complex slider action.", type: 'risk', summary: "Tooling Complexity" },
+  // RISK (Concerns - Triggers)
+  { text: "The wall thickness on the {poi} looks uneven – might be risky for sink marks.", type: 'risk', summary: "Sink Mark Risk" },
+  { text: "This undercut on the {poi} will require a complex slider action in the tool.", type: 'risk', summary: "Tooling Complexity" },
   { text: "The clearance around the {poi} is below the 0.5mm safety margin.", type: 'risk', summary: "Interference Risk" },
   { text: "Thermal expansion of the {poi} might cause stress cracking here.", type: 'risk', summary: "Thermal Stress" },
   { text: "Assembly access to the {poi} is blocked by the chassis rib.", type: 'risk', summary: "Assembly Access" },
 
   // RATIONALE (Intent)
   { text: "The {poi} uses this profile to maximize stiffness-to-weight ratio.", type: 'rationale', summary: "Stiffness Optimization" },
-  { text: "The underside of the {poi} looks over-featured to support the PCB.", type: 'rationale', summary: "PCB Support" },
+  { text: "The underside of the {poi} is ribbed to prevent warping.", type: 'rationale', summary: "Warp Prevention" },
   { text: "We added this fillet to the {poi} to improve flow during injection.", type: 'rationale', summary: "Molding Flow" },
   { text: "This snap-fit on the {poi} is designed for tool-less disassembly.", type: 'rationale', summary: "Serviceability" },
 
@@ -36,11 +37,12 @@ const PHRASE_LIBRARY: PhraseTemplate[] = [
   { text: "Update the tolerance stack-up calculation for the {poi}.", type: 'action', summary: "Tolerance Stack-up" },
   { text: "Let's increase the rib thickness on the {poi} by 10%.", type: 'action', summary: "Rib Reinforcement" },
   { text: "Verify the supplier capability for this {poi} texture.", type: 'action', summary: "Supplier Check" },
+  { text: "Freeze the geometry on the {poi} for tooling release.", type: 'action', summary: "Freeze Design" },
 
   // SOCIAL / VISIBILITY
-  { text: "I'm losing context on the {poi}, can we rotate?", type: 'visibility' },
+  { text: "I'm losing context on the {poi}, can we rotate view?", type: 'visibility' },
   { text: "Following your lead to the {poi}.", type: 'social' },
-  { text: "Agreed, looking at the {poi} now.", type: 'social' },
+  { text: "Agreed, zooming in on the {poi} now.", type: 'social' },
 ];
 
 const USER_CONTEXT_TEMPLATES = [
@@ -93,6 +95,7 @@ const generateDetails = (type: InsightType, targetId: string, targetLabel: strin
     if (type === 'ACTION') {
         return {
             ...base,
+            // If it's the first decision, it's intermediate. Subsequent are Final.
             decisionRole: decisionState === 'NONE' ? 'INTERMEDIATE_DECISION' : 'FINAL_DECISION',
             department: "Mechanical Eng"
         };
@@ -169,20 +172,21 @@ const DialogueEngine: React.FC = () => {
       }
 
       // --- FLOW BIAS LOGIC ---
+      // We advance the "step" for this component to simulate a natural conversation arc
       const step = poiConversationStep.current[targetId] ?? 0;
       poiConversationStep.current[targetId] = step + 1;
 
       let candidates = PHRASE_LIBRARY;
       
-      // Early steps: Observation / Visibility
+      // Step 0-1: Exploration (Neutral / Visibility)
       if (step < 2) {
           candidates = PHRASE_LIBRARY.filter(t => t.type === 'neutral' || t.type === 'visibility');
       } 
-      // Middle steps: Risk / Rationale
+      // Step 2-4: Analysis (Risk / Rationale)
       else if (step < 5) {
           candidates = PHRASE_LIBRARY.filter(t => t.type === 'risk' || t.type === 'rationale');
       } 
-      // Late steps: Action / Rationale
+      // Step 5+: Conclusion (Action / Rationale)
       else {
           candidates = PHRASE_LIBRARY.filter(t => t.type === 'action' || t.type === 'rationale');
       }
@@ -208,7 +212,7 @@ const DialogueEngine: React.FC = () => {
       if (messageBuffer.current.length > 3) messageBuffer.current.shift();
 
       if (template.type === 'action' || template.type === 'risk' || template.type === 'rationale' || isUserDriven) {
-          const shouldCapture = isUserDriven || Math.random() > 0.6; // Higher capture rate for flow
+          const shouldCapture = isUserDriven || Math.random() > 0.6; 
 
           if (shouldCapture) {
             setTimeout(() => {

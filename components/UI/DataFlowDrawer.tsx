@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import { 
     Mic, MousePointer2, Eye, Box, Cpu, UserCog, 
     FileText, GitCommitHorizontal, LayoutDashboard, ArrowRight,
-    X, Activity
+    X, Activity, UserCheck, ClipboardCheck, BrainCircuit, ScanLine
 } from 'lucide-react';
 
 interface DataFlowDrawerProps {
@@ -18,13 +18,19 @@ const NODE_SPECS: Record<string, { title: string, specs: string[] }> = {
     'POINT': { title: "Pointer Events", specs: ["Raycast: Three.js", "Freq: 60Hz", "Target: Mesh ID"] },
     'GAZE': { title: "Attention Ray", specs: ["Vector: Forward Z", "Dwell: >300ms", "Heatmap: Additive"] },
     'CONTEXT': { title: "Active Object", specs: ["Tree Node: ID", "Metadata: Material", "State: Visible"] },
-    'CAPTURE': { title: "LLM Analysis", specs: ["Model: Gemini Flash", "Prompt: Zero-shot", "Output: JSON"] },
+    
+    'CAPTURE': { title: "LLM Extraction", specs: ["Model: Gemini Flash", "Prompt: Zero-shot", "Output: JSON"] },
     'CLASSIFY': { title: "Card Logic", specs: ["Intent: Trigger Words", "Sentiment: Polarity", "Priority: Heuristic"] },
-    'GROUP': { title: "Thread Recon", specs: ["Cluster: Temporal", "Link: Component ID", "Chain: Causal"] },
-    'OVERSIGHT': { title: "Human Loop", specs: ["Edit: CRUD", "Validate: Manual", "Override: Enabled"] },
+    
+    'LIVE_OVER': { title: "Live Oversight", specs: ["UI: Conversation Panel", "Action: Edit/Reject", "Latency: <500ms"] },
+    
+    'THREADING': { title: "Context Engine", specs: ["Graph: Temporal DAG", "Link: Component ID", "Heuristic: Causal"] },
+    
+    'FINAL_OVER': { title: "Session Review", specs: ["UI: Summary Board", "View: Kanban/Flow", "Action: Reassign/Approve"] },
+    
     'CARDS': { title: "Insight Card", specs: ["Schema: v2.1", "Persist: Store", "Export: PDF/JSON"] },
-    'THREADS': { title: "Rationale Flow", specs: ["Graph: DAG", "Nodes: 3 Types", "Edges: Causal"] },
-    'BOARD': { title: "Summary View", specs: ["Layout: Kanban", "Filter: Faceted", "Sort: Priority"] },
+    'FLOWS': { title: "Rationale Flow", specs: ["Format: GraphJSON", "Nodes: Trigger/Decide"] },
+    'BOARD': { title: "Summary Report", specs: ["Format: PDF/HTML", "Stats: Aggregated"] },
 };
 
 // Reusable Node Component with Tooltip
@@ -47,15 +53,15 @@ const Node: React.FC<{
         )}
     >
         <Icon size={16} className="mb-1 opacity-80" />
-        <div className="text-[9px] font-bold uppercase tracking-wider">{label}</div>
-        {sub && <div className="text-[8px] font-mono text-gray-400 mt-0.5">{sub}</div>}
+        <div className="text-[9px] font-bold uppercase tracking-wider text-center">{label}</div>
+        {sub && <div className="text-[8px] font-mono text-gray-400 mt-0.5 text-center">{sub}</div>}
     </div>
 );
 
 // Animated Connector Line
 const Connector: React.FC<{ length?: string, vertical?: boolean, label?: string, dashed?: boolean }> = ({ length = "w-12", vertical = false, label, dashed }) => (
     <div className={clsx(
-        "flex items-center justify-center relative",
+        "flex items-center justify-center relative shrink-0",
         vertical ? "flex-col h-12 w-px" : "flex-row h-px " + length
     )}>
         <div className={clsx(
@@ -69,7 +75,7 @@ const Connector: React.FC<{ length?: string, vertical?: boolean, label?: string,
             )}></div>
         </div>
         {label && (
-            <div className="absolute -top-4 text-[8px] font-mono text-gray-400 bg-white/50 px-1 backdrop-blur-sm">
+            <div className="absolute -top-4 text-[8px] font-mono text-gray-400 bg-white/50 px-1 backdrop-blur-sm whitespace-nowrap">
                 {label}
             </div>
         )}
@@ -90,7 +96,7 @@ const DataFlowDrawer: React.FC<DataFlowDrawerProps> = ({ isOpen, onClose }) => {
             {/* Drawer Container */}
             <div 
                 className={clsx(
-                    "fixed bottom-0 left-0 right-0 h-[380px] z-[120] flex flex-col shadow-[0_-10px_40px_rgba(0,0,0,0.1)] transition-transform duration-500 cubic-bezier(0.22, 1, 0.36, 1) pointer-events-auto",
+                    "fixed bottom-0 left-0 right-0 h-[420px] z-[120] flex flex-col shadow-[0_-10px_40px_rgba(0,0,0,0.1)] transition-transform duration-500 cubic-bezier(0.22, 1, 0.36, 1) pointer-events-auto",
                     isOpen ? "translate-y-0" : "translate-y-[110%]"
                 )}
             >
@@ -114,13 +120,13 @@ const DataFlowDrawer: React.FC<DataFlowDrawerProps> = ({ isOpen, onClose }) => {
                 <div className="absolute inset-0 bg-[#F2F2F2]/98 backdrop-blur-xl border-t border-gray-300 rounded-t-xl shadow-2xl"></div>
                 
                 {/* Header Content */}
-                <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white/50 rounded-t-xl">
+                <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white/50 rounded-t-xl shrink-0">
                     <div className="flex items-center gap-3">
                         <Activity className="text-emerald-500" size={16} />
                         <span className="text-xs font-bold uppercase tracking-widest text-gray-600">System Data Architecture</span>
                     </div>
                     <div className="flex items-center gap-4">
-                        <div className="text-[9px] font-mono text-gray-400 hidden md:block">DEBUG_VIEW_MODE // V.2.1.0</div>
+                        <div className="text-[9px] font-mono text-gray-400 hidden md:block">DEBUG_VIEW_MODE // V.2.2.0</div>
                         <button 
                             onClick={onClose}
                             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-black/10 text-gray-500 hover:text-black transition-colors pointer-events-auto"
@@ -131,83 +137,93 @@ const DataFlowDrawer: React.FC<DataFlowDrawerProps> = ({ isOpen, onClose }) => {
                 </div>
 
                 {/* Diagram Canvas */}
-                <div className="relative z-10 flex-1 overflow-x-auto overflow-y-hidden flex items-center justify-center p-8 custom-scrollbar">
+                <div className="relative z-10 flex-1 overflow-x-auto overflow-y-hidden flex items-center p-8 custom-scrollbar">
                     
-                    <div className="flex items-center gap-0 scale-90 md:scale-100 origin-center min-w-[800px]">
+                    <div className="flex items-center gap-0 min-w-max mx-auto">
                         
-                        {/* STAGE A: INPUTS */}
-                        <div className="flex flex-col gap-4">
+                        {/* 1. INPUTS */}
+                        <div className="flex flex-col gap-4 shrink-0">
                             <div className="flex flex-col gap-2 p-3 border border-dashed border-gray-300 rounded-lg bg-gray-50/50">
                                 <div className="text-[9px] font-mono text-gray-400 uppercase mb-1 text-center">Raw Inputs</div>
-                                <Node id="SPEECH" icon={Mic} label="Speech" sub="Audio Stream" onHover={setHoveredNode} />
-                                <Node id="POINT" icon={MousePointer2} label="Pointing" sub="Vector3" onHover={setHoveredNode} />
-                                <Node id="GAZE" icon={Eye} label="Gaze" sub="Attention Ray" onHover={setHoveredNode} />
-                                <Node id="CONTEXT" icon={Box} label="Context" sub="Active Object" onHover={setHoveredNode} />
+                                <div className="grid grid-cols-2 gap-2">
+                                    <Node id="SPEECH" icon={Mic} label="Speech" sub="Audio" onHover={setHoveredNode} />
+                                    <Node id="POINT" icon={MousePointer2} label="Point" sub="Vector3" onHover={setHoveredNode} />
+                                    <Node id="GAZE" icon={Eye} label="Gaze" sub="Ray" onHover={setHoveredNode} />
+                                    <Node id="CONTEXT" icon={Box} label="Context" sub="Tree ID" onHover={setHoveredNode} />
+                                </div>
                             </div>
                         </div>
 
-                        <div className="flex flex-col justify-center h-full px-2">
-                             <Connector length="w-16" label="Events" />
-                        </div>
+                        <Connector length="w-12" label="Events" />
 
-                        {/* STAGE B: AI SYSTEM */}
-                        <div className="flex flex-col items-center">
-                            <div className="p-4 bg-white border-2 border-gray-800 shadow-sm rounded-lg relative">
+                        {/* 2. AI EXTRACTION LAYER */}
+                        <div className="flex flex-col items-center shrink-0">
+                            <div className="p-3 bg-white border-2 border-gray-800 shadow-sm rounded-lg relative">
                                 <div className="absolute -top-2.5 left-4 bg-gray-800 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase">
-                                    AI Core System
+                                    Extraction Layer
                                 </div>
-                                
-                                <div className="flex items-center gap-4">
-                                    <div className="flex flex-col items-center gap-2">
-                                        <div className="text-[8px] font-mono text-gray-400 uppercase">Capture</div>
-                                        <Node id="CAPTURE" icon={Cpu} label="LLM Analysis" color="border-gray-200 bg-gray-50" className="w-20 h-20" onHover={setHoveredNode} />
-                                    </div>
-
+                                <div className="flex items-center gap-3">
+                                    <Node id="CAPTURE" icon={Cpu} label="Capture" sub="LLM" color="border-gray-200 bg-gray-50" className="w-20" onHover={setHoveredNode} />
                                     <ArrowRight size={12} className="text-gray-300" />
-
-                                    <div className="flex flex-col items-center gap-2">
-                                        <div className="text-[8px] font-mono text-gray-400 uppercase">Classify</div>
-                                        <Node id="CLASSIFY" icon={FileText} label="Card Logic" color="border-gray-200 bg-gray-50" className="w-20 h-20" onHover={setHoveredNode} />
-                                    </div>
-
-                                    <ArrowRight size={12} className="text-gray-300" />
-
-                                     <div className="flex flex-col items-center gap-2">
-                                        <div className="text-[8px] font-mono text-gray-400 uppercase">Group</div>
-                                        <Node id="GROUP" icon={GitCommitHorizontal} label="Threading" color="border-gray-200 bg-gray-50" className="w-20 h-20" onHover={setHoveredNode} />
-                                    </div>
+                                    <Node id="CLASSIFY" icon={ScanLine} label="Classify" sub="Logic" color="border-gray-200 bg-gray-50" className="w-20" onHover={setHoveredNode} />
                                 </div>
                             </div>
                         </div>
 
-                         <div className="flex flex-col justify-center h-full px-2">
-                             <Connector length="w-16" label="Drafts" dashed />
-                        </div>
+                        <Connector length="w-12" label="Drafts" dashed />
 
-                        {/* STAGE C: HUMAN OVERSIGHT */}
-                        <div className="flex flex-col items-center gap-2">
+                        {/* 3. LIVE OVERSIGHT */}
+                        <div className="flex flex-col items-center gap-2 shrink-0">
                             <Node 
-                                id="OVERSIGHT"
-                                icon={UserCog} 
-                                label="Oversight" 
-                                sub="Edit / Validate" 
-                                color="border-dashed border-gray-400 bg-transparent opacity-80" 
+                                id="LIVE_OVER"
+                                icon={UserCheck} 
+                                label="Live Oversight" 
+                                sub="Panel UI" 
+                                color="border-dashed border-blue-400 bg-blue-50/50" 
+                                className="w-24"
                                 onHover={setHoveredNode}
                             />
                         </div>
 
-                         <div className="flex flex-col justify-center h-full px-2">
-                             <Connector length="w-16" label="Publish" />
+                        <Connector length="w-12" label="Validated" />
+
+                        {/* 4. AI SYNTHESIS LAYER */}
+                        <div className="flex flex-col items-center shrink-0">
+                            <div className="p-3 bg-white border-2 border-gray-800 shadow-sm rounded-lg relative">
+                                <div className="absolute -top-2.5 left-4 bg-gray-800 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase">
+                                    Synthesis Layer
+                                </div>
+                                <div className="flex items-center gap-3">
+                                     <Node id="THREADING" icon={BrainCircuit} label="Context Engine" sub="Threading" color="border-gray-200 bg-gray-50" className="w-28 h-20" onHover={setHoveredNode} />
+                                </div>
+                            </div>
                         </div>
 
-                        {/* STAGE D: STRUCTURED OUTPUTS */}
-                        <div className="flex flex-col gap-2">
+                        <Connector length="w-12" label="Flows" dashed />
+
+                        {/* 5. FINAL REVIEW */}
+                        <div className="flex flex-col items-center gap-2 shrink-0">
+                            <Node 
+                                id="FINAL_OVER"
+                                icon={ClipboardCheck} 
+                                label="Final Review" 
+                                sub="Board UI" 
+                                color="border-dashed border-emerald-400 bg-emerald-50/50" 
+                                className="w-24"
+                                onHover={setHoveredNode}
+                            />
+                        </div>
+
+                        <Connector length="w-12" label="Assets" />
+
+                        {/* 6. STRUCTURED OUTPUTS */}
+                        <div className="flex flex-col gap-2 shrink-0">
                              <div className="flex flex-col gap-2 p-3 border border-gray-200 rounded-lg bg-white shadow-sm">
-                                <div className="text-[9px] font-mono text-gray-400 uppercase mb-1 text-center">Structured Data</div>
-                                <div className="flex flex-col gap-2">
-                                    <Node id="CARDS" icon={FileText} label="Cards" className="w-24 py-2" onHover={setHoveredNode} />
-                                    <Node id="THREADS" icon={GitCommitHorizontal} label="Threads" className="w-24 py-2" onHover={setHoveredNode} />
-                                    <Node id="BOARD" icon={LayoutDashboard} label="Board" className="w-24 py-2" onHover={setHoveredNode} />
+                                <div className="text-[9px] font-mono text-gray-400 uppercase mb-1 text-center">Artifacts</div>
+                                <div className="grid grid-cols-1 gap-2">
+                                    <Node id="CARDS" icon={FileText} label="Cards" className="w-20 py-1.5" onHover={setHoveredNode} />
+                                    <Node id="FLOWS" icon={GitCommitHorizontal} label="Flows" className="w-20 py-1.5" onHover={setHoveredNode} />
+                                    <Node id="BOARD" icon={LayoutDashboard} label="Report" className="w-20 py-1.5" onHover={setHoveredNode} />
                                 </div>
                             </div>
                         </div>

@@ -1,16 +1,51 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store';
 import { 
     CheckCircle2, AlertTriangle, Lightbulb, FileText, Download, 
     ShieldAlert, Scale, MessageSquare, ArrowRight, LayoutDashboard, List,
     Users, Box, GitCommitHorizontal, CircleDollarSign, Fingerprint, Gavel, 
-    Construction, HelpCircle, User, Building2, Zap
+    Construction, HelpCircle, User, Building2, Zap, Microscope, Eye,
+    BarChart2, Search, Activity
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { InsightType, InsightCard, ChatMessage } from '../../types';
 import InsightDetailModal from './InsightDetailModal';
 
-// --- TRIGGER TYPES & ICONS ---
+// --- ANALYZER TYPES & LOGIC ---
+
+type ConversationRole = 
+    | 'OBSERVATION' 
+    | 'COORDINATION' 
+    | 'TRIGGER' 
+    | 'RATIONALE' 
+    | 'CONSTRAINT' 
+    | 'DECISION' 
+    | 'GENERAL';
+
+const classifyMessage = (text: string): ConversationRole => {
+    const t = text.toLowerCase();
+    if (t.includes('risk') || t.includes('concern') || t.includes('fail') || t.includes('weak')) return 'TRIGGER';
+    if (t.includes('because') || t.includes('designed to') || t.includes('intent') || t.includes('driver')) return 'RATIONALE';
+    if (t.includes('verify') || t.includes('check') || t.includes('update') || t.includes('run')) return 'DECISION';
+    if (t.includes('cant see') || t.includes('rotate') || t.includes('view') || t.includes('focus')) return 'COORDINATION';
+    if (t.includes('cost') || t.includes('supplier') || t.includes('time') || t.includes('limit')) return 'CONSTRAINT';
+    if (t.includes('look') || t.includes('measure') || t.includes('inspect')) return 'OBSERVATION';
+    return 'GENERAL';
+};
+
+const getRoleColor = (role: ConversationRole) => {
+    switch (role) {
+        case 'TRIGGER': return 'bg-red-400 text-red-900 border-red-200';
+        case 'RATIONALE': return 'bg-amber-400 text-amber-900 border-amber-200';
+        case 'DECISION': return 'bg-blue-400 text-blue-900 border-blue-200';
+        case 'COORDINATION': return 'bg-purple-400 text-purple-900 border-purple-200';
+        case 'CONSTRAINT': return 'bg-emerald-400 text-emerald-900 border-emerald-200';
+        case 'OBSERVATION': return 'bg-gray-400 text-gray-900 border-gray-200';
+        default: return 'bg-gray-200 text-gray-700 border-gray-300';
+    }
+};
+
 type TriggerCategory = 'DISAGREEMENT' | 'COST' | 'ERGONOMICS' | 'COMPLIANCE' | 'QUALITY' | 'GENERAL';
 
 const getTriggerInfo = (text: string): { type: TriggerCategory, icon: any, label: string, color: string } => {
@@ -40,7 +75,7 @@ const MeetingSummary: React.FC = () => {
     const updateInsightType = useStore(state => state.updateInsightType);
     const updateInsight = useStore(state => state.updateInsight);
 
-    const [activeTab, setActiveTab] = useState<'DECISIONS' | 'REQUIREMENTS' | 'ASSIGNEES' | 'COMPONENTS' | 'THREADS'>('DECISIONS');
+    const [activeTab, setActiveTab] = useState<'DECISIONS' | 'REQUIREMENTS' | 'ASSIGNEES' | 'COMPONENTS' | 'THREADS' | 'ANALYSIS'>('DECISIONS');
     const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
     const [selectedCard, setSelectedCard] = useState<InsightCard | null>(null);
     
@@ -154,6 +189,9 @@ const MeetingSummary: React.FC = () => {
         intermediates: InsightCard[];
         triggerTypes: TriggerCategory[]; // Unique list of trigger types found
         triggerMessages: ChatMessage[]; // The messages that started it
+        // Analytics
+        allMessages: ChatMessage[];
+        patterns: string[];
     }
 
     const getThreads = (): DecisionThread[] => {
@@ -173,9 +211,24 @@ const MeetingSummary: React.FC = () => {
             const firstCard = sorted[0];
             const originMsgs = chatHistory.filter(m => firstCard.sourceMessageIds?.includes(m.id));
 
+            // Analyzer Logic: Collect all messages related to this component (fuzzy match on component name or cards)
+            // This reconstructs the "Whole Conversation" not just the card sources.
+            const relatedMessages = chatHistory.filter(m => 
+                m.text.includes(component) || 
+                sorted.some(c => c.sourceMessageIds?.includes(m.id))
+            ).sort((a,b) => a.timestamp - b.timestamp);
+
             // Detect Trigger Types
             const triggersSet = new Set<TriggerCategory>();
             originMsgs.forEach(m => triggersSet.add(getTriggerInfo(m.text).type));
+
+            // Detect Collaboration Patterns
+            const patterns: string[] = [];
+            const uniqueSpeakers = new Set(relatedMessages.map(m => m.agentId)).size;
+            if (uniqueSpeakers > 2) patterns.push("Shared Focus");
+            if (relatedMessages.length > 8) patterns.push("Deep Dive");
+            if (relatedMessages.some(m => m.text.includes("rotate") || m.text.includes("view"))) patterns.push("View Coord.");
+            if (relatedMessages.some(m => m.text.includes("fail") || m.text.includes("risk"))) patterns.push("High Alert");
 
             threads.push({
                 id: component,
@@ -183,7 +236,9 @@ const MeetingSummary: React.FC = () => {
                 finalDecision: final,
                 intermediates,
                 triggerTypes: Array.from(triggersSet),
-                triggerMessages: originMsgs
+                triggerMessages: originMsgs,
+                allMessages: relatedMessages,
+                patterns
             });
         });
 
@@ -235,6 +290,9 @@ const MeetingSummary: React.FC = () => {
                          <button onClick={() => setActiveTab('THREADS')} className={clsx("px-3 py-1.5 rounded text-xs font-bold uppercase flex items-center gap-2 transition-colors", activeTab === 'THREADS' ? "bg-white text-black" : "text-gray-400 hover:text-white")}>
                             <GitCommitHorizontal size={14} /> Rationale Flow
                          </button>
+                         <button onClick={() => setActiveTab('ANALYSIS')} className={clsx("px-3 py-1.5 rounded text-xs font-bold uppercase flex items-center gap-2 transition-colors", activeTab === 'ANALYSIS' ? "bg-white text-black" : "text-gray-400 hover:text-white")}>
+                            <Microscope size={14} /> Analysis
+                         </button>
                     </div>
 
                     <div className="flex items-center gap-3">
@@ -253,8 +311,9 @@ const MeetingSummary: React.FC = () => {
                 <div className="flex-1 flex overflow-hidden">
                     
                     {/* LEFT PANEL CONTENT */}
-                    <div className={clsx("flex-1 bg-gray-50/50 relative", activeTab !== 'THREADS' ? "p-6 overflow-y-auto" : "overflow-hidden")}>
+                    <div className={clsx("flex-1 bg-gray-50/50 relative", (activeTab !== 'THREADS' && activeTab !== 'ANALYSIS') ? "p-6 overflow-y-auto" : "overflow-hidden")}>
                         
+                        {/* DECISIONS TAB */}
                         {activeTab === 'DECISIONS' && (
                             <div className="grid grid-cols-3 gap-6 h-full min-h-[500px]">
                                 <div className="flex flex-col gap-3 h-full bg-red-50/30 rounded-lg p-2 border border-dashed border-red-200" onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, 'RISK')}>
@@ -272,6 +331,7 @@ const MeetingSummary: React.FC = () => {
                             </div>
                         )}
 
+                        {/* REQUIREMENTS TAB */}
                         {activeTab === 'REQUIREMENTS' && (
                              <div className="flex flex-col gap-3">
                                 {requirements.map(req => {
@@ -300,6 +360,7 @@ const MeetingSummary: React.FC = () => {
                             </div>
                         )}
 
+                        {/* ASSIGNEES TAB */}
                         {activeTab === 'ASSIGNEES' && (
                              <div className="flex flex-col h-full">
                                  <div className="flex justify-center mb-6">
@@ -324,6 +385,7 @@ const MeetingSummary: React.FC = () => {
                              </div>
                         )}
 
+                        {/* COMPONENTS TAB */}
                         {activeTab === 'COMPONENTS' && (
                              <div className="flex flex-col gap-4 max-w-4xl mx-auto">
                                 {Object.entries(getCardsByComponent()).map(([component, cards]) => {
@@ -351,13 +413,13 @@ const MeetingSummary: React.FC = () => {
                              </div>
                         )}
 
-                        {/* --- RATIONALE FLOW MAP (Thread View) --- */}
+                        {/* --- RATIONALE FLOW MAP --- */}
                         {activeTab === 'THREADS' && (
                             <div className="flex h-full w-full">
                                 {/* OVERVIEW SIDEBAR */}
-                                <div className="w-64 border-r border-gray-200 bg-white overflow-y-auto shrink-0 flex flex-col">
-                                    <div className="p-3 text-[10px] font-bold text-gray-400 uppercase tracking-widest bg-gray-50 border-b border-gray-100">
-                                        Active Flows
+                                <div className="w-72 border-r border-gray-200 bg-white overflow-y-auto shrink-0 flex flex-col">
+                                    <div className="p-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
+                                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Active Flows</div>
                                     </div>
                                     {threads.map(thread => (
                                         <button
@@ -370,9 +432,9 @@ const MeetingSummary: React.FC = () => {
                                         >
                                             <div className="font-mono text-xs font-bold text-gray-800 mb-1">{thread.component}</div>
                                             <div className="text-[10px] text-gray-500 truncate mb-2">{thread.finalDecision?.title || "No Outcome"}</div>
-                                            <div className="flex gap-1">
+                                            <div className="flex gap-1 mb-1">
                                                 {thread.triggerTypes.map(type => {
-                                                    const { icon: Icon, color } = getTriggerInfo(type); // Using label as text to match type
+                                                    const { icon: Icon, color } = getTriggerInfo(type); 
                                                     return (
                                                         <div key={type} className={clsx("w-4 h-4 rounded-full flex items-center justify-center border", color)}>
                                                             <Icon size={8} />
@@ -385,137 +447,277 @@ const MeetingSummary: React.FC = () => {
                                 </div>
 
                                 {/* SCHEMATIC CANVAS */}
-                                <div className="flex-1 bg-[#F7F7F7] overflow-x-auto overflow-y-hidden p-8 flex items-center">
-                                    {activeThread ? (
-                                        <div className="flex items-center gap-0">
-                                            
-                                            {/* 1. CONTEXT NODE */}
-                                            <div className="flex items-center">
-                                                <div className="w-64 bg-white border border-gray-300 shadow-sm p-4 rounded-sm flex flex-col relative group">
-                                                    <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2">Context Scope</div>
-                                                    <div className="flex items-center gap-2 mb-2">
-                                                        <Box size={16} className="text-gray-800"/>
-                                                        <span className="font-mono font-bold text-sm">{activeThread.component}</span>
+                                <div className="flex-1 bg-[#F7F7F7] overflow-hidden flex flex-col">
+                                    
+                                    {/* Main Schematic Area */}
+                                    <div className="flex-1 overflow-x-auto overflow-y-hidden p-8 flex items-center">
+                                        {activeThread ? (
+                                            <div className="flex items-center gap-0">
+                                                
+                                                {/* 1. CONTEXT NODE */}
+                                                <div className="flex items-center">
+                                                    <div className="w-64 bg-white border border-gray-300 shadow-sm p-4 rounded-sm flex flex-col relative group">
+                                                        <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2">Context Scope</div>
+                                                        <div className="flex items-center gap-2 mb-2">
+                                                            <Box size={16} className="text-gray-800"/>
+                                                            <span className="font-mono font-bold text-sm">{activeThread.component}</span>
+                                                        </div>
+                                                        <div className="border-t border-gray-100 pt-2 flex flex-col gap-1">
+                                                            {requirements.filter(r => activeThread.finalDecision?.affectedRequirementIds?.includes(r.id)).map(r => (
+                                                                <div key={r.id} className="text-[9px] bg-orange-50 text-orange-700 px-1 py-0.5 rounded border border-orange-100 font-mono flex items-center gap-1">
+                                                                    <Scale size={8} /> {r.code}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                        <div className="absolute top-1/2 -right-1 w-2 h-2 bg-gray-300 rounded-full z-10"></div>
                                                     </div>
-                                                    <div className="border-t border-gray-100 pt-2 flex flex-col gap-1">
-                                                        {requirements.filter(r => activeThread.finalDecision?.affectedRequirementIds?.includes(r.id)).map(r => (
-                                                            <div key={r.id} className="text-[9px] bg-orange-50 text-orange-700 px-1 py-0.5 rounded border border-orange-100 font-mono flex items-center gap-1">
-                                                                <Scale size={8} /> {r.code}
-                                                            </div>
-                                                        ))}
-                                                        {(!activeThread.finalDecision?.affectedRequirementIds?.length) && (
-                                                            <span className="text-[9px] text-gray-400 italic">No Requirements Linked</span>
-                                                        )}
-                                                    </div>
-                                                    {/* Terminal Dot */}
-                                                    <div className="absolute top-1/2 -right-1 w-2 h-2 bg-gray-300 rounded-full z-10"></div>
+                                                    <div className="w-16 h-px bg-gray-300 relative"></div>
                                                 </div>
-                                                {/* Connector Line */}
-                                                <div className="w-16 h-px bg-gray-300 relative"></div>
+
+                                                {/* 2. TRIGGER CLUSTER */}
+                                                <div className="flex items-center">
+                                                    <div className="flex flex-col gap-2">
+                                                        {activeThread.triggerMessages.map((msg, idx) => {
+                                                            const info = getTriggerInfo(msg.text);
+                                                            const Icon = info.icon;
+                                                            return (
+                                                                <div key={msg.id} className={clsx("w-60 p-3 rounded-sm border shadow-sm relative group cursor-help", info.color)}>
+                                                                    <div className="flex items-center justify-between mb-1">
+                                                                        <div className="flex items-center gap-1 text-[9px] font-bold uppercase">
+                                                                            <Icon size={10} /> {info.label}
+                                                                        </div>
+                                                                        <div className="text-[8px] opacity-60 font-mono">T-{idx+1}</div>
+                                                                    </div>
+                                                                    <div className="text-[10px] leading-snug italic opacity-90">
+                                                                        "{msg.text}"
+                                                                    </div>
+                                                                    <div className="absolute top-1/2 -left-1 w-2 h-2 bg-current opacity-30 rounded-full"></div>
+                                                                    <div className="absolute top-1/2 -right-1 w-2 h-2 bg-current opacity-30 rounded-full"></div>
+                                                                </div>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                    <div className="w-16 h-px bg-gray-300 relative">
+                                                        <ArrowRight size={14} className="text-gray-400 absolute left-1/2 top-1/2 -translate-y-1/2 -translate-x-1/2" />
+                                                    </div>
+                                                </div>
+
+                                                {/* 3. INTERMEDIATE NODES */}
+                                                {activeThread.intermediates.length > 0 && (
+                                                    <div className="flex items-center">
+                                                        <div className="flex gap-4">
+                                                            {activeThread.intermediates.map((card) => (
+                                                                <div key={card.id} className="flex items-center">
+                                                                    <div 
+                                                                        onClick={() => setSelectedCard(card)}
+                                                                        className="w-48 bg-white border-2 border-dashed border-gray-300 p-3 rounded-sm hover:border-gray-500 cursor-pointer transition-colors relative"
+                                                                    >
+                                                                        <div className="text-[9px] font-bold text-gray-400 uppercase mb-1">Intermediate Step</div>
+                                                                        <div className="font-bold text-xs text-gray-700 mb-1">{card.title}</div>
+                                                                        <div className="text-[9px] text-gray-500 italic truncate">"{card.description}"</div>
+                                                                    </div>
+                                                                    <div className="w-8 h-px bg-gray-300 relative"></div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* 4. FINAL DECISION */}
+                                                <div className="flex items-center">
+                                                    {activeThread.finalDecision ? (
+                                                        <div 
+                                                            onClick={() => setSelectedCard(activeThread.finalDecision!)}
+                                                            className={clsx(
+                                                                "w-64 p-4 rounded-sm shadow-md border-l-4 cursor-pointer hover:shadow-lg transition-all relative",
+                                                                activeThread.finalDecision.type === 'RISK' ? "bg-white border-l-red-500 border-gray-200" :
+                                                                activeThread.finalDecision.type === 'ACTION' ? "bg-white border-l-blue-500 border-gray-200" :
+                                                                "bg-white border-l-amber-500 border-gray-200"
+                                                            )}
+                                                        >
+                                                            <div className="absolute -top-3 left-3 bg-gray-800 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
+                                                                Final Decision
+                                                            </div>
+                                                            <div className="font-bold text-sm text-gray-900 mb-2">{activeThread.finalDecision.title}</div>
+                                                            <div className="text-xs text-gray-600 leading-relaxed bg-gray-50 p-2 rounded mb-2">
+                                                                "{activeThread.finalDecision.description}"
+                                                            </div>
+                                                            <div className="absolute top-1/2 -left-1 w-2 h-2 bg-gray-300 rounded-full z-10"></div>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="w-48 h-24 border-2 border-gray-200 border-dashed rounded flex items-center justify-center text-xs text-gray-400 italic">
+                                                            Discussion Ongoing...
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                            </div>
+                                        ) : (
+                                            <div className="flex flex-col items-center justify-center w-full h-full text-gray-400 gap-4 opacity-50">
+                                                <GitCommitHorizontal size={48} />
+                                                <div className="text-sm font-mono">Select a flow to view rationale schematic</div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* --- CONVERSATION ANALYSIS TAB --- */}
+                        {activeTab === 'ANALYSIS' && (
+                            <div className="flex h-full w-full">
+                                {/* OVERVIEW SIDEBAR */}
+                                <div className="w-72 border-r border-gray-200 bg-white overflow-y-auto shrink-0 flex flex-col">
+                                    <div className="p-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
+                                        <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Select Component</div>
+                                    </div>
+                                    {threads.map(thread => (
+                                        <button
+                                            key={thread.id}
+                                            onClick={() => setSelectedThreadId(thread.id)}
+                                            className={clsx(
+                                                "p-3 text-left border-b border-gray-100 hover:bg-gray-50 transition-colors group relative",
+                                                selectedThreadId === thread.id ? "bg-purple-50/50 border-r-4 border-r-purple-500" : ""
+                                            )}
+                                        >
+                                            <div className="font-mono text-xs font-bold text-gray-800 mb-1">{thread.component}</div>
+                                            
+                                            {/* Pattern Badges */}
+                                            <div className="flex flex-wrap gap-1 mt-1">
+                                                {thread.patterns.map(p => (
+                                                    <span key={p} className="text-[9px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-100 font-bold">{p}</span>
+                                                ))}
+                                                {thread.patterns.length === 0 && <span className="text-[9px] text-gray-400 italic">No patterns detected</span>}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {/* ANALYSIS CANVAS */}
+                                <div className="flex-1 bg-white overflow-hidden flex flex-col">
+                                    {activeThread ? (
+                                        <div className="flex flex-col h-full">
+                                            {/* Top: Stats Header */}
+                                            <div className="p-6 border-b border-gray-100 bg-gray-50/30 flex justify-between items-start">
+                                                <div>
+                                                    <div className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+                                                        <Box size={20} className="text-gray-400" />
+                                                        {activeThread.component}
+                                                    </div>
+                                                    <div className="flex gap-4">
+                                                        <div className="flex flex-col">
+                                                            <span className="text-[10px] font-bold text-gray-400 uppercase">Msg Count</span>
+                                                            <span className="text-lg font-mono text-gray-700">{activeThread.allMessages.length}</span>
+                                                        </div>
+                                                        <div className="flex flex-col">
+                                                            <span className="text-[10px] font-bold text-gray-400 uppercase">Participants</span>
+                                                            <span className="text-lg font-mono text-gray-700">{new Set(activeThread.allMessages.map(m => m.agentId)).size}</span>
+                                                        </div>
+                                                        <div className="flex flex-col">
+                                                            <span className="text-[10px] font-bold text-gray-400 uppercase">Duration</span>
+                                                            <span className="text-lg font-mono text-gray-700">{(activeThread.allMessages.length * 1.5).toFixed(0)}s</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                {/* Pattern Cards */}
+                                                <div className="flex gap-2">
+                                                    {activeThread.patterns.map(p => (
+                                                        <div key={p} className="bg-purple-50 border border-purple-100 p-3 rounded-lg flex flex-col items-center min-w-[100px]">
+                                                            <Activity size={16} className="text-purple-500 mb-1" />
+                                                            <div className="text-xs font-bold text-purple-800 uppercase">{p}</div>
+                                                            <div className="text-[9px] text-purple-600 opacity-70">Detected</div>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
 
-                                            {/* 2. TRIGGER CLUSTER */}
-                                            <div className="flex items-center">
-                                                <div className="flex flex-col gap-2">
-                                                    {activeThread.triggerMessages.map((msg, idx) => {
-                                                        const info = getTriggerInfo(msg.text);
-                                                        const Icon = info.icon;
+                                            {/* Center: Timeline Visualization */}
+                                            <div className="h-48 border-b border-gray-200 p-4 relative overflow-hidden bg-white shrink-0">
+                                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                                    <BarChart2 size={12}/> Interaction Density X-Ray
+                                                </div>
+                                                
+                                                <div className="absolute top-1/2 left-4 right-4 h-px bg-gray-100"></div>
+                                                <div className="flex items-center h-24 gap-1 overflow-x-auto custom-scrollbar pb-2 px-2">
+                                                    {activeThread.allMessages.map((msg, i) => {
+                                                        const role = classifyMessage(msg.text);
+                                                        const colorClass = getRoleColor(role); // e.g., "bg-red-400 text-red-900..."
+                                                        // Extract just the bg color for the bar
+                                                        const bgClass = colorClass.split(' ')[0]; 
+
                                                         return (
-                                                            <div key={msg.id} className={clsx("w-60 p-3 rounded-sm border shadow-sm relative group cursor-help", info.color)}>
-                                                                <div className="flex items-center justify-between mb-1">
-                                                                    <div className="flex items-center gap-1 text-[9px] font-bold uppercase">
-                                                                        <Icon size={10} /> {info.label}
+                                                            <div key={msg.id} className="group relative shrink-0 flex flex-col items-center justify-center h-full w-3 hover:w-48 hover:z-10 transition-all duration-300">
+                                                                <div className={clsx("w-1.5 h-12 rounded-full opacity-80 group-hover:h-16 group-hover:opacity-100 transition-all", bgClass)}></div>
+                                                                
+                                                                {/* Hover Detail Card */}
+                                                                <div className="absolute bottom-full mb-2 bg-gray-900 text-white p-3 rounded shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 w-64 -translate-x-1/2 left-1/2">
+                                                                    <div className="flex items-center justify-between mb-1">
+                                                                         <span className="font-bold text-[10px] uppercase text-gray-400">{role}</span>
+                                                                         <span className="font-mono text-[9px] text-gray-500">{new Date(msg.timestamp).toLocaleTimeString()}</span>
                                                                     </div>
-                                                                    <div className="text-[8px] opacity-60 font-mono">T-{idx+1}</div>
+                                                                    <div className="text-xs leading-snug italic">"{msg.text}"</div>
                                                                 </div>
-                                                                <div className="text-[10px] leading-snug italic opacity-90">
-                                                                    "{msg.text}"
-                                                                </div>
-                                                                {/* Connector Dots */}
-                                                                <div className="absolute top-1/2 -left-1 w-2 h-2 bg-current opacity-30 rounded-full"></div>
-                                                                <div className="absolute top-1/2 -right-1 w-2 h-2 bg-current opacity-30 rounded-full"></div>
                                                             </div>
                                                         )
                                                     })}
                                                 </div>
-                                                {/* Connector Line */}
-                                                <div className="w-16 h-px bg-gray-300 relative">
-                                                     <ArrowRight size={14} className="text-gray-400 absolute left-1/2 top-1/2 -translate-y-1/2 -translate-x-1/2" />
+                                                
+                                                {/* Legend */}
+                                                <div className="flex gap-3 justify-end mt-2 opacity-50">
+                                                    {['OBSERVATION', 'TRIGGER', 'RATIONALE', 'DECISION'].map(role => (
+                                                        <div key={role} className="flex items-center gap-1">
+                                                            <div className={clsx("w-2 h-2 rounded-full", getRoleColor(role as any).split(' ')[0])}></div>
+                                                            <span className="text-[8px] text-gray-500 font-bold">{role}</span>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             </div>
 
-                                            {/* 3. INTERMEDIATE NODES */}
-                                            {activeThread.intermediates.length > 0 && (
-                                                <div className="flex items-center">
-                                                    <div className="flex gap-4">
-                                                        {activeThread.intermediates.map((card) => (
-                                                            <div key={card.id} className="flex items-center">
-                                                                <div 
-                                                                    onClick={() => setSelectedCard(card)}
-                                                                    className="w-48 bg-white border-2 border-dashed border-gray-300 p-3 rounded-sm hover:border-gray-500 cursor-pointer transition-colors relative"
-                                                                >
-                                                                    <div className="text-[9px] font-bold text-gray-400 uppercase mb-1">Intermediate Step</div>
-                                                                    <div className="font-bold text-xs text-gray-700 mb-1">{card.title}</div>
-                                                                    <div className="text-[9px] text-gray-500 italic truncate">"{card.description}"</div>
+                                            {/* Bottom: Coded Transcript */}
+                                            <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
+                                                <div className="max-w-3xl mx-auto flex flex-col gap-3">
+                                                    {activeThread.allMessages.map(msg => {
+                                                        const role = classifyMessage(msg.text);
+                                                        const agent = agents.find(a => a.id === msg.agentId);
+                                                        const colorClass = getRoleColor(role);
+                                                        
+                                                        return (
+                                                            <div key={msg.id} className="flex gap-4 group">
+                                                                <div className="w-24 text-right pt-2">
+                                                                    <div className="text-[10px] font-bold font-mono text-gray-500 uppercase">{role}</div>
                                                                 </div>
-                                                                <div className="w-8 h-px bg-gray-300 relative"></div>
+                                                                <div className="relative">
+                                                                    <div className="absolute top-3 -left-[5px] w-2 h-2 bg-gray-300 rounded-full border-2 border-white"></div>
+                                                                    <div className="absolute top-0 bottom-0 -left-px w-px bg-gray-200 -z-10 group-last:bottom-auto group-last:h-4"></div>
+                                                                </div>
+                                                                <div className="flex-1 bg-white p-3 rounded-lg border border-gray-200 shadow-sm flex flex-col gap-1 hover:shadow-md transition-shadow">
+                                                                    <div className="flex items-center gap-2 mb-0.5">
+                                                                        <div className="w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold text-white" style={{backgroundColor: agent?.color}}>{agent?.name[0]}</div>
+                                                                        <span className="text-xs font-bold text-gray-700">{agent?.name}</span>
+                                                                        <span className="text-[9px] text-gray-400 font-mono ml-auto">{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                                                                    </div>
+                                                                    <div className="text-sm text-gray-800">
+                                                                        {msg.text}
+                                                                    </div>
+                                                                    {/* Tag Badge */}
+                                                                    <div className="mt-1">
+                                                                        <span className={clsx("text-[9px] px-1.5 py-0.5 rounded font-bold uppercase inline-block", colorClass)}>
+                                                                            {role}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
                                                             </div>
-                                                        ))}
-                                                    </div>
+                                                        )
+                                                    })}
                                                 </div>
-                                            )}
-
-                                            {/* 4. FINAL DECISION */}
-                                            <div className="flex items-center">
-                                                {activeThread.finalDecision ? (
-                                                    <div 
-                                                        onClick={() => setSelectedCard(activeThread.finalDecision!)}
-                                                        className={clsx(
-                                                            "w-64 p-4 rounded-sm shadow-md border-l-4 cursor-pointer hover:shadow-lg transition-all relative",
-                                                            activeThread.finalDecision.type === 'RISK' ? "bg-white border-l-red-500 border-gray-200" :
-                                                            activeThread.finalDecision.type === 'ACTION' ? "bg-white border-l-blue-500 border-gray-200" :
-                                                            "bg-white border-l-amber-500 border-gray-200"
-                                                        )}
-                                                    >
-                                                        <div className="absolute -top-3 left-3 bg-gray-800 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
-                                                            Final Decision
-                                                        </div>
-                                                        <div className="font-bold text-sm text-gray-900 mb-2">{activeThread.finalDecision.title}</div>
-                                                        <div className="text-xs text-gray-600 leading-relaxed bg-gray-50 p-2 rounded mb-2">
-                                                            "{activeThread.finalDecision.description}"
-                                                        </div>
-                                                        <div className="flex items-center justify-between">
-                                                            <div className="flex items-center gap-1">
-                                                                {/* Agent Badge */}
-                                                                {(() => {
-                                                                    const a = agents.find(ag => ag.id === activeThread.finalDecision!.agentId);
-                                                                    return a ? (
-                                                                         <div className="flex items-center gap-1.5 text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
-                                                                            <div className="w-1.5 h-1.5 rounded-full" style={{backgroundColor: a.color}}></div>
-                                                                            <span className="font-mono font-bold">{a.name}</span>
-                                                                        </div>
-                                                                    ) : null
-                                                                })()}
-                                                            </div>
-                                                            <div className="text-[9px] font-mono text-gray-400">
-                                                                {new Date(activeThread.finalDecision.timestamp).toLocaleTimeString()}
-                                                            </div>
-                                                        </div>
-                                                        {/* Terminal Dot */}
-                                                        <div className="absolute top-1/2 -left-1 w-2 h-2 bg-gray-300 rounded-full z-10"></div>
-                                                    </div>
-                                                ) : (
-                                                    <div className="w-48 h-24 border-2 border-gray-200 border-dashed rounded flex items-center justify-center text-xs text-gray-400 italic">
-                                                        Discussion Ongoing...
-                                                    </div>
-                                                )}
                                             </div>
 
                                         </div>
                                     ) : (
-                                        <div className="flex flex-col items-center justify-center w-full h-full text-gray-400 gap-4 opacity-50">
-                                            <GitCommitHorizontal size={48} />
-                                            <div className="text-sm font-mono">Select a flow to view rationale schematic</div>
+                                         <div className="flex flex-col items-center justify-center w-full h-full text-gray-400 gap-4 opacity-50">
+                                            <Search size={48} />
+                                            <div className="text-sm font-mono">Select a component to analyze conversation dynamics</div>
                                         </div>
                                     )}
                                 </div>
