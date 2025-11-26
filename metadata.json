@@ -1,0 +1,5 @@
+{
+  "name": "Viewpoint Arena",
+  "description": "A minimalist simulation of collaborative 3D design review dynamics using abstract AI agents and variable viewpoint configurations.",
+  "requestFramePermissions": []
+}
