@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import { 
     Mic, MousePointer2, Eye, Box, Cpu, UserCog, 
     FileText, GitCommitHorizontal, LayoutDashboard, ArrowRight,
-    X
+    X, Activity
 } from 'lucide-react';
 
 interface DataFlowDrawerProps {
@@ -116,7 +116,7 @@ const DataFlowDrawer: React.FC<DataFlowDrawerProps> = ({ isOpen, onClose }) => {
                 {/* Header Content */}
                 <div className="relative z-10 flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white/50 rounded-t-xl">
                     <div className="flex items-center gap-3">
-                        <ActivityIcon />
+                        <Activity className="text-emerald-500" size={16} />
                         <span className="text-xs font-bold uppercase tracking-widest text-gray-600">System Data Architecture</span>
                     </div>
                     <div className="flex items-center gap-4">
@@ -232,13 +232,5 @@ const DataFlowDrawer: React.FC<DataFlowDrawerProps> = ({ isOpen, onClose }) => {
         </>
     );
 };
-
-const ActivityIcon = () => (
-    <div className="flex gap-0.5 items-end h-3">
-        <div className="w-0.5 bg-emerald-500 animate-[bounce_1s_infinite] h-2"></div>
-        <div className="w-0.5 bg-emerald-500 animate-[bounce_1.2s_infinite] h-3"></div>
-        <div className="w-0.5 bg-emerald-500 animate-[bounce_0.8s_infinite] h-1.5"></div>
-    </div>
-);
 
 export default DataFlowDrawer;

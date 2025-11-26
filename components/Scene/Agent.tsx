@@ -30,11 +30,13 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
   const agentStyle = useStore(state => state.agentStyle);
   const updateHeatmap = useStore(state => state.updateHeatmap);
   const updateAgentStatus = useStore(state => state.updateAgentStatus);
+  const setFollowRequest = useStore(state => state.setFollowRequest);
   
   // Local state for behavior
   const [behavior, setBehavior] = useState<AgentBehaviorState>('IDLE');
   const [targetPoi, setTargetPoi] = useState<PointOfInterest | null>(null);
   const [targetPos, setTargetPos] = useState(new Vector3(0, 0, 0));
+  const [targetAgentId, setTargetAgentId] = useState<string | null>(null); // Who are we following?
   
   // Movement references
   const position = useRef(new Vector3(
@@ -56,23 +58,50 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
   const pickNewTask = () => {
     if (pois.length === 0) return;
     
-    // Pick random POI
-    const poi = pois[Math.floor(Math.random() * pois.length)];
-    setTargetPoi(poi);
+    // Probabilistic Behavior Selector
+    const roll = Math.random();
     
-    // Calculate a standing position near the POI
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 2.5 + Math.random() * 1.0; 
-    
-    const x = Math.sin(angle) * dist;
-    const z = Math.cos(angle) * dist;
-    setTargetPos(new Vector3(x, 1, z));
-    
-    setBehavior('MOVING');
-    // SYNC TO STORE
-    updateAgentStatus(initialState.id, 'MOVING', null);
-    
-    timer.current = 2 + Math.random() * 3; 
+    if (roll < 0.10) { 
+        // 10% Chance: Follow User (Autonomous)
+        setBehavior('FOLLOWING');
+        updateAgentStatus(initialState.id, 'FOLLOWING', null);
+        timer.current = 8 + Math.random() * 5; 
+    } 
+    else if (roll < 0.20 && allAgents.length > 1) {
+        // 10% Chance: Follow Another Agent
+        const others = allAgents.filter(a => a.id !== initialState.id);
+        const target = others[Math.floor(Math.random() * others.length)];
+        
+        setTargetAgentId(target.id);
+        setBehavior('FOLLOWING_AGENT');
+        updateAgentStatus(initialState.id, 'FOLLOWING_AGENT', null);
+        timer.current = 6 + Math.random() * 4;
+    }
+    else if (roll < 0.25) {
+        // 5% Chance: Ask User to Follow ME
+        setFollowRequest({ agentId: initialState.id, timestamp: Date.now() });
+        // Don't change behavior, just stay where they are or continue logic
+        // But maybe look at the user?
+    }
+    else {
+        // Standard: Move to POI
+        const poi = pois[Math.floor(Math.random() * pois.length)];
+        setTargetPoi(poi);
+        setTargetAgentId(null);
+        
+        // Calculate a standing position near the POI
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 2.5 + Math.random() * 1.0; 
+        
+        const x = Math.sin(angle) * dist;
+        const z = Math.cos(angle) * dist;
+        setTargetPos(new Vector3(x, 1, z));
+        
+        setBehavior('MOVING');
+        updateAgentStatus(initialState.id, 'MOVING', null);
+        
+        timer.current = 2 + Math.random() * 3; 
+    }
   };
 
   useFrame((state, delta) => {
@@ -104,7 +133,6 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
         materialRef.current.depthWrite = materialRef.current.opacity > 0.8;
     }
 
-    // --- Visual Rotation Logic ---
     if (visualRef.current && agentStyle === AgentStyle.BOX) {
         visualRef.current.lookAt(0, 0.5, 0); 
     }
@@ -116,20 +144,21 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
         updateHeatmap(targetPoi.id, delta);
     }
 
-    // --- MOVEMENT LOGIC ---
-    const isFollowingUser = leaderId === 'USER';
+    // --- GLOBAL LEADER OVERRIDE ---
+    const isForcedFollower = leaderId === 'USER';
+    const isAutonomousFollowingUser = behavior === 'FOLLOWING' && !leaderId;
+    const isFollowingAgent = behavior === 'FOLLOWING_AGENT' && targetAgentId && !leaderId;
 
-    if (isFollowingUser) {
-         // -- FOLLOWER LOGIC --
-         // Get Leader (Camera) Orientation
+    if (isForcedFollower || isAutonomousFollowingUser) {
+         // -- USER FOLLOWING LOGIC --
+         // Use camera as target
          const leaderPos = state.camera.position.clone();
          const leaderDir = new Vector3(0, 0, -1).applyQuaternion(state.camera.quaternion);
          leaderDir.y = 0; leaderDir.normalize();
          const leaderRight = new Vector3(-1, 0, 0).applyQuaternion(state.camera.quaternion);
          leaderRight.y = 0; leaderRight.normalize();
 
-         // Define Formation Slots
-         // ID 1: Left, ID 2: Right, ID 3: Further Back
+         // Formation Slot Logic
          let offsetRight = 0;
          let offsetBack = 2.5;
          
@@ -137,73 +166,86 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
          if (initialState.id === '2') offsetRight = 1.5;
          if (initialState.id === '3') { offsetRight = 0; offsetBack = 3.5; }
 
-         // Calculate Desired Position
-         const formationPos = leaderPos.clone()
-             .add(leaderDir.clone().multiplyScalar(-offsetBack)) // Behind
-             .add(leaderRight.clone().multiplyScalar(offsetRight)); // Side
-         
-         formationPos.y = 1.0; // Keep height constant
+         // Use ID as randomness if we are just randomly following user
+         if (isAutonomousFollowingUser) {
+             offsetBack = 3.0 + (parseInt(initialState.id) % 2);
+             offsetRight = (parseInt(initialState.id) % 2 === 0 ? 1 : -1) * 1.5;
+         }
 
-         // Calculate Desired Look Target (Parallel to Leader)
-         // We want them to look at the same thing the leader is looking at (roughly)
+         const formationPos = leaderPos.clone()
+             .add(leaderDir.clone().multiplyScalar(-offsetBack))
+             .add(leaderRight.clone().multiplyScalar(offsetRight));
+         
+         formationPos.y = 1.0; 
+
          const farTarget = leaderPos.clone().add(leaderDir.clone().multiplyScalar(10));
 
-         // Apply Smooth Movement
          position.current.lerp(formationPos, 0.05);
          lookAtRef.current.lerp(farTarget, 0.05);
          
-         // If we were autonomous, switch state but don't spam store
-         if (behavior !== 'FOLLOWING') {
-             setBehavior('FOLLOWING');
-             updateAgentStatus(initialState.id, 'FOLLOWING', null);
+         if (isAutonomousFollowingUser) {
+             timer.current -= delta;
+             if (timer.current <= 0) pickNewTask();
          }
+
+    } else if (isFollowingAgent) {
+        // -- AGENT FOLLOWING LOGIC --
+        // Find target agent object
+        const targetObj = groupRef.current?.parent?.getObjectByName(`Agent-${targetAgentId}`);
+        
+        if (targetObj) {
+             const targetPos = targetObj.position.clone();
+             const targetDir = new Vector3(0, 0, 1).applyQuaternion(targetObj.quaternion); // Agents look Z forward usually or we use their lookAt logic
+             
+             // To simplify, just stand behind them
+             const offset = targetPos.clone().sub(position.current).normalize().multiplyScalar(-1.5); // Stay 1.5 units away? No, we want behind.
+             
+             // Better: Stand 2 units behind the target, slightly offset
+             const behindPos = targetPos.clone().add(targetPos.clone().normalize().multiplyScalar(2.0)); // Move outward from center relative to target
+             
+             position.current.lerp(behindPos, 0.05);
+             lookAtRef.current.lerp(targetPos, 0.05); // Look at who we follow
+
+             timer.current -= delta;
+             if (timer.current <= 0) pickNewTask();
+        } else {
+             // Target lost
+             pickNewTask();
+        }
 
     } else {
         // -- AUTONOMOUS LOGIC --
         if (behavior === 'MOVING') {
-            // Orbital Movement Logic to prevent crossing the center
-            const cx = 0; 
-            const cz = 0;
-            
-            // Current polar coords relative to center
+            // Orbital Movement Logic
+            const cx = 0; const cz = 0;
             const dx = position.current.x - cx;
             const dz = position.current.z - cz;
             let currentAngle = Math.atan2(dx, dz); 
             let currentRadius = Math.sqrt(dx*dx + dz*dz);
             
-            // Target polar coords
             const tx = targetPos.x - cx;
             const tz = targetPos.z - cz;
             const targetAngle = Math.atan2(tx, tz);
             const targetRadius = Math.sqrt(tx*tx + tz*tz);
 
-            // Shortest angular path
             let deltaAngle = targetAngle - currentAngle;
-            // Normalize to -PI to +PI
             if (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
             if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
 
-            const angularSpeed = 0.6; // Rad/s
-            const radialSpeed = 1.0; // Units/s
+            const angularSpeed = 0.6; 
+            const radialSpeed = 1.0; 
             
-            // Check arrival
             if (Math.abs(deltaAngle) < 0.1 && Math.abs(targetRadius - currentRadius) < 0.2) {
                 setBehavior('INSPECTING');
-                // SYNC TO STORE
                 updateAgentStatus(initialState.id, 'INSPECTING', targetPoi?.id || null);
-                
                 timer.current = 3 + Math.random() * 5; 
             } else {
-                 // Move Angle
                  const angleStep = angularSpeed * delta;
                  if (Math.abs(deltaAngle) > 0.01) {
                      currentAngle += Math.sign(deltaAngle) * Math.min(Math.abs(deltaAngle), angleStep);
                  }
-                 
-                 // Move Radius
                  currentRadius = THREE.MathUtils.lerp(currentRadius, targetRadius, delta * radialSpeed);
 
-                 // Update Cartesian Position
                  position.current.x = cx + Math.sin(currentAngle) * currentRadius;
                  position.current.z = cz + Math.cos(currentAngle) * currentRadius;
             }
@@ -215,16 +257,13 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
             if (targetPoi) lookAtRef.current.lerp(targetPoi.position, 0.1);
             position.current.y = 1 + Math.sin(state.clock.elapsedTime * 2) * 0.05;
             if (timer.current <= 0) pickNewTask();
-        } else if (behavior === 'FOLLOWING') {
-            // Just released from follow mode, pick a task
-            pickNewTask();
-        }
+        } 
     }
 
     lookTarget.current.copy(lookAtRef.current);
 
-    // Separation (prevent overlapping)
-    if (!isFollowingUser) {
+    // Separation
+    if (!isForcedFollower && !isFollowingAgent) {
         allAgents.forEach(other => {
              if (other.id !== initialState.id) {
                 const otherObj = groupRef.current?.parent?.getObjectByName(`Agent-${other.id}`);
@@ -240,7 +279,7 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
         });
     }
 
-    groupRef.current.position.lerp(position.current, 0.2); // Smoother Lerp
+    groupRef.current.position.lerp(position.current, 0.2); 
     groupRef.current.lookAt(lookAtRef.current);
   });
 
@@ -259,16 +298,12 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
 
   return (
     <group ref={groupRef} onClick={handleInteraction} name={`Agent-${initialState.id}`}>
-      {/* Ghost Trails */}
       {showTrails && (
           <Trail width={0.3} length={15} color={agentColor} attenuation={(t) => t * t}>
-            <mesh visible={false} position={[0, 0, 0]}>
-                <sphereGeometry args={[0.1]} />
-            </mesh>
+            <mesh visible={false} position={[0, 0, 0]}><sphereGeometry args={[0.1]} /></mesh>
           </Trail>
       )}
 
-      {/* Selection Highlight */}
       {(isActive || isSplitTarget) && !isPossessed && (
         <mesh position={[0, -0.8, 0]} rotation={[-Math.PI/2, 0, 0]}>
             <ringGeometry args={[0.4, 0.5, 32]} />
@@ -276,34 +311,17 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
         </mesh>
       )}
 
-      {/* Avatar Visuals */}
       <group visible={isVisible}>
-          
-          {/* STYLE: SCREEN (Box) */}
           {agentStyle === AgentStyle.BOX && (
              <group ref={visualRef} position={[0, 0.6, 0]}>
                  <mesh castShadow receiveShadow>
                     <planeGeometry args={[0.12, 0.08]} />
-                    <meshPhysicalMaterial 
-                        ref={materialRef} 
-                        color={agentColor} 
-                        roughness={0.1} 
-                        metalness={0.8} 
-                        emissive={agentColor}
-                        emissiveIntensity={0.5}
-                        side={THREE.DoubleSide}
-                        transparent
-                        opacity={0.85}
-                    />
+                    <meshPhysicalMaterial ref={materialRef} color={agentColor} roughness={0.1} metalness={0.8} emissive={agentColor} emissiveIntensity={0.5} side={THREE.DoubleSide} transparent opacity={0.85} />
                  </mesh>
-                 <mesh position={[0, 0, -0.005]}>
-                    <boxGeometry args={[0.13, 0.09, 0.01]} />
-                    <meshStandardMaterial color="#111" roughness={0.5} />
-                 </mesh>
+                 <mesh position={[0, 0, -0.005]}><boxGeometry args={[0.13, 0.09, 0.01]} /><meshStandardMaterial color="#111" roughness={0.5} /></mesh>
              </group>
           )}
 
-          {/* STYLE: CAPSULE */}
           {agentStyle === AgentStyle.CAPSULE && (
              <mesh castShadow receiveShadow rotation={[Math.PI/2, 0, 0]} position={[0, 0.1, 0]}>
                 <capsuleGeometry args={[0.2, 1.2, 4, 8]} />
@@ -311,76 +329,31 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
              </mesh>
           )}
           
-          {/* STYLE: ROBOT */}
           {agentStyle === AgentStyle.ROBOT && (
             <group position={[0, 0.2, 0]}>
-                 <mesh castShadow receiveShadow>
-                    <boxGeometry args={[0.4, 0.8, 0.3]} />
-                    <meshStandardMaterial ref={materialRef} color="#444" roughness={0.3} metalness={0.6} />
-                 </mesh>
-                 <mesh castShadow receiveShadow position={[0, 0.6, 0]}>
-                    <boxGeometry args={[0.3, 0.3, 0.3]} />
-                    <meshStandardMaterial color={agentColor} />
-                 </mesh>
+                 <mesh castShadow receiveShadow><boxGeometry args={[0.4, 0.8, 0.3]} /><meshStandardMaterial ref={materialRef} color="#444" roughness={0.3} metalness={0.6} /></mesh>
+                 <mesh castShadow receiveShadow position={[0, 0.6, 0]}><boxGeometry args={[0.3, 0.3, 0.3]} /><meshStandardMaterial color={agentColor} /></mesh>
             </group>
-          )}
-
-          {/* Eyes */}
-          {(agentStyle === AgentStyle.CAPSULE) && (
-             <group position={[0, 0.5, 0.21]}>
-                <mesh>
-                  <boxGeometry args={[0.25, 0.08, 0.05]} />
-                  <meshStandardMaterial color={agentColor} emissive={agentColor} emissiveIntensity={isActive ? 0.8 : 0.4} />
-                </mesh>
-             </group>
           )}
 
           {showFrustums && (
             <group position={[0, 0.6, 0.1]}>
                 <Line
-                    points={[
-                    [0, 0, 0], [-0.5, 0.3, 1.5],
-                    [0, 0, 0], [0.5, 0.3, 1.5],
-                    [0, 0, 0], [-0.5, -0.3, 1.5],
-                    [0, 0, 0], [0.5, -0.3, 1.5],
-                    [-0.5, 0.3, 1.5], [0.5, 0.3, 1.5],
-                    [0.5, 0.3, 1.5], [0.5, -0.3, 1.5],
-                    [0.5, -0.3, 1.5], [-0.5, -0.3, 1.5],
-                    [-0.5, -0.3, 1.5], [-0.5, 0.3, 1.5],
-                    ]}
-                    color={agentColor}
-                    transparent
-                    opacity={isActive ? 0.4 : 0.15}
-                    lineWidth={1}
+                    points={[[0, 0, 0], [-0.5, 0.3, 1.5], [0, 0, 0], [0.5, 0.3, 1.5], [0, 0, 0], [-0.5, -0.3, 1.5], [0, 0, 0], [0.5, -0.3, 1.5], [-0.5, 0.3, 1.5], [0.5, 0.3, 1.5], [0.5, 0.3, 1.5], [0.5, -0.3, 1.5], [0.5, -0.3, 1.5], [-0.5, -0.3, 1.5], [-0.5, -0.3, 1.5], [-0.5, 0.3, 1.5]]}
+                    color={agentColor} transparent opacity={isActive ? 0.4 : 0.15} lineWidth={1}
                 />
             </group>
           )}
       </group>
 
-      {/* Gaze Ray */}
       {showGaze && isVisible && (
         <group>
-            <Line
-            points={[[0, 0.6, 0.1], [0, 0.6, 4]]}
-            color={agentColor}
-            transparent
-            opacity={0.1}
-            dashScale={2}
-            dashed
-            lineWidth={1}
-            />
+            <Line points={[[0, 0.6, 0.1], [0, 0.6, 4]]} color={agentColor} transparent opacity={0.1} dashScale={2} dashed lineWidth={1} />
         </group>
       )}
 
-      {/* UI Tags - FIXED Z-INDEX RANGE */}
       {isVisible && (
-        <Html 
-            position={[0, 1.0, 0]} 
-            center 
-            distanceFactor={6} 
-            style={{pointerEvents: 'none'}}
-            zIndexRange={[0, 0]} // Force lower Z-index so it doesn't overlap UI
-        >
+        <Html position={[0, 1.0, 0]} center distanceFactor={6} style={{pointerEvents: 'none'}} zIndexRange={[0, 0]}>
             <div className="flex flex-col items-center gap-1 opacity-80">
                 <div className={`font-mono text-[8px] px-1 rounded border whitespace-nowrap backdrop-blur-md transition-colors ${isActive ? 'bg-black text-white border-black' : 'text-gray-500 bg-white/60 border-gray-200'}`}>
                 {initialState.name}
