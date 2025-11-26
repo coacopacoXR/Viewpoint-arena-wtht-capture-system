@@ -372,9 +372,15 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
         </group>
       )}
 
-      {/* UI Tags */}
+      {/* UI Tags - FIXED Z-INDEX RANGE */}
       {isVisible && (
-        <Html position={[0, 1.0, 0]} center distanceFactor={6} style={{pointerEvents: 'none'}}>
+        <Html 
+            position={[0, 1.0, 0]} 
+            center 
+            distanceFactor={6} 
+            style={{pointerEvents: 'none'}}
+            zIndexRange={[0, 0]} // Force lower Z-index so it doesn't overlap UI
+        >
             <div className="flex flex-col items-center gap-1 opacity-80">
                 <div className={`font-mono text-[8px] px-1 rounded border whitespace-nowrap backdrop-blur-md transition-colors ${isActive ? 'bg-black text-white border-black' : 'text-gray-500 bg-white/60 border-gray-200'}`}>
                 {initialState.name}

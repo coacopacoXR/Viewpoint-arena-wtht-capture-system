@@ -1,15 +1,20 @@
 import { Vector3 } from 'three';
 import React from 'react';
 
-// Make React Three Fiber elements available in JSX
-// import { ThreeElements } from '@react-three/fiber';
+// Augment React's JSX namespace (for React 18+ / TS 5+)
+declare module 'react' {
+  namespace JSX {
+    interface IntrinsicElements {
+      [elemName: string]: any;
+    }
+  }
+}
 
+// Augment Global JSX namespace (for older setups or specific TS configs)
 declare global {
   namespace JSX {
     interface IntrinsicElements {
-        // We allow any tag to pass to support both standard HTML (div, span) 
-        // and React Three Fiber elements (mesh, group) without strict interface conflicts.
-        [elemName: string]: any;
+      [elemName: string]: any;
     }
   }
 }
