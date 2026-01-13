@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType } from './types';
+import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode } from './types';
 import { Vector3 } from 'three';
 
 const INITIAL_AGENTS: AgentState[] = [
@@ -34,7 +34,7 @@ const KB_DB: KBEntry[] = [
 ];
 
 // --- SCENE DEFINITION ---
-export const SCENE_TREE: SceneNode = {
+export const SYNTH_SCENE_TREE: SceneNode = {
   id: 'assembly', name: 'Synth Assembly', type: 'GROUP', children: [
     { id: 'chassis_grp', name: 'Chassis Module', type: 'GROUP', children: [
         { id: 'main_body', name: 'Unibody Case', type: 'MESH' },
@@ -57,6 +57,80 @@ export const SCENE_TREE: SceneNode = {
   ]
 };
 
+// --- BICYCLE SCENE TREE (STEP Import Demo) ---
+export const BICYCLE_SCENE_TREE: SceneNode = {
+  id: 'bicycle_assembly', name: 'Urban Commuter Bicycle', type: 'GROUP', children: [
+    { id: 'frame_grp', name: 'Frame Assembly', type: 'GROUP', children: [
+        { id: 'main_frame', name: 'Main Frame', type: 'MESH' },
+        { id: 'top_tube', name: 'Top Tube', type: 'MESH' },
+        { id: 'down_tube', name: 'Down Tube', type: 'MESH' },
+        { id: 'seat_tube', name: 'Seat Tube', type: 'MESH' },
+        { id: 'chain_stays', name: 'Chain Stays', type: 'MESH' },
+        { id: 'seat_stays', name: 'Seat Stays', type: 'MESH' },
+        { id: 'head_tube', name: 'Head Tube', type: 'MESH' },
+        { id: 'bottom_bracket', name: 'Bottom Bracket Shell', type: 'PART' }
+    ]},
+    { id: 'front_assembly', name: 'Front Assembly', type: 'GROUP', children: [
+        { id: 'fork_grp', name: 'Fork Assembly', type: 'GROUP', children: [
+            { id: 'fork_crown', name: 'Fork Crown', type: 'MESH' },
+            { id: 'fork_blades', name: 'Fork Blades', type: 'MESH' },
+            { id: 'fork_dropouts', name: 'Fork Dropouts', type: 'PART' }
+        ]},
+        { id: 'headset', name: 'Headset Bearings', type: 'PART' },
+        { id: 'stem', name: 'Stem', type: 'MESH' },
+        { id: 'handlebar', name: 'Handlebar', type: 'MESH' },
+        { id: 'grips', name: 'Handlebar Grips', type: 'PART' },
+        { id: 'front_brake_lever', name: 'Front Brake Lever', type: 'PART' }
+    ]},
+    { id: 'wheel_front', name: 'Front Wheel', type: 'GROUP', children: [
+        { id: 'hub_front', name: 'Front Hub', type: 'PART' },
+        { id: 'spokes_front', name: 'Front Spokes', type: 'MESH' },
+        { id: 'rim_front', name: 'Front Rim', type: 'MESH' },
+        { id: 'tire_front', name: 'Front Tire', type: 'MESH' }
+    ]},
+    { id: 'wheel_rear', name: 'Rear Wheel', type: 'GROUP', children: [
+        { id: 'hub_rear', name: 'Rear Hub', type: 'PART' },
+        { id: 'spokes_rear', name: 'Rear Spokes', type: 'MESH' },
+        { id: 'rim_rear', name: 'Rear Rim', type: 'MESH' },
+        { id: 'tire_rear', name: 'Rear Tire', type: 'MESH' },
+        { id: 'cassette', name: 'Rear Cassette', type: 'PART' }
+    ]},
+    { id: 'drivetrain', name: 'Drivetrain', type: 'GROUP', children: [
+        { id: 'crankset', name: 'Crankset', type: 'GROUP', children: [
+            { id: 'crank_arms', name: 'Crank Arms', type: 'MESH' },
+            { id: 'chainring', name: 'Chainring', type: 'MESH' },
+            { id: 'pedals', name: 'Pedals', type: 'PART' }
+        ]},
+        { id: 'chain', name: 'Chain', type: 'MESH' },
+        { id: 'derailleur_rear', name: 'Rear Derailleur', type: 'PART' }
+    ]},
+    { id: 'braking_system', name: 'Braking System', type: 'GROUP', children: [
+        { id: 'brake_front', name: 'Front Disc Brake', type: 'GROUP', children: [
+            { id: 'caliper_front', name: 'Front Caliper', type: 'PART' },
+            { id: 'rotor_front', name: 'Front Rotor', type: 'MESH' }
+        ]},
+        { id: 'brake_rear', name: 'Rear Disc Brake', type: 'GROUP', children: [
+            { id: 'caliper_rear', name: 'Rear Caliper', type: 'PART' },
+            { id: 'rotor_rear', name: 'Rear Rotor', type: 'MESH' }
+        ]},
+        { id: 'brake_cables', name: 'Hydraulic Lines', type: 'MESH' }
+    ]},
+    { id: 'cockpit', name: 'Cockpit', type: 'GROUP', children: [
+        { id: 'saddle', name: 'Saddle', type: 'MESH' },
+        { id: 'seatpost', name: 'Seatpost', type: 'MESH' },
+        { id: 'seatpost_clamp', name: 'Seatpost Clamp', type: 'PART' }
+    ]},
+    { id: 'accessories', name: 'Accessories', type: 'GROUP', children: [
+        { id: 'bell', name: 'Bell', type: 'PART' },
+        { id: 'reflectors', name: 'Reflectors', type: 'PART' },
+        { id: 'kickstand', name: 'Kickstand', type: 'PART' }
+    ]}
+  ]
+};
+
+// For backwards compatibility
+export const SCENE_TREE = SYNTH_SCENE_TREE;
+
 // Helper to init object states
 const initObjectStates = (node: SceneNode, states: Record<string, ObjectState> = {}) => {
     states[node.id] = { id: node.id, visible: true, selected: false, expanded: true };
@@ -76,20 +150,20 @@ interface AppState {
   isPlaying: boolean;
   isMeetingEnded: boolean;
   time: number;
-  
+
   // Collaboration State
   agents: AgentState[];
   agentStyle: AgentStyle;
   agentWeights: Record<string, number>;
   pois: PointOfInterest[];
-  activeAgentId: string | null; 
-  
+  activeAgentId: string | null;
+
   // Advanced Collaboration Features
-  leaderId: string | 'USER' | null; 
-  splitScreenTargetId: string | null; 
-  userInteractionPoint: Vector3; 
+  leaderId: string | 'USER' | null;
+  splitScreenTargetId: string | null;
+  userInteractionPoint: Vector3;
   isLaserActive: boolean;
-  
+
   // Follow Request System
   followRequest: { agentId: string; timestamp: number } | null;
 
@@ -111,6 +185,25 @@ interface AppState {
   // Scene Graph State
   objectStates: Record<string, ObjectState>;
 
+  // --- NEW: Model Type ---
+  activeModelType: ModelType;
+  isImporting: boolean;
+
+  // --- NEW: Comments System ---
+  comments: SpatialComment[];
+  commentMode: CommentMode;
+  pendingCommentPosition: { x: number; y: number; z: number } | null;
+  pendingCommentNodeId: string | null;
+  pendingCommentNodeName: string | null;
+  currentUser: string;
+  currentUserColor: string;
+
+  // --- NEW: Drawing State ---
+  drawingCanvas: string | null; // Base64 of current drawing
+
+  // --- NEW: Panel Mode ---
+  rightPanelMode: RightPanelMode;
+
   // Actions
   setViewMode: (mode: ViewMode) => void;
   setRepresentationMode: (mode: RepresentationMode) => void;
@@ -121,7 +214,7 @@ interface AppState {
   endMeeting: (ended: boolean) => void;
   setTime: (time: number) => void;
   resetTime: () => void;
-  
+
   registerPOI: (poi: PointOfInterest) => void;
   setActiveAgent: (id: string | null) => void;
   setLeader: (id: string | 'USER' | null) => void;
@@ -131,10 +224,10 @@ interface AppState {
   setFollowRequest: (req: { agentId: string; timestamp: number } | null) => void;
   togglePrivacyMode: () => void;
   setFollowedAgent: (id: string | null) => void;
-  
+
   setAgentStyle: (style: AgentStyle) => void;
   setAgentWeight: (id: string, weight: number) => void;
-  
+
   updateAgentStatus: (id: string, behavior: AgentBehaviorState, poiId: string | null) => void;
   updateHeatmap: (poiId: string, amount: number) => void;
 
@@ -147,6 +240,23 @@ interface AppState {
   toggleNodeVisibility: (id: string) => void;
   toggleNodeExpanded: (id: string) => void;
   selectNode: (id: string | null) => void;
+
+  // --- NEW: Model Import Actions ---
+  setActiveModelType: (type: ModelType) => void;
+  importSTEPFile: (fileName: string) => void;
+  setIsImporting: (importing: boolean) => void;
+
+  // --- NEW: Comment Actions ---
+  setCommentMode: (mode: CommentMode) => void;
+  setPendingComment: (position: { x: number; y: number; z: number } | null, nodeId: string | null, nodeName: string | null) => void;
+  addComment: (comment: SpatialComment) => void;
+  updateComment: (id: string, updates: Partial<SpatialComment>) => void;
+  deleteComment: (id: string) => void;
+  resolveComment: (id: string) => void;
+  setDrawingCanvas: (data: string | null) => void;
+
+  // --- NEW: Panel Mode Action ---
+  setRightPanelMode: (mode: RightPanelMode) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -175,7 +285,26 @@ export const useStore = create<AppState>((set) => ({
   insightCards: [],
   requirements: REQUIREMENTS_DB,
   knowledgeBase: KB_DB,
-  objectStates: initObjectStates(SCENE_TREE),
+  objectStates: initObjectStates(SYNTH_SCENE_TREE),
+
+  // --- NEW: Model Type ---
+  activeModelType: 'synth',
+  isImporting: false,
+
+  // --- NEW: Comments System ---
+  comments: [],
+  commentMode: 'none',
+  pendingCommentPosition: null,
+  pendingCommentNodeId: null,
+  pendingCommentNodeName: null,
+  currentUser: 'You',
+  currentUserColor: '#10b981',
+
+  // --- NEW: Drawing State ---
+  drawingCanvas: null,
+
+  // --- NEW: Panel Mode ---
+  rightPanelMode: 'meeting',
 
   setViewMode: (mode) => set({ viewMode: mode }),
   setRepresentationMode: (mode) => set({ representationMode: mode }),
@@ -251,6 +380,79 @@ export const useStore = create<AppState>((set) => ({
           newStates[id] = { ...newStates[id], selected: true };
       }
       return { objectStates: newStates };
-  })
+  }),
+
+  // --- NEW: Model Import Actions ---
+  setActiveModelType: (type) => set((state) => {
+      const tree = type === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+      return {
+          activeModelType: type,
+          objectStates: initObjectStates(tree),
+          pois: [], // Clear POIs for new model
+          comments: [], // Clear comments for new model
+          chatHistory: [], // Clear chat for fresh start
+          insightCards: [], // Clear insights
+          heatmapValues: {}
+      };
+  }),
+
+  importSTEPFile: (fileName) => set((state) => {
+      // Simulate STEP import - in real implementation would parse actual STEP file
+      // For demo, we detect if it's a bicycle file and switch to bicycle model
+      const isBicycle = fileName.toLowerCase().includes('bicycle') ||
+                        fileName.toLowerCase().includes('bike') ||
+                        fileName.toLowerCase().includes('cycle');
+
+      const tree = isBicycle ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+      const modelType = isBicycle ? 'bicycle' : 'synth';
+
+      return {
+          activeModelType: modelType,
+          objectStates: initObjectStates(tree),
+          pois: [],
+          comments: [],
+          chatHistory: [],
+          insightCards: [],
+          heatmapValues: {},
+          isImporting: false
+      };
+  }),
+
+  setIsImporting: (importing) => set({ isImporting: importing }),
+
+  // --- NEW: Comment Actions ---
+  setCommentMode: (mode) => set({ commentMode: mode }),
+
+  setPendingComment: (position, nodeId, nodeName) => set({
+      pendingCommentPosition: position,
+      pendingCommentNodeId: nodeId,
+      pendingCommentNodeName: nodeName
+  }),
+
+  addComment: (comment) => set((state) => ({
+      comments: [...state.comments, comment]
+  })),
+
+  updateComment: (id, updates) => set((state) => ({
+      comments: state.comments.map(c => c.id === id ? { ...c, ...updates } : c)
+  })),
+
+  deleteComment: (id) => set((state) => ({
+      comments: state.comments.filter(c => c.id !== id)
+  })),
+
+  resolveComment: (id) => set((state) => ({
+      comments: state.comments.map(c => c.id === id ? { ...c, resolved: true } : c)
+  })),
+
+  setDrawingCanvas: (data) => set({ drawingCanvas: data }),
+
+  // --- NEW: Panel Mode Action ---
+  setRightPanelMode: (mode) => set({ rightPanelMode: mode })
 
 }));
+
+// Helper to get current scene tree
+export const getCurrentSceneTree = (modelType: ModelType): SceneNode => {
+    return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+};
