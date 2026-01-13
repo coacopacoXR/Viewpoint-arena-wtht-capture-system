@@ -1,0 +1,529 @@
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useStore } from '../../store';
+import {
+    MessageSquare, Pencil, Plus, X, Check, Send, AtSign,
+    CheckCircle2, Trash2, MoreVertical, Link2, ChevronDown,
+    GripVertical
+} from 'lucide-react';
+import { clsx } from 'clsx';
+import { SpatialComment } from '../../types';
+import DrawingCanvas from './DrawingCanvas';
+
+// Comment Input Form
+const CommentInputForm: React.FC<{
+    onSubmit: (content: string, assignees: string[]) => void;
+    onCancel: () => void;
+    attachedTo: string;
+}> = ({ onSubmit, onCancel, attachedTo }) => {
+    const [content, setContent] = useState('');
+    const [showMentions, setShowMentions] = useState(false);
+    const [mentionSearch, setMentionSearch] = useState('');
+    const inputRef = useRef<HTMLTextAreaElement>(null);
+
+    const participants = ['Alex Chen', 'Sarah J.', 'Marcus T.', 'Design Team', 'Engineering'];
+
+    useEffect(() => {
+        inputRef.current?.focus();
+    }, []);
+
+    const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const value = e.target.value;
+        setContent(value);
+
+        // Check for @ trigger
+        const lastAtIndex = value.lastIndexOf('@');
+        if (lastAtIndex !== -1 && lastAtIndex === value.length - 1) {
+            setShowMentions(true);
+            setMentionSearch('');
+        } else if (lastAtIndex !== -1) {
+            const afterAt = value.slice(lastAtIndex + 1);
+            if (!afterAt.includes(' ')) {
+                setShowMentions(true);
+                setMentionSearch(afterAt);
+            } else {
+                setShowMentions(false);
+            }
+        } else {
+            setShowMentions(false);
+        }
+    };
+
+    const insertMention = (name: string) => {
+        const lastAtIndex = content.lastIndexOf('@');
+        const newContent = content.slice(0, lastAtIndex) + '@' + name + ' ';
+        setContent(newContent);
+        setShowMentions(false);
+        inputRef.current?.focus();
+    };
+
+    const handleSubmit = () => {
+        if (!content.trim()) return;
+
+        // Extract @mentions
+        const mentionRegex = /@(\w+(?:\s\w+)?)/g;
+        const assignees: string[] = [];
+        let match;
+        while ((match = mentionRegex.exec(content)) !== null) {
+            assignees.push(match[1]);
+        }
+
+        onSubmit(content, assignees);
+    };
+
+    const filteredParticipants = participants.filter(p =>
+        p.toLowerCase().includes(mentionSearch.toLowerCase())
+    );
+
+    return (
+        <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 animate-in fade-in slide-in-from-bottom-2">
+            <div className="text-[10px] text-gray-400 mb-2 flex items-center gap-1">
+                <Link2 size={10} />
+                Attached to: <span className="font-bold text-gray-600">{attachedTo}</span>
+            </div>
+
+            <div className="relative">
+                <textarea
+                    ref={inputRef}
+                    value={content}
+                    onChange={handleInput}
+                    placeholder="Add a comment... Use @ to mention"
+                    className="w-full h-20 p-2 border border-gray-200 rounded text-xs resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && e.metaKey) {
+                            handleSubmit();
+                        }
+                        if (e.key === 'Escape') {
+                            onCancel();
+                        }
+                    }}
+                />
+
+                {/* Mention dropdown */}
+                {showMentions && filteredParticipants.length > 0 && (
+                    <div className="absolute bottom-full left-0 mb-1 bg-white border border-gray-200 rounded shadow-lg max-h-32 overflow-y-auto z-50">
+                        {filteredParticipants.map(p => (
+                            <button
+                                key={p}
+                                onClick={() => insertMention(p)}
+                                className="w-full px-3 py-1.5 text-left text-xs hover:bg-gray-100 flex items-center gap-2"
+                            >
+                                <AtSign size={10} className="text-blue-500" />
+                                {p}
+                            </button>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            <div className="flex items-center justify-between mt-2">
+                <button
+                    onClick={onCancel}
+                    className="text-[10px] text-gray-400 hover:text-gray-600"
+                >
+                    Cancel (Esc)
+                </button>
+                <button
+                    onClick={handleSubmit}
+                    disabled={!content.trim()}
+                    className="px-3 py-1.5 bg-blue-500 text-white rounded text-[10px] font-bold flex items-center gap-1 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <Send size={10} />
+                    Submit (Cmd+Enter)
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// Single Comment Card
+const CommentCard: React.FC<{
+    comment: SpatialComment;
+    onResolve: () => void;
+    onDelete: () => void;
+    onLinkToMeeting: () => void;
+}> = ({ comment, onResolve, onDelete, onLinkToMeeting }) => {
+    const [showMenu, setShowMenu] = useState(false);
+
+    // Parse @mentions for highlighting
+    const highlightMentions = (text: string) => {
+        const parts = text.split(/(@\w+(?:\s\w+)?)/g);
+        return parts.map((part, i) => {
+            if (part.startsWith('@')) {
+                return (
+                    <span key={i} className="text-blue-500 font-bold bg-blue-50 px-0.5 rounded">
+                        {part}
+                    </span>
+                );
+            }
+            return part;
+        });
+    };
+
+    return (
+        <div
+            className={clsx(
+                "bg-white border rounded-lg p-3 transition-all",
+                comment.resolved
+                    ? "border-gray-200 opacity-60"
+                    : "border-gray-200 hover:border-gray-300 hover:shadow-sm"
+            )}
+        >
+            {/* Header */}
+            <div className="flex items-start justify-between mb-2">
+                <div className="flex items-center gap-2">
+                    <div
+                        className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
+                        style={{ backgroundColor: comment.authorColor }}
+                    >
+                        {comment.author[0]}
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold text-gray-700">{comment.author}</div>
+                        <div className="text-[9px] text-gray-400">
+                            {new Date(comment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="relative">
+                    <button
+                        onClick={() => setShowMenu(!showMenu)}
+                        className="p-1 hover:bg-gray-100 rounded"
+                    >
+                        <MoreVertical size={12} className="text-gray-400" />
+                    </button>
+
+                    {showMenu && (
+                        <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded shadow-lg z-50 min-w-32">
+                            <button
+                                onClick={() => { onResolve(); setShowMenu(false); }}
+                                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50 flex items-center gap-2"
+                            >
+                                <CheckCircle2 size={12} className="text-green-500" />
+                                {comment.resolved ? 'Unresolve' : 'Resolve'}
+                            </button>
+                            <button
+                                onClick={() => { onLinkToMeeting(); setShowMenu(false); }}
+                                className="w-full px-3 py-2 text-left text-xs hover:bg-gray-50 flex items-center gap-2"
+                            >
+                                <Link2 size={12} className="text-blue-500" />
+                                Link to Meeting
+                            </button>
+                            <hr className="my-1" />
+                            <button
+                                onClick={() => { onDelete(); setShowMenu(false); }}
+                                className="w-full px-3 py-2 text-left text-xs hover:bg-red-50 text-red-600 flex items-center gap-2"
+                            >
+                                <Trash2 size={12} />
+                                Delete
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Attached component */}
+            <div className="text-[9px] text-gray-400 mb-2 flex items-center gap-1">
+                <Link2 size={8} />
+                {comment.attachedToNodeName}
+            </div>
+
+            {/* Content */}
+            {comment.type === 'drawing' && comment.drawingData ? (
+                <div className="mb-2">
+                    <img
+                        src={comment.drawingData}
+                        alt="Drawing"
+                        className="w-full rounded border border-gray-100"
+                    />
+                    {comment.content && (
+                        <div className="text-xs text-gray-600 mt-2 leading-relaxed">
+                            {highlightMentions(comment.content)}
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <div className="text-xs text-gray-600 leading-relaxed">
+                    {highlightMentions(comment.content)}
+                </div>
+            )}
+
+            {/* Assignees */}
+            {comment.assignees.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                    {comment.assignees.map((assignee, i) => (
+                        <span
+                            key={i}
+                            className="text-[9px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full"
+                        >
+                            @{assignee}
+                        </span>
+                    ))}
+                </div>
+            )}
+
+            {/* Status indicators */}
+            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+                {comment.resolved && (
+                    <span className="text-[9px] text-green-600 flex items-center gap-1">
+                        <CheckCircle2 size={10} />
+                        Resolved
+                    </span>
+                )}
+                {comment.linkedToMeeting && (
+                    <span className="text-[9px] text-purple-600 flex items-center gap-1">
+                        <Link2 size={10} />
+                        In Meeting
+                    </span>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// Main Comments Panel
+const CommentsPanel: React.FC = () => {
+    const {
+        comments,
+        commentMode,
+        setCommentMode,
+        pendingCommentPosition,
+        pendingCommentNodeId,
+        pendingCommentNodeName,
+        setPendingComment,
+        addComment,
+        updateComment,
+        deleteComment,
+        resolveComment,
+        currentUser,
+        currentUserColor,
+        addChatMessage,
+        setDrawingCanvas,
+        drawingCanvas
+    } = useStore();
+
+    const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all');
+    const [showDrawingCanvas, setShowDrawingCanvas] = useState(false);
+
+    const filteredComments = comments.filter(c => {
+        if (filter === 'open') return !c.resolved;
+        if (filter === 'resolved') return c.resolved;
+        return true;
+    });
+
+    const handleNewComment = () => {
+        setCommentMode('placing-comment');
+    };
+
+    const handleNewDrawing = () => {
+        setCommentMode('placing-drawing');
+    };
+
+    const handleCancelPlacement = () => {
+        setCommentMode('none');
+        setPendingComment(null, null, null);
+        setShowDrawingCanvas(false);
+        setDrawingCanvas(null);
+    };
+
+    const handleSubmitComment = (content: string, assignees: string[]) => {
+        if (!pendingCommentPosition || !pendingCommentNodeId || !pendingCommentNodeName) return;
+
+        const newComment: SpatialComment = {
+            id: Math.random().toString(36).substr(2, 9),
+            type: 'text',
+            content,
+            author: currentUser,
+            authorColor: currentUserColor,
+            timestamp: Date.now(),
+            position: pendingCommentPosition,
+            attachedToNodeId: pendingCommentNodeId,
+            attachedToNodeName: pendingCommentNodeName,
+            assignees,
+            resolved: false,
+            linkedToMeeting: false
+        };
+
+        addComment(newComment);
+        setCommentMode('none');
+        setPendingComment(null, null, null);
+    };
+
+    const handleSubmitDrawing = (content: string, assignees: string[]) => {
+        if (!pendingCommentPosition || !pendingCommentNodeId || !pendingCommentNodeName || !drawingCanvas) return;
+
+        const newComment: SpatialComment = {
+            id: Math.random().toString(36).substr(2, 9),
+            type: 'drawing',
+            content,
+            drawingData: drawingCanvas,
+            author: currentUser,
+            authorColor: currentUserColor,
+            timestamp: Date.now(),
+            position: pendingCommentPosition,
+            attachedToNodeId: pendingCommentNodeId,
+            attachedToNodeName: pendingCommentNodeName,
+            assignees,
+            resolved: false,
+            linkedToMeeting: false
+        };
+
+        addComment(newComment);
+        setCommentMode('none');
+        setPendingComment(null, null, null);
+        setShowDrawingCanvas(false);
+        setDrawingCanvas(null);
+    };
+
+    const handleResolve = (id: string) => {
+        resolveComment(id);
+    };
+
+    const handleDelete = (id: string) => {
+        deleteComment(id);
+    };
+
+    const handleLinkToMeeting = (comment: SpatialComment) => {
+        // Add comment to meeting transcript
+        addChatMessage({
+            id: Math.random().toString(36).substr(2, 9),
+            agentId: 'USER',
+            text: `[Comment on ${comment.attachedToNodeName}] ${comment.content}`,
+            timestamp: Date.now()
+        });
+        updateComment(comment.id, { linkedToMeeting: true });
+    };
+
+    // Effect: When position is set in placing-drawing mode, show drawing canvas
+    useEffect(() => {
+        if (commentMode === 'placing-drawing' && pendingCommentPosition) {
+            setShowDrawingCanvas(true);
+        }
+    }, [commentMode, pendingCommentPosition]);
+
+    return (
+        <div className="h-full flex flex-col">
+            {/* Drawing Canvas Overlay */}
+            {showDrawingCanvas && (
+                <DrawingCanvas
+                    onSave={(dataUrl) => {
+                        setDrawingCanvas(dataUrl);
+                        setShowDrawingCanvas(false);
+                    }}
+                    onCancel={() => {
+                        setShowDrawingCanvas(false);
+                        handleCancelPlacement();
+                    }}
+                />
+            )}
+
+            {/* Header */}
+            <div className="p-3 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                    <MessageSquare size={14} className="text-gray-500" />
+                    <span className="text-xs font-bold text-gray-700">Comments</span>
+                    <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full">
+                        {comments.filter(c => !c.resolved).length}
+                    </span>
+                </div>
+
+                {/* Filter dropdown */}
+                <select
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value as any)}
+                    className="text-[10px] border border-gray-200 rounded px-2 py-1 bg-white"
+                >
+                    <option value="all">All</option>
+                    <option value="open">Open</option>
+                    <option value="resolved">Resolved</option>
+                </select>
+            </div>
+
+            {/* Action buttons */}
+            <div className="p-2 border-b border-gray-100 flex gap-2">
+                {commentMode === 'none' ? (
+                    <>
+                        <button
+                            onClick={handleNewComment}
+                            className="flex-1 px-3 py-2 bg-blue-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 hover:bg-blue-600"
+                        >
+                            <Plus size={12} />
+                            New Comment
+                        </button>
+                        <button
+                            onClick={handleNewDrawing}
+                            className="flex-1 px-3 py-2 bg-purple-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 hover:bg-purple-600"
+                        >
+                            <Pencil size={12} />
+                            New Drawing
+                        </button>
+                    </>
+                ) : (
+                    <div className="flex-1 bg-blue-50 border border-blue-200 rounded p-2 text-center">
+                        <div className="text-[10px] text-blue-600 font-bold mb-1">
+                            {commentMode === 'placing-comment' ? 'Click on the 3D model to place comment' :
+                             commentMode === 'placing-drawing' ? 'Click on the 3D model to attach drawing' :
+                             'Position your view, then draw'}
+                        </div>
+                        <button
+                            onClick={handleCancelPlacement}
+                            className="text-[10px] text-blue-500 hover:text-blue-700 flex items-center gap-1 mx-auto"
+                        >
+                            <X size={10} />
+                            Cancel
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Comment input form (when position is selected for text comment) */}
+            {commentMode === 'placing-comment' && pendingCommentPosition && pendingCommentNodeName && (
+                <div className="p-2">
+                    <CommentInputForm
+                        onSubmit={handleSubmitComment}
+                        onCancel={handleCancelPlacement}
+                        attachedTo={pendingCommentNodeName}
+                    />
+                </div>
+            )}
+
+            {/* Drawing comment input (after drawing is done) */}
+            {drawingCanvas && pendingCommentNodeName && (
+                <div className="p-2">
+                    <div className="bg-white border border-gray-200 rounded-lg p-3">
+                        <div className="text-[10px] text-gray-400 mb-2">Drawing Preview:</div>
+                        <img src={drawingCanvas} alt="Drawing" className="w-full rounded border border-gray-100 mb-2" />
+                        <CommentInputForm
+                            onSubmit={handleSubmitDrawing}
+                            onCancel={handleCancelPlacement}
+                            attachedTo={pendingCommentNodeName}
+                        />
+                    </div>
+                </div>
+            )}
+
+            {/* Comments list */}
+            <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+                {filteredComments.length === 0 ? (
+                    <div className="text-center p-8 text-gray-400 text-xs italic flex flex-col items-center gap-2">
+                        <MessageSquare size={24} className="opacity-20" />
+                        {filter === 'all' ? 'No comments yet' :
+                         filter === 'open' ? 'No open comments' : 'No resolved comments'}
+                    </div>
+                ) : (
+                    filteredComments.map(comment => (
+                        <CommentCard
+                            key={comment.id}
+                            comment={comment}
+                            onResolve={() => handleResolve(comment.id)}
+                            onDelete={() => handleDelete(comment.id)}
+                            onLinkToMeeting={() => handleLinkToMeeting(comment)}
+                        />
+                    ))
+                )}
+            </div>
+        </div>
+    );
+};
+
+export default CommentsPanel;

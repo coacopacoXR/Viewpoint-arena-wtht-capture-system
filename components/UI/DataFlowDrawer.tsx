@@ -19,7 +19,7 @@ const NODE_SPECS: Record<string, { title: string, specs: string[] }> = {
     'GAZE': { title: "Attention Ray", specs: ["Vector: Forward Z", "Dwell: >300ms", "Heatmap: Additive"] },
     'CONTEXT': { title: "Active Object", specs: ["Tree Node: ID", "Metadata: Material", "State: Visible"] },
     
-    'CAPTURE': { title: "LLM Extraction", specs: ["Model: Gemini Flash", "Prompt: Zero-shot", "Output: JSON"] },
+    'CAPTURE': { title: "Pattern Extraction", specs: ["Engine: Local Rules", "Method: Semantic Match", "Output: JSON"] },
     'CLASSIFY': { title: "Card Logic", specs: ["Intent: Trigger Words", "Sentiment: Polarity", "Priority: Heuristic"] },
     
     'LIVE_OVER': { title: "Live Oversight", specs: ["UI: Conversation Panel", "Action: Edit/Reject", "Latency: <500ms"] },

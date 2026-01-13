@@ -122,21 +122,21 @@ const TECHNICAL_CONFIGS: ExplainerItem[] = [
     },
     {
         id: 'MODELS',
-        label: "Backend Models",
+        label: "Reasoning Engine",
         icon: Server,
-        shortDesc: "LLM Agnostic Core",
-        fullDesc: "The logic layer is decoupled from the inference provider. The system is compatible with Gemini 2.5 Flash for low-latency spatial reasoning, GPT-4o for complex nuance, or open-weights models like Llama 3.1 70B via Ollama. Model selection is handled via environment variables.",
-        techSpecs: ["Default: Gemini 2.5", "Local: Llama 3.1", "Interface: OpenAI Compat"],
+        shortDesc: "Local-First Architecture",
+        fullDesc: "The system uses a sophisticated local reasoning engine with rule-based extraction and pattern matching. No external API calls required. The engine analyzes conversation context, detects semantic patterns, and constructs decision trees using deterministic algorithms optimized for design review workflows.",
+        techSpecs: ["Engine: Local Pattern Match", "Memory: Context Graph", "Output: Structured JSON"],
         illustration: (
             <div className="w-full h-full flex items-center justify-center relative">
                  <div className="w-20 h-20 bg-gray-900 rounded-xl flex items-center justify-center z-20 shadow-xl">
                     <Share2 className="text-emerald-400" size={32} />
                  </div>
                  <div className="absolute top-1/4 left-1/4 flex flex-col items-center">
-                    <div className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm mb-1"><span className="text-[8px] font-bold text-blue-600">GEMINI</span></div>
+                    <div className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm mb-1"><span className="text-[8px] font-bold text-blue-600">RULES</span></div>
                  </div>
                  <div className="absolute bottom-1/4 right-1/4 flex flex-col items-center">
-                    <div className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm mt-1"><span className="text-[8px] font-bold text-orange-600">LLAMA</span></div>
+                    <div className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm mt-1"><span className="text-[8px] font-bold text-orange-600">LOCAL</span></div>
                  </div>
             </div>
         )
