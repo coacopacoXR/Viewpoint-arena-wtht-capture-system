@@ -55,52 +55,54 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
     }
   }, [pois]);
 
+  // Check if this is the VR agent (agent ID 4)
+  const isVRAgent = initialState.id === '4';
+
   const pickNewTask = () => {
     if (pois.length === 0) return;
-    
-    // Probabilistic Behavior Selector
+
+    // Probabilistic Behavior Selector - reduced probabilities for calmer behavior
     const roll = Math.random();
-    
-    if (roll < 0.10) { 
-        // 10% Chance: Follow User (Autonomous)
+
+    if (roll < 0.05) {
+        // 5% Chance (reduced from 10%): Follow User (Autonomous)
         setBehavior('FOLLOWING');
         updateAgentStatus(initialState.id, 'FOLLOWING', null);
-        timer.current = 8 + Math.random() * 5; 
-    } 
-    else if (roll < 0.20 && allAgents.length > 1) {
-        // 10% Chance: Follow Another Agent
+        timer.current = 12 + Math.random() * 8; // Longer follow duration
+    }
+    else if (roll < 0.10 && allAgents.length > 1) {
+        // 5% Chance (reduced from 10%): Follow Another Agent
         const others = allAgents.filter(a => a.id !== initialState.id);
         const target = others[Math.floor(Math.random() * others.length)];
-        
+
         setTargetAgentId(target.id);
         setBehavior('FOLLOWING_AGENT');
         updateAgentStatus(initialState.id, 'FOLLOWING_AGENT', null);
-        timer.current = 6 + Math.random() * 4;
+        timer.current = 10 + Math.random() * 6;
     }
-    else if (roll < 0.25) {
-        // 5% Chance: Ask User to Follow ME
+    else if (roll < 0.12) {
+        // 2% Chance (reduced from 5%): Ask User to Follow ME
         setFollowRequest({ agentId: initialState.id, timestamp: Date.now() });
-        // Don't change behavior, just stay where they are or continue logic
-        // But maybe look at the user?
     }
     else {
-        // Standard: Move to POI
+        // Standard: Move to POI - but with longer inspection times
         const poi = pois[Math.floor(Math.random() * pois.length)];
         setTargetPoi(poi);
         setTargetAgentId(null);
-        
+
         // Calculate a standing position near the POI
         const angle = Math.random() * Math.PI * 2;
-        const dist = 2.5 + Math.random() * 1.0; 
-        
+        const dist = 2.5 + Math.random() * 1.0;
+
         const x = Math.sin(angle) * dist;
         const z = Math.cos(angle) * dist;
         setTargetPos(new Vector3(x, 1, z));
-        
+
         setBehavior('MOVING');
         updateAgentStatus(initialState.id, 'MOVING', null);
-        
-        timer.current = 2 + Math.random() * 3; 
+
+        // Longer timer for calmer movement
+        timer.current = 4 + Math.random() * 6;
     }
   };
 
@@ -180,8 +182,10 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
 
          const farTarget = leaderPos.clone().add(leaderDir.clone().multiplyScalar(10));
 
-         position.current.lerp(formationPos, 0.05);
-         lookAtRef.current.lerp(farTarget, 0.05);
+         // Slower, more natural movement - especially for VR agent
+         const lerpSpeed = isVRAgent ? 0.02 : 0.03;
+         position.current.lerp(formationPos, lerpSpeed);
+         lookAtRef.current.lerp(farTarget, lerpSpeed);
          
          if (isAutonomousFollowingUser) {
              timer.current -= delta;
@@ -232,8 +236,9 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
             if (deltaAngle > Math.PI) deltaAngle -= Math.PI * 2;
             if (deltaAngle < -Math.PI) deltaAngle += Math.PI * 2;
 
-            const angularSpeed = 0.6; 
-            const radialSpeed = 1.0; 
+            // Reduced speeds for calmer movement - VR agent moves more naturally
+            const angularSpeed = isVRAgent ? 0.25 : 0.35;
+            const radialSpeed = isVRAgent ? 0.4 : 0.6; 
             
             if (Math.abs(deltaAngle) < 0.1 && Math.abs(targetRadius - currentRadius) < 0.2) {
                 setBehavior('INSPECTING');
@@ -254,8 +259,11 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
 
         } else if (behavior === 'INSPECTING') {
             timer.current -= delta;
-            if (targetPoi) lookAtRef.current.lerp(targetPoi.position, 0.1);
-            position.current.y = 1 + Math.sin(state.clock.elapsedTime * 2) * 0.05;
+            if (targetPoi) lookAtRef.current.lerp(targetPoi.position, 0.05);
+            // Subtle idle animation - VR agent has more natural subtle movement
+            const bobSpeed = isVRAgent ? 1.2 : 1.5;
+            const bobAmount = isVRAgent ? 0.02 : 0.03;
+            position.current.y = 1 + Math.sin(state.clock.elapsedTime * bobSpeed) * bobAmount;
             if (timer.current <= 0) pickNewTask();
         } 
     }
@@ -279,7 +287,9 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
         });
     }
 
-    groupRef.current.position.lerp(position.current, 0.2); 
+    // Reduced lerp speed for smoother, calmer movement
+    const finalLerp = isVRAgent ? 0.08 : 0.12;
+    groupRef.current.position.lerp(position.current, finalLerp);
     groupRef.current.lookAt(lookAtRef.current);
   });
 
@@ -333,6 +343,51 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
             <group position={[0, 0.2, 0]}>
                  <mesh castShadow receiveShadow><boxGeometry args={[0.4, 0.8, 0.3]} /><meshStandardMaterial ref={materialRef} color="#444" roughness={0.3} metalness={0.6} /></mesh>
                  <mesh castShadow receiveShadow position={[0, 0.6, 0]}><boxGeometry args={[0.3, 0.3, 0.3]} /><meshStandardMaterial color={agentColor} /></mesh>
+            </group>
+          )}
+
+          {/* VR Headset Style - represents someone joining from VR */}
+          {(agentStyle === AgentStyle.VR_HEADSET || isVRAgent) && (
+            <group position={[0, 0.5, 0]}>
+                 {/* VR Headset body */}
+                 <mesh castShadow receiveShadow>
+                    <boxGeometry args={[0.18, 0.09, 0.12]} />
+                    <meshPhysicalMaterial
+                      ref={materialRef}
+                      color="#1a1a1a"
+                      roughness={0.15}
+                      metalness={0.9}
+                      clearcoat={0.8}
+                      clearcoatRoughness={0.2}
+                    />
+                 </mesh>
+                 {/* Front visor/lens */}
+                 <mesh position={[0, 0, 0.065]}>
+                    <boxGeometry args={[0.16, 0.06, 0.01]} />
+                    <meshPhysicalMaterial
+                      color="#8b5cf6"
+                      roughness={0.1}
+                      metalness={0.5}
+                      emissive="#8b5cf6"
+                      emissiveIntensity={0.3}
+                      transparent
+                      opacity={0.9}
+                    />
+                 </mesh>
+                 {/* Side straps hint */}
+                 <mesh position={[-0.1, 0, 0]} rotation={[0, 0, Math.PI / 12]}>
+                    <boxGeometry args={[0.04, 0.02, 0.08]} />
+                    <meshStandardMaterial color="#333" roughness={0.5} />
+                 </mesh>
+                 <mesh position={[0.1, 0, 0]} rotation={[0, 0, -Math.PI / 12]}>
+                    <boxGeometry args={[0.04, 0.02, 0.08]} />
+                    <meshStandardMaterial color="#333" roughness={0.5} />
+                 </mesh>
+                 {/* Small indicator light */}
+                 <mesh position={[0.06, 0.035, 0.06]}>
+                    <sphereGeometry args={[0.008, 8, 8]} />
+                    <meshBasicMaterial color="#00ff88" />
+                 </mesh>
             </group>
           )}
 
