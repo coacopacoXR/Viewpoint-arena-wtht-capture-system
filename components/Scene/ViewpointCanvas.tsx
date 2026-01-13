@@ -4,6 +4,7 @@ import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import World from './World';
 import DialogueEngine from '../System/DialogueEngine';
 import UserLaser from './UserLaser';
+import SpatialComments from './SpatialComments';
 import { useStore } from '../../store';
 import { ViewMode } from '../../types';
 import * as THREE from 'three';
@@ -271,8 +272,9 @@ const ViewpointCanvas: React.FC = () => {
       {/* Systems */}
       <DialogueEngine />
       <UserLaser />
+      <SpatialComments />
       <SceneRenderer />
-      
+
       <Suspense fallback={null}>
         <World />
       </Suspense>

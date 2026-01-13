@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Grid, Environment, ContactShadows } from '@react-three/drei';
 import Product from './Product';
+import Bicycle from './Bicycle';
 import Agent from './Agent';
 import HeatmapOverlay from './HeatmapOverlay';
 import { useStore } from '../../store';
@@ -14,6 +15,7 @@ const World: React.FC = () => {
   const viewMode = useStore(state => state.viewMode);
   const setUserInteractionPoint = useStore(state => state.setUserInteractionPoint);
   const agents = useStore(state => state.agents);
+  const activeModelType = useStore(state => state.activeModelType);
   
   // Ref to track throttle
   const lastTimeUpdate = useRef(0);
@@ -66,15 +68,16 @@ const World: React.FC = () => {
       />
 
       <group position={[0, 0, 0]}>
-        <Product />
-        
-        <ContactShadows 
-            opacity={0.4} 
-            scale={10} 
-            blur={1.5} 
-            far={1.2} 
-            resolution={256} 
-            color="#000000" 
+        {/* Conditionally render model based on activeModelType */}
+        {activeModelType === 'bicycle' ? <Bicycle /> : <Product />}
+
+        <ContactShadows
+            opacity={0.4}
+            scale={10}
+            blur={1.5}
+            far={1.2}
+            resolution={256}
+            color="#000000"
         />
       </group>
       
