@@ -397,18 +397,14 @@ export const useStore = create<AppState>((set) => ({
   }),
 
   importSTEPFile: (fileName) => set((state) => {
-      // Simulate STEP import - in real implementation would parse actual STEP file
-      // For demo, we detect if it's a bicycle file and switch to bicycle model
-      const isBicycle = fileName.toLowerCase().includes('bicycle') ||
-                        fileName.toLowerCase().includes('bike') ||
-                        fileName.toLowerCase().includes('cycle');
+      // For demo: ANY imported STEP file replaces the current model with the bicycle
+      // This demonstrates the import functionality by substituting the scene
+      // In production, this would parse actual STEP file geometry
 
-      const tree = isBicycle ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
-      const modelType = isBicycle ? 'bicycle' : 'synth';
-
+      // Always switch to bicycle model for demo (replaces synth or any current model)
       return {
-          activeModelType: modelType,
-          objectStates: initObjectStates(tree),
+          activeModelType: 'bicycle' as ModelType,
+          objectStates: initObjectStates(BICYCLE_SCENE_TREE),
           pois: [],
           comments: [],
           chatHistory: [],
