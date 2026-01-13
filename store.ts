@@ -3,15 +3,17 @@ import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, 
 import { Vector3 } from 'three';
 
 const INITIAL_AGENTS: AgentState[] = [
-  { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: 'red', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
-  { id: '2', name: 'ENG.UNIT', role: 'REVIEWER', color: 'blue', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
-  { id: '3', name: 'DES.LEAD', role: 'OBSERVER', color: 'gray', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
+  { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: '#ff4400', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
+  { id: '2', name: 'ENG.UNIT', role: 'REVIEWER', color: '#0066ff', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
+  { id: '3', name: 'DES.LEAD', role: 'OBSERVER', color: '#666666', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
+  { id: '4', name: 'VR.USER', role: 'OBSERVER', color: '#8b5cf6', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
 ];
 
 const INITIAL_WEIGHTS: Record<string, number> = {
   '1': 5,
   '2': 5,
-  '3': 5
+  '3': 5,
+  '4': 5
 };
 
 // --- MOCK REQUIREMENTS DB ---
@@ -91,6 +93,12 @@ interface AppState {
   // Follow Request System
   followRequest: { agentId: string; timestamp: number } | null;
 
+  // Privacy Mode
+  isPrivacyMode: boolean;
+
+  // Followed Agent (for participant list)
+  followedAgentId: string | null;
+
   // Heatmap
   heatmapValues: Record<string, number>;
 
@@ -121,6 +129,8 @@ interface AppState {
   setUserInteractionPoint: (pos: Vector3) => void;
   setLaserActive: (active: boolean) => void;
   setFollowRequest: (req: { agentId: string; timestamp: number } | null) => void;
+  togglePrivacyMode: () => void;
+  setFollowedAgent: (id: string | null) => void;
   
   setAgentStyle: (style: AgentStyle) => void;
   setAgentWeight: (id: string, weight: number) => void;
@@ -158,6 +168,8 @@ export const useStore = create<AppState>((set) => ({
   userInteractionPoint: new Vector3(),
   isLaserActive: false,
   followRequest: null,
+  isPrivacyMode: false,
+  followedAgentId: null,
   heatmapValues: {},
   chatHistory: [],
   insightCards: [],
@@ -185,6 +197,8 @@ export const useStore = create<AppState>((set) => ({
   setUserInteractionPoint: (pos) => set({ userInteractionPoint: pos }),
   setLaserActive: (active) => set({ isLaserActive: active }),
   setFollowRequest: (req) => set({ followRequest: req }),
+  togglePrivacyMode: () => set((state) => ({ isPrivacyMode: !state.isPrivacyMode })),
+  setFollowedAgent: (id) => set({ followedAgentId: id }),
   
   setAgentStyle: (style) => set({ agentStyle: style }),
   setAgentWeight: (id, weight) => set((state) => ({

@@ -133,7 +133,8 @@ export enum RepresentationMode {
 export enum AgentStyle {
   BOX = 'BOX',
   CAPSULE = 'CAPSULE',
-  ROBOT = 'ROBOT'
+  ROBOT = 'ROBOT',
+  VR_HEADSET = 'VR_HEADSET'
 }
 
 export interface PointOfInterest {

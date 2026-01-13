@@ -9,7 +9,7 @@ import {
     BarChart2, Search, Activity, GitBranch, Network, TreeDeciduous,
     ArrowDown, ArrowUpRight, CircleDot, Boxes, TriangleAlert, Target,
     BrainCircuit, Workflow, Sparkles, ChevronDown, ChevronRight as ChevronRightIcon,
-    Link2, TrendingUp, Clock, Brain, Layers, Route, Diamond
+    Link2, TrendingUp, Clock, Brain, Layers, Route, Diamond, X
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { InsightType, InsightCard, ChatMessage } from '../../types';
@@ -402,6 +402,41 @@ const MeetingSummary: React.FC = () => {
     const [assigneeMode, setAssigneeMode] = useState<'INDIVIDUAL' | 'DEPARTMENT'>('INDIVIDUAL');
     const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
     const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+    const [showBoardExplainer, setShowBoardExplainer] = useState(false);
+
+    // Session Review Board view descriptions
+    const VIEW_DESCRIPTIONS = {
+        DECISIONS: {
+            title: 'Decision Board',
+            description: 'Kanban-style board organizing all captured insights into three categories: Risks (potential issues), Actions (tasks to complete), and Rationale (design decisions). Drag cards between columns to reclassify.',
+            icon: LayoutDashboard
+        },
+        REQUIREMENTS: {
+            title: 'Requirements Impact',
+            description: 'View all regulatory and design requirements with their current status. See which decisions affect each requirement and track compliance across the session.',
+            icon: List
+        },
+        ASSIGNEES: {
+            title: 'Assignment View',
+            description: 'Organize insights by person or department. Drag cards to assign ownership. Toggle between individual and department views for different perspectives.',
+            icon: Users
+        },
+        TREE: {
+            title: 'Reasoning Tree',
+            description: 'Visual representation of the decision-making process. Shows how observations, questions, and evidence led to final decisions. Each node represents a step in the reasoning chain.',
+            icon: TreeDeciduous
+        },
+        THREADS: {
+            title: 'Causal Flow',
+            description: 'Schematic diagram showing cause-and-effect relationships. Traces triggers through analysis to final outcomes. Includes pattern detection and confidence scoring.',
+            icon: Route
+        },
+        ANALYSIS: {
+            title: 'Deep Analysis',
+            description: 'Conversation dynamics visualization. Shows interaction density over time, message classification, and detected collaboration patterns. Useful for understanding discussion quality.',
+            icon: Microscope
+        }
+    };
 
     const transcriptRef = useRef<HTMLDivElement>(null);
 
@@ -710,16 +745,67 @@ const MeetingSummary: React.FC = () => {
                 {/* Header */}
                 <div className="bg-black text-white p-5 flex justify-between items-center shrink-0">
                     <div className="flex flex-col gap-1">
-                        <h1 className="text-xl font-bold tracking-tight flex items-center gap-3">
+                        <button
+                            onClick={() => setShowBoardExplainer(!showBoardExplainer)}
+                            className="text-xl font-bold tracking-tight flex items-center gap-3 hover:text-gray-300 transition-colors group text-left"
+                        >
                             <FileText size={20} />
                             Session Review Board
-                        </h1>
+                            <HelpCircle size={14} className="text-gray-500 group-hover:text-white transition-colors" />
+                        </button>
                         <div className="text-gray-400 text-xs font-mono flex items-center gap-4">
                             <span>DURATION: {(time / 60).toFixed(1)} MIN</span>
                             <span>DECISIONS: {insightCards.length}</span>
                             <span>PATTERNS: {threads.reduce((sum, t) => sum + t.causalChain.patterns.length, 0)}</span>
                         </div>
                     </div>
+
+                    {/* Board Explainer Dropdown */}
+                    {showBoardExplainer && (
+                        <div className="absolute top-20 left-5 w-96 bg-white text-gray-800 rounded-lg shadow-2xl border border-gray-200 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                            <div className="p-4 border-b border-gray-100">
+                                <div className="flex items-center justify-between mb-2">
+                                    <h3 className="font-bold text-sm uppercase tracking-wide">View Guide</h3>
+                                    <button
+                                        onClick={() => setShowBoardExplainer(false)}
+                                        className="text-gray-400 hover:text-gray-600"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                </div>
+                                <p className="text-xs text-gray-500">Click any view tab to explore different analysis perspectives</p>
+                            </div>
+                            <div className="p-2 max-h-80 overflow-y-auto">
+                                {Object.entries(VIEW_DESCRIPTIONS).map(([key, view]) => {
+                                    const Icon = view.icon;
+                                    const isActive = activeTab === key;
+                                    return (
+                                        <button
+                                            key={key}
+                                            onClick={() => {
+                                                setActiveTab(key as any);
+                                                setShowBoardExplainer(false);
+                                            }}
+                                            className={clsx(
+                                                "w-full p-3 rounded-lg text-left flex items-start gap-3 transition-colors",
+                                                isActive ? "bg-black text-white" : "hover:bg-gray-50"
+                                            )}
+                                        >
+                                            <Icon size={18} className={isActive ? "text-white" : "text-gray-400"} />
+                                            <div className="flex-1">
+                                                <div className={clsx("font-bold text-sm", isActive ? "text-white" : "text-gray-800")}>
+                                                    {view.title}
+                                                </div>
+                                                <div className={clsx("text-[11px] leading-relaxed mt-0.5", isActive ? "text-gray-300" : "text-gray-500")}>
+                                                    {view.description}
+                                                </div>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     <div className="flex bg-white/10 rounded p-1 gap-1">
                          <button onClick={() => setActiveTab('DECISIONS')} className={clsx("px-3 py-1.5 rounded text-xs font-bold uppercase flex items-center gap-2 transition-colors", activeTab === 'DECISIONS' ? "bg-white text-black" : "text-gray-400 hover:text-white")}>
