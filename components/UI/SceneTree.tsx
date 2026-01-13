@@ -1,7 +1,7 @@
-import React from 'react';
-import { useStore, SCENE_TREE } from '../../store';
+import React, { useRef, useState } from 'react';
+import { useStore, getCurrentSceneTree } from '../../store';
 import { SceneNode } from '../../types';
-import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot } from 'lucide-react';
+import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth }) => {
@@ -92,17 +92,96 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
 };
 
 const SceneTree: React.FC = () => {
-  return (
-    <div className="w-64 bg-white/90 backdrop-blur-md border border-gray-200 rounded-lg shadow-sm flex flex-col overflow-hidden pointer-events-auto mt-2">
-        <div className="h-8 bg-gray-50 border-b border-gray-100 flex items-center px-3 justify-between">
-            <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wide">Model Tree</span>
-            <Layers size={12} className="text-gray-400" />
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const activeModelType = useStore(state => state.activeModelType);
+    const importSTEPFile = useStore(state => state.importSTEPFile);
+    const isImporting = useStore(state => state.isImporting);
+    const setIsImporting = useStore(state => state.setIsImporting);
+
+    const currentTree = getCurrentSceneTree(activeModelType);
+
+    const handleImportClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setIsImporting(true);
+
+        // Simulate import delay for demo
+        setTimeout(() => {
+            importSTEPFile(file.name);
+        }, 1500);
+
+        // Clear input for re-selection
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+    };
+
+    return (
+        <div className="w-64 bg-white/90 backdrop-blur-md border border-gray-200 rounded-lg shadow-sm flex flex-col overflow-hidden pointer-events-auto mt-2">
+            {/* Header with Import Button */}
+            <div className="bg-gray-50 border-b border-gray-100 px-3 py-2">
+                <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wide">Model Tree</span>
+                    <div className="flex items-center gap-1">
+                        {activeModelType === 'bicycle' && (
+                            <span className="text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold">
+                                STEP
+                            </span>
+                        )}
+                        <Layers size={12} className="text-gray-400" />
+                    </div>
+                </div>
+
+                {/* Import STEP Button */}
+                <button
+                    onClick={handleImportClick}
+                    disabled={isImporting}
+                    className={clsx(
+                        "w-full px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all",
+                        isImporting
+                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                            : "bg-blue-500 text-white hover:bg-blue-600 shadow-sm"
+                    )}
+                >
+                    {isImporting ? (
+                        <>
+                            <Loader2 size={12} className="animate-spin" />
+                            Importing STEP File...
+                        </>
+                    ) : (
+                        <>
+                            <Upload size={12} />
+                            Import STEP File
+                        </>
+                    )}
+                </button>
+
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".step,.stp,.STEP,.STP"
+                    onChange={handleFileChange}
+                    className="hidden"
+                />
+
+                {/* Current Model Info */}
+                <div className="mt-2 text-[9px] text-gray-400 flex items-center gap-1">
+                    <FileBox size={10} />
+                    {activeModelType === 'bicycle' ? 'urban_commuter_bicycle.step' : 'synth_assembly.step'}
+                </div>
+            </div>
+
+            {/* Tree View */}
+            <div className="overflow-y-auto max-h-[35vh] py-1 custom-scrollbar">
+                <TreeNode node={currentTree} depth={0} />
+            </div>
         </div>
-        <div className="overflow-y-auto max-h-[40vh] py-1 custom-scrollbar">
-            <TreeNode node={SCENE_TREE} depth={0} />
-        </div>
-    </div>
-  );
+    );
 };
 
 export default SceneTree;

@@ -4,12 +4,13 @@ import {
   Video, User, Map, Activity, Flame, Footprints,
   SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
-  ShieldOff, Shield, Radio, Glasses
+  ShieldOff, Shield, Radio, Glasses, MessageSquare, Mic
 } from 'lucide-react';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
 import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
+import CommentsPanel from './CommentsPanel';
 import SceneTree from './SceneTree';
 import MeetingSummary from './MeetingSummary';
 import DataFlowDrawer from './DataFlowDrawer';
@@ -54,12 +55,17 @@ const Interface: React.FC = () => {
     endMeeting,
     followRequest, setFollowRequest,
     isPrivacyMode, togglePrivacyMode,
-    followedAgentId, setFollowedAgent
+    followedAgentId, setFollowedAgent,
+    rightPanelMode, setRightPanelMode,
+    comments,
+    commentMode
   } = useStore();
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
+
+  const unresolvedComments = comments.filter(c => !c.resolved).length;
 
   // Derived state for HUD: Who is following me?
   const myFollowers = agents.filter(a => a.behavior === 'FOLLOWING' || (leaderId === 'USER'));
@@ -340,8 +346,66 @@ const Interface: React.FC = () => {
           </div>
       )}
 
-      {/* RIGHT PANEL: Conversation & Agent List */}
-      <ConversationPanel />
+      {/* RIGHT PANEL: Mode Switcher + Content */}
+      <div className="absolute right-6 top-20 bottom-20 flex flex-col pointer-events-none z-[40]" style={{ width: '320px' }}>
+        {/* Panel Mode Toggle */}
+        <div className="flex mb-2 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm p-1">
+          <button
+            onClick={() => setRightPanelMode('meeting')}
+            className={clsx(
+              "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all",
+              rightPanelMode === 'meeting'
+                ? "bg-black text-white"
+                : "text-gray-500 hover:bg-gray-100"
+            )}
+          >
+            <Mic size={12} />
+            Meeting Capture
+          </button>
+          <button
+            onClick={() => setRightPanelMode('comments')}
+            className={clsx(
+              "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all relative",
+              rightPanelMode === 'comments'
+                ? "bg-black text-white"
+                : "text-gray-500 hover:bg-gray-100"
+            )}
+          >
+            <MessageSquare size={12} />
+            Comments
+            {unresolvedComments > 0 && (
+              <span className={clsx(
+                "absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold",
+                rightPanelMode === 'comments' ? "bg-white text-black" : "bg-blue-500 text-white"
+              )}>
+                {unresolvedComments}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Panel Content */}
+        <div className="flex-1 min-h-0 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+          {rightPanelMode === 'meeting' ? (
+            <ConversationPanel />
+          ) : (
+            <CommentsPanel />
+          )}
+        </div>
+      </div>
+
+      {/* Comment Mode Indicator */}
+      {commentMode !== 'none' && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[50] pointer-events-none">
+          <div className="bg-blue-500/90 text-white px-6 py-3 rounded-lg shadow-lg animate-pulse">
+            <div className="text-sm font-bold text-center">
+              {commentMode === 'placing-comment' && 'Click on the 3D model to place comment'}
+              {commentMode === 'placing-drawing' && 'Click on the 3D model to attach drawing'}
+              {commentMode === 'drawing' && 'Drawing mode active'}
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* OVERLAY: AI View Sliders */}
       {showAIControls && (

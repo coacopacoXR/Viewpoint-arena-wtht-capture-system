@@ -170,34 +170,7 @@ const ConversationPanel: React.FC = () => {
       }
   };
 
-  if (!isExpanded) {
-      return (
-        <div className="absolute right-0 top-20 bottom-20 w-10 flex flex-col items-center gap-4 pointer-events-auto z-[40]">
-            <button 
-                onClick={() => setIsExpanded(true)}
-                className="w-8 h-12 bg-white border border-gray-300 rounded-l-md shadow-md flex items-center justify-center hover:bg-gray-50 transition-colors"
-                title="Open Collaboration Panel"
-            >
-                <ChevronLeft size={16} className="text-gray-600" />
-            </button>
-            
-            {/* Notification Badges */}
-            <div className="flex flex-col gap-2">
-                {insightCards.length > 0 && (
-                     <div className="w-8 h-8 bg-white rounded-full border border-gray-200 flex items-center justify-center shadow-sm relative">
-                        <Info size={14} className="text-blue-600" />
-                        <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full text-[8px] text-white flex items-center justify-center font-bold">
-                            {insightCards.length}
-                        </div>
-                     </div>
-                )}
-                 <div className="w-8 h-8 bg-black/80 rounded-full border border-gray-600 flex items-center justify-center shadow-sm">
-                    <MessageSquare size={14} className="text-white" />
-                 </div>
-            </div>
-        </div>
-      );
-  }
+  // Embedded mode - no collapsed state needed
 
   return (
     <>
@@ -217,40 +190,19 @@ const ConversationPanel: React.FC = () => {
 
         <div
             ref={panelRef}
-            className="absolute right-6 top-20 bottom-20 flex flex-col gap-3 pointer-events-none z-[40] animate-in slide-in-from-right-8 duration-300"
-            style={{ width: `${panelWidth}px` }}
+            className="h-full flex flex-col gap-2 pointer-events-auto"
         >
-            {/* Resize handle - left edge */}
-            <div
-                onMouseDown={handleWidthMouseDown}
-                className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize pointer-events-auto hover:bg-gray-400/50 transition-colors z-50 group"
-            >
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-3 h-12 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <GripVertical size={12} className="text-gray-400" />
-                </div>
-            </div>
-
             {/* Privacy Mode Banner */}
             {isPrivacyMode && (
-                <div className="pointer-events-auto bg-red-900/95 backdrop-blur text-white px-4 py-2 rounded-lg border border-red-700 flex items-center gap-3 shadow-lg animate-in fade-in slide-in-from-top-2">
-                    <ShieldOff size={16} className="text-red-400" />
+                <div className="bg-red-900/95 text-white px-3 py-2 rounded border border-red-700 flex items-center gap-2">
+                    <ShieldOff size={14} className="text-red-400" />
                     <div className="flex-1">
-                        <div className="text-[10px] font-bold uppercase tracking-wide">Privacy Mode Active</div>
-                        <div className="text-[9px] text-red-300">Transcription & insights paused</div>
+                        <div className="text-[10px] font-bold uppercase">Privacy Mode Active</div>
+                        <div className="text-[9px] text-red-300">Transcription paused</div>
                     </div>
                     <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
                 </div>
             )}
-
-            {/* HEADER / TOGGLE */}
-            <div className="flex justify-end pointer-events-auto">
-                <button
-                    onClick={() => setIsExpanded(false)}
-                    className="bg-white/80 backdrop-blur border border-gray-200 rounded px-2 py-1 flex items-center gap-1 text-[10px] font-bold text-gray-500 hover:bg-white hover:text-gray-800 transition-colors shadow-sm"
-                >
-                    COLLAPSE <ChevronRight size={12} />
-                </button>
-            </div>
 
             {/* --- SPLIT SCREEN AGENT SELECTOR --- */}
             {isSplit && (
@@ -286,7 +238,7 @@ const ConversationPanel: React.FC = () => {
 
             {/* --- INSIGHTS DECK (AI Analysis) --- */}
             <div
-                className="min-h-0 flex flex-col pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm overflow-hidden transition-colors"
+                className="min-h-0 flex flex-col bg-white rounded border border-gray-100 overflow-hidden"
                 style={{ flex: `0 0 ${insightPanelRatio * 100}%` }}
             >
                 <div className="p-2 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center">
@@ -418,7 +370,7 @@ const ConversationPanel: React.FC = () => {
             </div>
 
             {/* --- LOWER PANEL: TABS (Chat vs Docs) --- */}
-            <div className="flex-1 min-h-0 pointer-events-auto bg-black/90 backdrop-blur-md rounded-lg border border-gray-800 shadow-lg overflow-hidden flex flex-col transition-colors duration-300">
+            <div className="flex-1 min-h-0 bg-black/95 rounded border border-gray-700 overflow-hidden flex flex-col">
                 {/* TAB HEADER */}
                 <div className="flex border-b border-white/10 bg-black/50">
                     <button 
