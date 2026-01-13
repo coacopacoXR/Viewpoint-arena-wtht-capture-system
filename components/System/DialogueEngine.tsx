@@ -186,6 +186,192 @@ interface EnhancedPhraseTemplate {
     emotionalTone: 'neutral' | 'concerned' | 'confident' | 'curious' | 'assertive';
 }
 
+// --- BICYCLE-SPECIFIC DIALOGUE LIBRARY ---
+const BICYCLE_PHRASE_LIBRARY: EnhancedPhraseTemplate[] = [
+    // OBSERVATION PHASE
+    {
+        text: "Looking at the {poi}, the weld bead consistency appears excellent. I'm measuring approximately 3mm bead width which is within our spec for TIG welding.",
+        type: 'neutral',
+        technicalDepth: 'deep',
+        emotionalTone: 'confident',
+        summary: "Weld Quality Assessment"
+    },
+    {
+        text: "The {poi} geometry uses a hydroformed profile. The wall thickness transitions look smooth from the buttressed ends to the center section.",
+        type: 'neutral',
+        technicalDepth: 'deep',
+        emotionalTone: 'neutral'
+    },
+    {
+        text: "I'm examining the {poi}. The butted tubing shows the internal profile stepping from 0.9mm at the ends down to 0.6mm in the center for weight optimization.",
+        type: 'neutral',
+        technicalDepth: 'deep',
+        emotionalTone: 'curious'
+    },
+    // RISK IDENTIFICATION
+    {
+        text: "I need to flag a concern on the {poi}. The stress concentration at this junction shows 15% higher than our baseline. We're at 87% of yield strength under the worst-case loading scenario.",
+        type: 'risk',
+        summary: "Stress Concentration Risk",
+        technicalDepth: 'deep',
+        emotionalTone: 'concerned',
+        reasoningChain: {
+            trigger: 'stress analysis',
+            observation: 'elevated stress at junction',
+            hypothesis: 'geometry creates stress riser',
+            analysis: '87% of yield strength at peak load',
+            implication: 'fatigue failure risk under repeated loading',
+            confidence: 0.88
+        }
+    },
+    {
+        text: "The {poi} dropouts show a 0.2mm misalignment between left and right sides. This is outside our 0.1mm tolerance and will affect wheel tracking and brake alignment.",
+        type: 'risk',
+        summary: "Dropout Alignment Issue",
+        technicalDepth: 'deep',
+        emotionalTone: 'concerned',
+        reasoningChain: {
+            trigger: 'dropout measurement',
+            observation: '0.2mm lateral misalignment',
+            hypothesis: 'fixture issue during welding',
+            analysis: 'exceeds 0.1mm tolerance spec',
+            implication: 'wheel tracking and brake rub issues',
+            confidence: 0.92
+        }
+    },
+    {
+        text: "The fork rake on the {poi} measures 47mm, but our target was 45mm. This will affect trail calculation and handling feel - making the steering feel slower than intended.",
+        type: 'risk',
+        summary: "Fork Geometry Deviation",
+        technicalDepth: 'deep',
+        emotionalTone: 'concerned'
+    },
+    {
+        text: "I'm seeing potential galvanic corrosion risk at the {poi}. The aluminum seatpost in a steel frame without proper isolation could cause issues in wet conditions.",
+        type: 'risk',
+        summary: "Galvanic Corrosion Risk",
+        technicalDepth: 'medium',
+        emotionalTone: 'concerned',
+        reasoningChain: {
+            trigger: 'material interface analysis',
+            observation: 'dissimilar metals in contact',
+            hypothesis: 'electrolyte presence enables corrosion',
+            analysis: 'aluminum and steel galvanic potential difference',
+            implication: 'accelerated corrosion and seizure',
+            confidence: 0.85
+        }
+    },
+    // RATIONALE
+    {
+        text: "The reason we specified this particular geometry for the {poi} is to achieve a 72-degree head tube angle with 50mm of trail. This gives us the responsive handling our target rider expects.",
+        type: 'rationale',
+        summary: "Handling Geometry Rationale",
+        technicalDepth: 'deep',
+        emotionalTone: 'confident',
+        reasoningChain: {
+            trigger: 'geometry question',
+            observation: '72-degree head angle specified',
+            hypothesis: 'optimized for urban agility',
+            analysis: '50mm trail provides quick steering',
+            implication: 'suits target commuter use case',
+            confidence: 0.95
+        }
+    },
+    {
+        text: "The {poi} uses 4130 chromoly steel instead of aluminum. The fatigue characteristics of steel allow for a lifetime warranty - it bends before breaking and doesn't have aluminum's finite fatigue life.",
+        type: 'rationale',
+        summary: "Material Selection Rationale",
+        technicalDepth: 'deep',
+        emotionalTone: 'confident'
+    },
+    {
+        text: "We went with hydraulic disc brakes on the {poi} rather than mechanical for consistent stopping power in wet conditions. The sealed system requires less maintenance for daily commuters.",
+        type: 'rationale',
+        summary: "Brake System Rationale",
+        technicalDepth: 'medium',
+        emotionalTone: 'confident'
+    },
+    {
+        text: "The 1x drivetrain on the {poi} was chosen to simplify the cockpit - no front derailleur means one less cable, cleaner aesthetics, and less for the user to adjust.",
+        type: 'rationale',
+        summary: "Drivetrain Simplification",
+        technicalDepth: 'medium',
+        emotionalTone: 'confident'
+    },
+    // ACTIONS
+    {
+        text: "I'm calling for a fatigue test on the {poi} junction. We need 100,000 cycles at 1.5x max rider weight before I'm comfortable signing off.",
+        type: 'action',
+        summary: "Fatigue Testing Required",
+        technicalDepth: 'medium',
+        emotionalTone: 'assertive'
+    },
+    {
+        text: "Let's get the {poi} alignment checked on the frame jig before powder coating. I want confirmation we're within 0.5mm on all critical interfaces.",
+        type: 'action',
+        summary: "Alignment Verification",
+        technicalDepth: 'medium',
+        emotionalTone: 'assertive'
+    },
+    {
+        text: "We need to validate the {poi} clearance with 700x42c tires. Our spec says 40c but marketing wants to claim 42c compatibility.",
+        type: 'action',
+        summary: "Tire Clearance Validation",
+        technicalDepth: 'medium',
+        emotionalTone: 'neutral'
+    },
+    {
+        text: "I'm requesting a ride quality assessment from the test team on the {poi}. We need subjective feedback on the compliance versus our competitor benchmark.",
+        type: 'action',
+        summary: "Ride Quality Assessment",
+        technicalDepth: 'medium',
+        emotionalTone: 'neutral'
+    },
+    // QUESTIONING
+    {
+        text: "Has anyone checked the {poi} brake hose routing? I want to make sure we have enough length for full lock-to-lock steering without binding.",
+        type: 'questioning',
+        technicalDepth: 'medium',
+        emotionalTone: 'curious',
+        requiresFollowUp: true
+    },
+    {
+        text: "What's our weight target for the {poi}? The current build is showing 11.2kg complete and I want to know how much margin we have.",
+        type: 'questioning',
+        technicalDepth: 'medium',
+        emotionalTone: 'curious',
+        requiresFollowUp: true
+    },
+    // SYNTHESIS
+    {
+        text: "Synthesizing the discussion on {poi}: the geometry is optimized for urban commuting, the material choice supports durability, but we need to verify the stress concentration at the junction before production.",
+        type: 'synthesis',
+        summary: "Design Summary",
+        technicalDepth: 'deep',
+        emotionalTone: 'neutral'
+    },
+    {
+        text: "Looking at the {poi} holistically: the frame achieves our weight target, the geometry hits the handling goals, the main risk is the dropout alignment which we need to address in fixturing.",
+        type: 'synthesis',
+        summary: "Holistic Assessment",
+        technicalDepth: 'deep',
+        emotionalTone: 'confident'
+    },
+    // VISIBILITY & SOCIAL
+    {
+        text: "Can we rotate to see the {poi} from the drive side? I want to check the derailleur hanger alignment.",
+        type: 'visibility',
+        technicalDepth: 'shallow',
+        emotionalTone: 'neutral'
+    },
+    {
+        text: "Good catch on the {poi}. Let me add that to my notes.",
+        type: 'social',
+        technicalDepth: 'shallow',
+        emotionalTone: 'neutral'
+    }
+];
+
 // Deep technical dialogue library
 const PHRASE_LIBRARY: EnhancedPhraseTemplate[] = [
     // ============================================================================
@@ -727,15 +913,21 @@ const DialogueEngine: React.FC = () => {
     });
 
     const generateDialogue = (agentId: string, poiLabel: string, poiId: string) => {
-        const objectStates = useStore.getState().objectStates;
+        const state = useStore.getState();
+        const objectStates = state.objectStates;
+        const activeModelType = state.activeModelType;
         const userSelectedId = Object.keys(objectStates).find(key => objectStates[key].selected);
 
         let targetLabel = poiLabel;
         let targetId = poiId;
         let isUserDriven = false;
 
+        // Import the correct scene tree based on model type
+        const { BICYCLE_SCENE_TREE, SYNTH_SCENE_TREE } = require('../../store');
+        const currentTree = activeModelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+
         if (userSelectedId) {
-            const name = findNodeName(userSelectedId, SCENE_TREE);
+            const name = findNodeName(userSelectedId, currentTree);
             if (name) {
                 targetLabel = name;
                 targetId = userSelectedId;
@@ -752,30 +944,32 @@ const DialogueEngine: React.FC = () => {
         }
 
         // --- INTELLIGENT PHASE SELECTION ---
-        let candidates = PHRASE_LIBRARY;
+        // Use bicycle-specific library when bicycle model is active
+        const basePhraseLibrary = activeModelType === 'bicycle' ? BICYCLE_PHRASE_LIBRARY : PHRASE_LIBRARY;
+        let candidates = basePhraseLibrary;
         const step = context.step;
 
         // Phase 0-2: Observation & Discovery
         if (step < 3) {
-            candidates = PHRASE_LIBRARY.filter(t =>
+            candidates = basePhraseLibrary.filter(t =>
                 t.type === 'neutral' || t.type === 'visibility' || t.type === 'questioning'
             );
         }
         // Phase 3-6: Analysis & Risk Identification
         else if (step < 7) {
-            candidates = PHRASE_LIBRARY.filter(t =>
+            candidates = basePhraseLibrary.filter(t =>
                 t.type === 'risk' || t.type === 'rationale' || t.type === 'questioning'
             );
         }
         // Phase 7-10: Deep Dive & Synthesis
         else if (step < 11) {
-            candidates = PHRASE_LIBRARY.filter(t =>
+            candidates = basePhraseLibrary.filter(t =>
                 t.type === 'rationale' || t.type === 'synthesis' || t.type === 'risk'
             );
         }
         // Phase 11+: Decision & Action
         else {
-            candidates = PHRASE_LIBRARY.filter(t =>
+            candidates = basePhraseLibrary.filter(t =>
                 t.type === 'action' || t.type === 'synthesis' || t.type === 'rationale'
             );
         }
@@ -784,12 +978,12 @@ const DialogueEngine: React.FC = () => {
         if (isUserDriven) {
             candidates = candidates.filter(t => t.technicalDepth !== 'shallow');
             if (candidates.length === 0) {
-                candidates = PHRASE_LIBRARY.filter(t => t.type !== 'social' && t.type !== 'visibility');
+                candidates = basePhraseLibrary.filter(t => t.type !== 'social' && t.type !== 'visibility');
             }
         }
 
         // Fallback
-        if (candidates.length === 0) candidates = PHRASE_LIBRARY;
+        if (candidates.length === 0) candidates = basePhraseLibrary;
 
         const template = getRandomElement(candidates);
         const text = buildEnhancedDialogue(agentId, targetLabel, template, context, isUserDriven);
