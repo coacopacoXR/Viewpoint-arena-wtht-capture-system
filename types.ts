@@ -133,7 +133,8 @@ export enum RepresentationMode {
 export enum AgentStyle {
   BOX = 'BOX',
   CAPSULE = 'CAPSULE',
-  ROBOT = 'ROBOT'
+  ROBOT = 'ROBOT',
+  VR_HEADSET = 'VR_HEADSET'
 }
 
 export interface PointOfInterest {
@@ -246,3 +247,39 @@ export interface KBEntry {
     triggerKeyword: string;
     recommendation: string;
 }
+
+// --- COMMENT SYSTEM TYPES ---
+
+export interface SpatialComment {
+    id: string;
+    type: 'text' | 'drawing';
+    content: string;
+    drawingData?: string; // Base64 PNG for drawings
+    author: string;
+    authorColor: string;
+    timestamp: number;
+    position: { x: number; y: number; z: number };
+    attachedToNodeId: string;
+    attachedToNodeName: string;
+    assignees: string[]; // @mentioned users
+    resolved: boolean;
+    linkedToMeeting: boolean; // If captured in meeting transcript
+}
+
+export type CommentMode = 'none' | 'placing-comment' | 'placing-drawing' | 'positioning-drawing' | 'drawing';
+
+// --- STEP IMPORT TYPES ---
+
+export interface ImportedModel {
+    id: string;
+    name: string;
+    fileName: string;
+    importedAt: number;
+    sceneTree: SceneNode;
+}
+
+export type ModelType = 'synth' | 'bicycle';
+
+// --- PANEL MODE TYPES ---
+
+export type RightPanelMode = 'meeting' | 'comments';

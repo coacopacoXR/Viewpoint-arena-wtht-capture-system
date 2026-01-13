@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Play, Pause, RefreshCw, Eye, EyeOff, 
+import {
+  Play, Pause, RefreshCw, Eye, EyeOff,
   Video, User, Map, Activity, Flame, Footprints,
   SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
-  CheckCircle2, Power, Layers, Network, Link, BellRing, X
+  CheckCircle2, Power, Layers, Network, Link, BellRing, X,
+  ShieldOff, Shield, Radio, Glasses, MessageSquare, Mic
 } from 'lucide-react';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
 import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
+import CommentsPanel from './CommentsPanel';
 import SceneTree from './SceneTree';
 import MeetingSummary from './MeetingSummary';
 import DataFlowDrawer from './DataFlowDrawer';
@@ -51,11 +53,19 @@ const Interface: React.FC = () => {
     agentStyle, setAgentStyle,
     agentWeights, setAgentWeight,
     endMeeting,
-    followRequest, setFollowRequest
+    followRequest, setFollowRequest,
+    isPrivacyMode, togglePrivacyMode,
+    followedAgentId, setFollowedAgent,
+    rightPanelMode, setRightPanelMode,
+    comments,
+    commentMode
   } = useStore();
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
+  const [showParticipants, setShowParticipants] = useState(false);
+
+  const unresolvedComments = comments.filter(c => !c.resolved).length;
 
   // Derived state for HUD: Who is following me?
   const myFollowers = agents.filter(a => a.behavior === 'FOLLOWING' || (leaderId === 'USER'));
@@ -210,13 +220,51 @@ const Interface: React.FC = () => {
 
       {/* Right Header Area (Agent Status / End Meeting) */}
       <div className="absolute top-6 right-6 flex flex-col items-end gap-2 pointer-events-auto z-[40]">
-           
-           <button 
-                onClick={() => endMeeting(true)}
-                className="px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide bg-black text-white border border-black shadow-md hover:bg-gray-800 transition-colors flex items-center gap-2 mb-2"
-            >
-                <Power size={12} className="text-red-500" /> End Session
-           </button>
+
+           {/* Top buttons row */}
+           <div className="flex items-center gap-2 mb-2">
+                {/* Privacy Mode Toggle */}
+                <button
+                    onClick={togglePrivacyMode}
+                    className={clsx(
+                        "px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2",
+                        isPrivacyMode
+                            ? "bg-red-600 text-white border-red-600 hover:bg-red-700"
+                            : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400"
+                    )}
+                >
+                    {isPrivacyMode ? <ShieldOff size={12} /> : <Shield size={12} />}
+                    {isPrivacyMode ? "Privacy On" : "Privacy"}
+                </button>
+
+                {/* Participants Toggle */}
+                <button
+                    onClick={() => setShowParticipants(!showParticipants)}
+                    className={clsx(
+                        "px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2",
+                        showParticipants
+                            ? "bg-black text-white border-black"
+                            : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400"
+                    )}
+                >
+                    <Users size={12} /> Participants
+                </button>
+
+                <button
+                    onClick={() => endMeeting(true)}
+                    className="px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide bg-black text-white border border-black shadow-md hover:bg-gray-800 transition-colors flex items-center gap-2"
+                >
+                    <Power size={12} className="text-red-500" /> End Session
+                </button>
+           </div>
+
+           {/* Recording indicator when privacy mode is OFF */}
+           {!isPrivacyMode && (
+               <div className="bg-green-50 border border-green-200 text-green-700 px-3 py-1.5 rounded text-[10px] font-mono flex items-center gap-2 animate-in fade-in slide-in-from-right-4">
+                  <Radio size={10} className="text-green-500 animate-pulse" />
+                  MEETING RECORDED
+               </div>
+           )}
 
            {activeAgentId && viewMode === ViewMode.POV_AGENT && (
                <div className="bg-black text-white px-3 py-1.5 rounded text-xs font-mono flex items-center gap-2 shadow-lg animate-in fade-in slide-in-from-right-4">
@@ -227,8 +275,137 @@ const Interface: React.FC = () => {
            )}
       </div>
 
-      {/* RIGHT PANEL: Conversation & Agent List */}
-      <ConversationPanel />
+      {/* Participants Panel */}
+      {showParticipants && (
+          <div className="absolute top-20 right-[360px] z-[45] pointer-events-auto w-64 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-lg animate-in fade-in slide-in-from-right-4 duration-200">
+              <div className="p-3 border-b border-gray-100 flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider flex items-center gap-2">
+                      <Users size={12} /> Participants
+                  </span>
+                  <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full font-mono">{agents.length}</span>
+              </div>
+              <div className="p-2 flex flex-col gap-1 max-h-80 overflow-y-auto">
+                  {agents.map(agent => {
+                      const isFollowing = followedAgentId === agent.id;
+                      const isVR = agent.id === '4';
+                      return (
+                          <button
+                              key={agent.id}
+                              onClick={() => {
+                                  if (isFollowing) {
+                                      setFollowedAgent(null);
+                                      setActiveAgent(null);
+                                      setViewMode(ViewMode.FREE);
+                                  } else {
+                                      setFollowedAgent(agent.id);
+                                      setActiveAgent(agent.id);
+                                      setViewMode(ViewMode.POV_AGENT);
+                                  }
+                              }}
+                              className={clsx(
+                                  "w-full p-3 rounded-lg text-left flex items-center gap-3 transition-all",
+                                  isFollowing
+                                      ? "bg-black text-white shadow-md"
+                                      : "bg-gray-50 hover:bg-gray-100 text-gray-700"
+                              )}
+                          >
+                              <div
+                                  className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[10px] font-bold shadow-sm"
+                                  style={{ backgroundColor: agent.color }}
+                              >
+                                  {isVR ? <Glasses size={14} /> : agent.name[0]}
+                              </div>
+                              <div className="flex-1">
+                                  <div className="font-mono text-xs font-bold flex items-center gap-2">
+                                      {agent.name}
+                                      {isVR && (
+                                          <span className={clsx(
+                                              "text-[8px] px-1 py-0.5 rounded uppercase",
+                                              isFollowing ? "bg-white/20 text-white" : "bg-purple-100 text-purple-600"
+                                          )}>
+                                              VR
+                                          </span>
+                                      )}
+                                  </div>
+                                  <div className={clsx(
+                                      "text-[9px] capitalize",
+                                      isFollowing ? "text-gray-300" : "text-gray-400"
+                                  )}>
+                                      {agent.role.toLowerCase()} · {agent.behavior.toLowerCase().replace('_', ' ')}
+                                  </div>
+                              </div>
+                              {isFollowing && (
+                                  <div className="text-[9px] bg-white/20 px-2 py-0.5 rounded font-bold">
+                                      Following
+                                  </div>
+                              )}
+                          </button>
+                      );
+                  })}
+              </div>
+          </div>
+      )}
+
+      {/* RIGHT PANEL: Mode Switcher + Content */}
+      <div className="absolute right-6 top-20 bottom-20 flex flex-col pointer-events-none z-[40]" style={{ width: '320px' }}>
+        {/* Panel Mode Toggle */}
+        <div className="flex mb-2 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm p-1">
+          <button
+            onClick={() => setRightPanelMode('meeting')}
+            className={clsx(
+              "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all",
+              rightPanelMode === 'meeting'
+                ? "bg-black text-white"
+                : "text-gray-500 hover:bg-gray-100"
+            )}
+          >
+            <Mic size={12} />
+            Meeting Capture
+          </button>
+          <button
+            onClick={() => setRightPanelMode('comments')}
+            className={clsx(
+              "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all relative",
+              rightPanelMode === 'comments'
+                ? "bg-black text-white"
+                : "text-gray-500 hover:bg-gray-100"
+            )}
+          >
+            <MessageSquare size={12} />
+            Comments
+            {unresolvedComments > 0 && (
+              <span className={clsx(
+                "absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold",
+                rightPanelMode === 'comments' ? "bg-white text-black" : "bg-blue-500 text-white"
+              )}>
+                {unresolvedComments}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Panel Content */}
+        <div className="flex-1 min-h-0 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+          {rightPanelMode === 'meeting' ? (
+            <ConversationPanel />
+          ) : (
+            <CommentsPanel />
+          )}
+        </div>
+      </div>
+
+      {/* Comment Mode Indicator */}
+      {commentMode !== 'none' && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[50] pointer-events-none">
+          <div className="bg-blue-500/90 text-white px-6 py-3 rounded-lg shadow-lg animate-pulse">
+            <div className="text-sm font-bold text-center">
+              {commentMode === 'placing-comment' && 'Click on the 3D model to place comment'}
+              {commentMode === 'placing-drawing' && 'Click on the 3D model to attach drawing'}
+              {commentMode === 'drawing' && 'Drawing mode active'}
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* OVERLAY: AI View Sliders */}
       {showAIControls && (
