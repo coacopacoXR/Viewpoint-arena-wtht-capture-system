@@ -1,4 +1,4 @@
-import React, { Suspense, useRef } from 'react';
+import React, { Suspense, useRef, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import World from './World';
@@ -79,6 +79,10 @@ const SceneRenderer = () => {
   const agents = useStore(state => state.agents);
   const agentWeights = useStore(state => state.agentWeights);
   const isLaserActive = useStore(state => state.isLaserActive);
+  const temporarilyDisengagedFromAgentId = useStore(state => state.temporarilyDisengagedFromAgentId);
+  const temporarilyDisengageFromAgent = useStore(state => state.temporarilyDisengageFromAgent);
+  const resumeFollowingAgent = useStore(state => state.resumeFollowingAgent);
+  const clearTemporaryDisengage = useStore(state => state.clearTemporaryDisengage);
 
   const { gl, scene, camera: defaultCamera, size } = useThree();
   
@@ -99,6 +103,66 @@ const SceneRenderer = () => {
   // Interaction State for AI Mode Override
   const isInteracting = useRef(false);
   const lastInteractionEnd = useRef(0);
+
+  // Idle timeout for auto-resume after disengage
+  const idleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const IDLE_RESUME_DELAY = 3000; // 3 seconds of idle time before resuming
+
+  // Clear idle timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (idleTimeoutRef.current) {
+        clearTimeout(idleTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Handle idle timeout for auto-resume when temporarily disengaged
+  useEffect(() => {
+    if (temporarilyDisengagedFromAgentId && !isInteracting.current) {
+      // Start idle timer when disengaged
+      idleTimeoutRef.current = setTimeout(() => {
+        resumeFollowingAgent();
+      }, IDLE_RESUME_DELAY);
+
+      return () => {
+        if (idleTimeoutRef.current) {
+          clearTimeout(idleTimeoutRef.current);
+        }
+      };
+    }
+  }, [temporarilyDisengagedFromAgentId, resumeFollowingAgent]);
+
+  // Handle canvas click to disengage from POV mode
+  const handleCanvasInteractionStart = useCallback(() => {
+    isInteracting.current = true;
+
+    // Clear any existing idle timeout
+    if (idleTimeoutRef.current) {
+      clearTimeout(idleTimeoutRef.current);
+      idleTimeoutRef.current = null;
+    }
+
+    // If following an agent, disengage on click
+    if (viewMode === ViewMode.POV_AGENT && activeAgentId) {
+      temporarilyDisengageFromAgent();
+    }
+  }, [viewMode, activeAgentId, temporarilyDisengageFromAgent]);
+
+  const handleCanvasInteractionEnd = useCallback(() => {
+    isInteracting.current = false;
+    lastInteractionEnd.current = Date.now();
+
+    // Start idle timer for auto-resume if temporarily disengaged
+    if (temporarilyDisengagedFromAgentId) {
+      if (idleTimeoutRef.current) {
+        clearTimeout(idleTimeoutRef.current);
+      }
+      idleTimeoutRef.current = setTimeout(() => {
+        resumeFollowingAgent();
+      }, IDLE_RESUME_DELAY);
+    }
+  }, [temporarilyDisengagedFromAgentId, resumeFollowingAgent]);
 
   // We use render priority 1 to run after standard r3f loops.
   useFrame((state, delta) => {
@@ -246,16 +310,17 @@ const SceneRenderer = () => {
   }, 1);
   
   return (
-    <OrbitControls 
-      ref={controlsRef} 
-      enableDamping 
+    <OrbitControls
+      ref={controlsRef}
+      enableDamping
       dampingFactor={0.1}
       // Disable controls if User Laser is active (so mouse moves pointer, not camera)
-      enabled={viewMode !== ViewMode.POV_AGENT && !isLaserActive}
+      // Allow controls when temporarily disengaged from POV mode
+      enabled={(viewMode !== ViewMode.POV_AGENT || temporarilyDisengagedFromAgentId !== null) && !isLaserActive}
       minDistance={1}
       maxDistance={20}
-      onStart={() => { isInteracting.current = true; }}
-      onEnd={() => { isInteracting.current = false; lastInteractionEnd.current = Date.now(); }}
+      onStart={handleCanvasInteractionStart}
+      onEnd={handleCanvasInteractionEnd}
     />
   );
 };

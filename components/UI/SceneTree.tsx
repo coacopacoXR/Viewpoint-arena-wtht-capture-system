@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useStore, getCurrentSceneTree } from '../../store';
 import { SceneNode } from '../../types';
-import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle } from 'lucide-react';
+import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { parseSTEPFile } from '../../utils/stepLoader';
 
@@ -92,6 +92,21 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
     );
 };
 
+// Validate STEP file
+const validateFile = (file: File): string | null => {
+    const maxSize = 50 * 1024 * 1024; // 50MB
+    const validExtensions = ['.step', '.stp'];
+    const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
+
+    if (!validExtensions.includes(extension)) {
+        return 'Invalid file type. Please select a .step or .stp file.';
+    }
+    if (file.size > maxSize) {
+        return `File too large. Maximum size is ${maxSize / (1024 * 1024)}MB.`;
+    }
+    return null;
+};
+
 const SceneTree: React.FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const activeModelType = useStore(state => state.activeModelType);
@@ -100,6 +115,8 @@ const SceneTree: React.FC = () => {
     const setImportedModel = useStore(state => state.setImportedModel);
     const importedSceneTree = useStore(state => state.importedSceneTree);
     const importedFileName = useStore(state => state.importedFileName);
+    const importSuccess = useStore(state => state.importSuccess);
+    const clearImportStatus = useStore(state => state.clearImportStatus);
 
     const [importError, setImportError] = useState<string | null>(null);
 
@@ -213,14 +230,6 @@ const SceneTree: React.FC = () => {
                     className="hidden"
                 />
 
-                {/* Import Error */}
-                {importError && (
-                    <div className="mt-2 text-[9px] text-red-500 flex items-center gap-1 bg-red-50 p-1.5 rounded">
-                        <AlertCircle size={10} />
-                        {importError}
-                    </div>
-                )}
-
                 {/* Current Model Info */}
                 <div className="mt-2 text-[9px] text-gray-400 flex items-center gap-1">
                     <FileBox size={10} />
@@ -246,7 +255,7 @@ const SceneTree: React.FC = () => {
                         <AlertCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
                         <div className="flex-1">{importError}</div>
                         <button
-                            onClick={clearImportStatus}
+                            onClick={() => setImportError(null)}
                             className="text-red-400 hover:text-red-600"
                         >
                             <X size={12} />
