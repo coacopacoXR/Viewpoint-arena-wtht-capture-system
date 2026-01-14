@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode } from './types';
-import { Vector3 } from 'three';
+import { Vector3, Group } from 'three';
 
 const INITIAL_AGENTS: AgentState[] = [
   { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: '#ff4400', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
@@ -188,6 +188,9 @@ interface AppState {
   // --- NEW: Model Type ---
   activeModelType: ModelType;
   isImporting: boolean;
+  importedMeshes: Group | null;
+  importedSceneTree: SceneNode | null;
+  importedFileName: string | null;
 
   // --- NEW: Comments System ---
   comments: SpatialComment[];
@@ -245,6 +248,7 @@ interface AppState {
   setActiveModelType: (type: ModelType) => void;
   importSTEPFile: (fileName: string) => void;
   setIsImporting: (importing: boolean) => void;
+  setImportedModel: (meshes: Group, sceneTree: SceneNode, fileName: string) => void;
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode: CommentMode) => void;
@@ -290,6 +294,9 @@ export const useStore = create<AppState>((set) => ({
   // --- NEW: Model Type ---
   activeModelType: 'synth',
   isImporting: false,
+  importedMeshes: null,
+  importedSceneTree: null,
+  importedFileName: null,
 
   // --- NEW: Comments System ---
   comments: [],
@@ -396,12 +403,8 @@ export const useStore = create<AppState>((set) => ({
       };
   }),
 
+  // Legacy demo import - kept for fallback
   importSTEPFile: (fileName) => set((state) => {
-      // For demo: ANY imported STEP file replaces the current model with the bicycle
-      // This demonstrates the import functionality by substituting the scene
-      // In production, this would parse actual STEP file geometry
-
-      // Always switch to bicycle model for demo (replaces synth or any current model)
       return {
           activeModelType: 'bicycle' as ModelType,
           objectStates: initObjectStates(BICYCLE_SCENE_TREE),
@@ -410,11 +413,31 @@ export const useStore = create<AppState>((set) => ({
           chatHistory: [],
           insightCards: [],
           heatmapValues: {},
-          isImporting: false
+          isImporting: false,
+          importedMeshes: null,
+          importedSceneTree: null,
+          importedFileName: null
       };
   }),
 
   setIsImporting: (importing) => set({ isImporting: importing }),
+
+  // Real STEP import - sets the parsed meshes and scene tree
+  setImportedModel: (meshes, sceneTree, fileName) => set((state) => {
+      return {
+          activeModelType: 'imported' as ModelType,
+          importedMeshes: meshes,
+          importedSceneTree: sceneTree,
+          importedFileName: fileName,
+          objectStates: initObjectStates(sceneTree),
+          pois: [],
+          comments: [],
+          chatHistory: [],
+          insightCards: [],
+          heatmapValues: {},
+          isImporting: false
+      };
+  }),
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode) => set({ commentMode: mode }),
@@ -449,6 +472,9 @@ export const useStore = create<AppState>((set) => ({
 }));
 
 // Helper to get current scene tree
-export const getCurrentSceneTree = (modelType: ModelType): SceneNode => {
+export const getCurrentSceneTree = (modelType: ModelType, importedTree?: SceneNode | null): SceneNode => {
+    if (modelType === 'imported' && importedTree) {
+        return importedTree;
+    }
     return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
 };
