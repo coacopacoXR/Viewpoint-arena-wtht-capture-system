@@ -1,8 +1,9 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useStore, getCurrentSceneTree } from '../../store';
 import { SceneNode } from '../../types';
-import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle } from 'lucide-react';
 import { clsx } from 'clsx';
+import { parseSTEPFile } from '../../utils/stepLoader';
 
 const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth }) => {
     const objectState = useStore(state => state.objectStates[node.id]);
@@ -94,16 +95,15 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
 const SceneTree: React.FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const activeModelType = useStore(state => state.activeModelType);
-    const importSTEPFile = useStore(state => state.importSTEPFile);
     const isImporting = useStore(state => state.isImporting);
     const setIsImporting = useStore(state => state.setIsImporting);
-    const importError = useStore(state => state.importError);
-    const importSuccess = useStore(state => state.importSuccess);
-    const lastImportedFileName = useStore(state => state.lastImportedFileName);
-    const clearImportStatus = useStore(state => state.clearImportStatus);
-    const setImportError = useStore(state => state.setImportError);
+    const setImportedModel = useStore(state => state.setImportedModel);
+    const importedSceneTree = useStore(state => state.importedSceneTree);
+    const importedFileName = useStore(state => state.importedFileName);
 
-    const currentTree = getCurrentSceneTree(activeModelType);
+    const [importError, setImportError] = useState<string | null>(null);
+
+    const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
 
     // Auto-clear success message after 5 seconds
     useEffect(() => {
@@ -119,18 +119,7 @@ const SceneTree: React.FC = () => {
         fileInputRef.current?.click();
     };
 
-    const validateFile = (file: File): string | null => {
-        const extension = file.name.split('.').pop()?.toLowerCase();
-        if (!extension || !['step', 'stp'].includes(extension)) {
-            return `Invalid file type: .${extension || 'unknown'}. Please select a .step or .stp file.`;
-        }
-        if (file.size > 100 * 1024 * 1024) {
-            return 'File too large. Maximum size is 100MB.';
-        }
-        return null;
-    };
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
@@ -145,18 +134,35 @@ const SceneTree: React.FC = () => {
         }
 
         setIsImporting(true);
-        clearImportStatus();
+        setImportError(null);
 
-        // Simulate import delay for demo (would be actual parsing in production)
-        const delay = Math.min(1500, Math.max(500, file.size / 10000)); // Scale delay with file size
-        setTimeout(() => {
-            importSTEPFile(file.name, file.size);
-        }, delay);
+        try {
+            // Parse the actual STEP file
+            const result = await parseSTEPFile(file);
+
+            // Set the imported model in the store
+            setImportedModel(result.meshes, result.sceneTree, result.fileName);
+        } catch (error) {
+            console.error('STEP import error:', error);
+            setImportError(error instanceof Error ? error.message : 'Failed to import STEP file');
+            setIsImporting(false);
+        }
 
         // Clear input for re-selection
         if (fileInputRef.current) {
             fileInputRef.current.value = '';
         }
+    };
+
+    // Get display name for current model
+    const getModelFileName = () => {
+        if (activeModelType === 'imported' && importedFileName) {
+            return importedFileName;
+        }
+        if (activeModelType === 'bicycle') {
+            return 'urban_commuter_bicycle.step';
+        }
+        return 'synth_assembly.step';
     };
 
     return (
@@ -166,7 +172,7 @@ const SceneTree: React.FC = () => {
                 <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wide">Model Tree</span>
                     <div className="flex items-center gap-1">
-                        {activeModelType === 'bicycle' && (
+                        {(activeModelType === 'bicycle' || activeModelType === 'imported') && (
                             <span className="text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold">
                                 STEP
                             </span>
@@ -207,10 +213,18 @@ const SceneTree: React.FC = () => {
                     className="hidden"
                 />
 
+                {/* Import Error */}
+                {importError && (
+                    <div className="mt-2 text-[9px] text-red-500 flex items-center gap-1 bg-red-50 p-1.5 rounded">
+                        <AlertCircle size={10} />
+                        {importError}
+                    </div>
+                )}
+
                 {/* Current Model Info */}
                 <div className="mt-2 text-[9px] text-gray-400 flex items-center gap-1">
                     <FileBox size={10} />
-                    {lastImportedFileName || (activeModelType === 'bicycle' ? 'urban_commuter_bicycle.step' : 'synth_assembly.step')}
+                    <span className="truncate">{getModelFileName()}</span>
                 </div>
 
                 {/* Import Status Messages */}

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode } from './types';
-import { Vector3 } from 'three';
+import { Vector3, Group } from 'three';
 
 const INITIAL_AGENTS: AgentState[] = [
   { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: '#ff4400', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
@@ -199,9 +199,9 @@ interface AppState {
   // --- NEW: Model Type ---
   activeModelType: ModelType;
   isImporting: boolean;
-  importError: string | null;
-  importSuccess: string | null;
-  lastImportedFileName: string | null;
+  importedMeshes: Group | null;
+  importedSceneTree: SceneNode | null;
+  importedFileName: string | null;
 
   // --- NEW: Comments System ---
   comments: SpatialComment[];
@@ -263,9 +263,7 @@ interface AppState {
   setActiveModelType: (type: ModelType) => void;
   importSTEPFile: (fileName: string, fileSize?: number) => void;
   setIsImporting: (importing: boolean) => void;
-  setImportError: (error: string | null) => void;
-  setImportSuccess: (message: string | null) => void;
-  clearImportStatus: () => void;
+  setImportedModel: (meshes: Group, sceneTree: SceneNode, fileName: string) => void;
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode: CommentMode) => void;
@@ -317,9 +315,9 @@ export const useStore = create<AppState>((set) => ({
   // --- NEW: Model Type ---
   activeModelType: 'synth',
   isImporting: false,
-  importError: null,
-  importSuccess: null,
-  lastImportedFileName: null,
+  importedMeshes: null,
+  importedSceneTree: null,
+  importedFileName: null,
 
   // --- NEW: Comments System ---
   comments: [],
@@ -430,64 +428,33 @@ export const useStore = create<AppState>((set) => ({
       };
   }),
 
-  importSTEPFile: (fileName, fileSize) => set((state) => {
-      // STEP File Import - Demo implementation
-      // In a real implementation, this would parse actual STEP/IGES files
-      // using libraries like opencascade.js or similar
-
-      // File validation
-      const extension = fileName.split('.').pop()?.toLowerCase();
-      if (!extension || !['step', 'stp'].includes(extension)) {
-          return {
-              isImporting: false,
-              importError: `Invalid file format: .${extension || 'unknown'}. Please use .step or .stp files.`,
-              importSuccess: null
-          };
-      }
-
-      // Size validation (demo - simulated)
-      if (fileSize && fileSize > 100 * 1024 * 1024) { // 100MB limit
-          return {
-              isImporting: false,
-              importError: 'File too large. Maximum size is 100MB.',
-              importSuccess: null
-          };
-      }
-
-      // Determine which model to load based on filename keywords
-      const lowerName = fileName.toLowerCase();
-      const isBicycle = lowerName.includes('bicycle') ||
-                        lowerName.includes('bike') ||
-                        lowerName.includes('cycle') ||
-                        lowerName.includes('frame');
-
-      const isSynth = lowerName.includes('synth') ||
-                      lowerName.includes('keyboard') ||
-                      lowerName.includes('audio') ||
-                      lowerName.includes('music');
-
-      // Smart model selection:
-      // 1. If filename contains 'bicycle' keywords -> bicycle model
-      // 2. If filename contains 'synth' keywords -> synth model
-      // 3. Otherwise, toggle to the other model (for demo purposes)
-      let newModelType: ModelType;
-      if (isBicycle) {
-          newModelType = 'bicycle';
-      } else if (isSynth) {
-          newModelType = 'synth';
-      } else {
-          // Toggle for demo
-          newModelType = state.activeModelType === 'bicycle' ? 'synth' : 'bicycle';
-      }
-
-      const tree = newModelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
-      const modelName = newModelType === 'bicycle' ? 'Urban Commuter Bicycle' : 'Synth Assembly';
-      const partCount = countParts(tree);
-
-      // Clear everything for fresh start with new model
+  // Legacy demo import - kept for fallback
+  importSTEPFile: (fileName) => set((state) => {
       return {
-          activeModelType: newModelType,
-          objectStates: initObjectStates(tree),
+          activeModelType: 'bicycle' as ModelType,
+          objectStates: initObjectStates(BICYCLE_SCENE_TREE),
+          pois: [],
+          comments: [],
+          chatHistory: [],
+          insightCards: [],
+          heatmapValues: {},
+          isImporting: false,
+          importedMeshes: null,
+          importedSceneTree: null,
+          importedFileName: null
+      };
+  }),
+
+  setIsImporting: (importing) => set({ isImporting: importing }),
+
+  // Real STEP import - sets the parsed meshes and scene tree
+  setImportedModel: (meshes, sceneTree, fileName) => set((state) => {
+      return {
+          activeModelType: 'imported' as ModelType,
+          importedMeshes: meshes,
+          importedSceneTree: sceneTree,
+          importedFileName: fileName,
+          objectStates: initObjectStates(sceneTree),
           pois: [],
           comments: [],
           chatHistory: [],
@@ -512,14 +479,6 @@ export const useStore = create<AppState>((set) => ({
           capturedScreenshot: null
       };
   }),
-
-  setIsImporting: (importing) => set({ isImporting: importing }),
-
-  setImportError: (error) => set({ importError: error, importSuccess: null }),
-
-  setImportSuccess: (message) => set({ importSuccess: message, importError: null }),
-
-  clearImportStatus: () => set({ importError: null, importSuccess: null }),
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode) => set({ commentMode: mode }),
@@ -568,6 +527,9 @@ export const useStore = create<AppState>((set) => ({
 }));
 
 // Helper to get current scene tree
-export const getCurrentSceneTree = (modelType: ModelType): SceneNode => {
+export const getCurrentSceneTree = (modelType: ModelType, importedTree?: SceneNode | null): SceneNode => {
+    if (modelType === 'imported' && importedTree) {
+        return importedTree;
+    }
     return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
 };
