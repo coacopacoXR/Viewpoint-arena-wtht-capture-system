@@ -282,6 +282,18 @@ const CommentCard: React.FC<{
 };
 
 // Main Comments Panel
+// Utility function to capture WebGL canvas
+const captureCanvas = (): string | null => {
+    const canvas = document.querySelector('canvas');
+    if (!canvas) return null;
+    try {
+        return canvas.toDataURL('image/png');
+    } catch (e) {
+        console.warn('Failed to capture canvas:', e);
+        return null;
+    }
+};
+
 const CommentsPanel: React.FC = () => {
     const {
         comments,
@@ -302,7 +314,9 @@ const CommentsPanel: React.FC = () => {
         drawingCanvas,
         commentsExpandedInScene,
         toggleCommentsExpandedInScene,
-        objectStates
+        objectStates,
+        capturedScreenshot,
+        setCapturedScreenshot
     } = useStore();
 
     const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all');
@@ -320,11 +334,17 @@ const CommentsPanel: React.FC = () => {
     };
 
     const handleNewDrawing = () => {
+        // Capture the current 3D view when entering drawing mode
+        const screenshot = captureCanvas();
+        setCapturedScreenshot(screenshot);
         setCommentMode('placing-drawing');
     };
 
     // Direct screen drawing - doesn't require clicking on model first
     const handleDirectScreenDrawing = () => {
+        // Capture the current 3D view before opening drawing canvas
+        const screenshot = captureCanvas();
+        setCapturedScreenshot(screenshot);
         setDirectDrawingMode(true);
         setShowDrawingCanvas(true);
     };
@@ -442,6 +462,7 @@ const CommentsPanel: React.FC = () => {
             {/* Drawing Canvas Overlay */}
             {showDrawingCanvas && (
                 <DrawingCanvas
+                    backgroundImage={capturedScreenshot}
                     onSave={(dataUrl) => {
                         if (directDrawingMode) {
                             handleDirectDrawingSave(dataUrl);
@@ -449,11 +470,14 @@ const CommentsPanel: React.FC = () => {
                             setDrawingCanvas(dataUrl);
                             setShowDrawingCanvas(false);
                         }
+                        // Clear the captured screenshot after saving
+                        setCapturedScreenshot(null);
                     }}
                     onCancel={() => {
                         setShowDrawingCanvas(false);
                         setDirectDrawingMode(false);
                         handleCancelPlacement();
+                        setCapturedScreenshot(null);
                     }}
                 />
             )}

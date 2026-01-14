@@ -140,6 +140,17 @@ const initObjectStates = (node: SceneNode, states: Record<string, ObjectState> =
     return states;
 };
 
+// Helper to count parts in scene tree
+const countParts = (node: SceneNode): number => {
+    let count = node.type === 'PART' || node.type === 'MESH' ? 1 : 0;
+    if (node.children) {
+        node.children.forEach(child => {
+            count += countParts(child);
+        });
+    }
+    return count;
+};
+
 
 interface AppState {
   viewMode: ViewMode;
@@ -188,6 +199,9 @@ interface AppState {
   // --- NEW: Model Type ---
   activeModelType: ModelType;
   isImporting: boolean;
+  importError: string | null;
+  importSuccess: string | null;
+  lastImportedFileName: string | null;
 
   // --- NEW: Comments System ---
   comments: SpatialComment[];
@@ -200,6 +214,7 @@ interface AppState {
 
   // --- NEW: Drawing State ---
   drawingCanvas: string | null; // Base64 of current drawing
+  capturedScreenshot: string | null; // Base64 of captured 3D view for drawing overlay
 
   // --- NEW: Panel Mode ---
   rightPanelMode: RightPanelMode;
@@ -246,8 +261,11 @@ interface AppState {
 
   // --- NEW: Model Import Actions ---
   setActiveModelType: (type: ModelType) => void;
-  importSTEPFile: (fileName: string) => void;
+  importSTEPFile: (fileName: string, fileSize?: number) => void;
   setIsImporting: (importing: boolean) => void;
+  setImportError: (error: string | null) => void;
+  setImportSuccess: (message: string | null) => void;
+  clearImportStatus: () => void;
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode: CommentMode) => void;
@@ -257,6 +275,7 @@ interface AppState {
   deleteComment: (id: string) => void;
   resolveComment: (id: string) => void;
   setDrawingCanvas: (data: string | null) => void;
+  setCapturedScreenshot: (data: string | null) => void;
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode: RightPanelMode) => void;
@@ -298,6 +317,9 @@ export const useStore = create<AppState>((set) => ({
   // --- NEW: Model Type ---
   activeModelType: 'synth',
   isImporting: false,
+  importError: null,
+  importSuccess: null,
+  lastImportedFileName: null,
 
   // --- NEW: Comments System ---
   comments: [],
@@ -310,6 +332,7 @@ export const useStore = create<AppState>((set) => ({
 
   // --- NEW: Drawing State ---
   drawingCanvas: null,
+  capturedScreenshot: null,
 
   // --- NEW: Panel Mode ---
   rightPanelMode: 'meeting',
@@ -407,17 +430,59 @@ export const useStore = create<AppState>((set) => ({
       };
   }),
 
-  importSTEPFile: (fileName) => set((state) => {
-      // Simulate STEP import - in real implementation would parse actual STEP file
-      // For demo, we detect if it's a bicycle file and switch to bicycle model
-      const isBicycle = fileName.toLowerCase().includes('bicycle') ||
-                        fileName.toLowerCase().includes('bike') ||
-                        fileName.toLowerCase().includes('cycle');
+  importSTEPFile: (fileName, fileSize) => set((state) => {
+      // STEP File Import - Demo implementation
+      // In a real implementation, this would parse actual STEP/IGES files
+      // using libraries like opencascade.js or similar
 
-      // Toggle between models - if currently bicycle, switch to synth and vice versa
-      // This allows re-importing to cycle through models for demo
-      const newModelType = state.activeModelType === 'bicycle' ? 'synth' : 'bicycle';
+      // File validation
+      const extension = fileName.split('.').pop()?.toLowerCase();
+      if (!extension || !['step', 'stp'].includes(extension)) {
+          return {
+              isImporting: false,
+              importError: `Invalid file format: .${extension || 'unknown'}. Please use .step or .stp files.`,
+              importSuccess: null
+          };
+      }
+
+      // Size validation (demo - simulated)
+      if (fileSize && fileSize > 100 * 1024 * 1024) { // 100MB limit
+          return {
+              isImporting: false,
+              importError: 'File too large. Maximum size is 100MB.',
+              importSuccess: null
+          };
+      }
+
+      // Determine which model to load based on filename keywords
+      const lowerName = fileName.toLowerCase();
+      const isBicycle = lowerName.includes('bicycle') ||
+                        lowerName.includes('bike') ||
+                        lowerName.includes('cycle') ||
+                        lowerName.includes('frame');
+
+      const isSynth = lowerName.includes('synth') ||
+                      lowerName.includes('keyboard') ||
+                      lowerName.includes('audio') ||
+                      lowerName.includes('music');
+
+      // Smart model selection:
+      // 1. If filename contains 'bicycle' keywords -> bicycle model
+      // 2. If filename contains 'synth' keywords -> synth model
+      // 3. Otherwise, toggle to the other model (for demo purposes)
+      let newModelType: ModelType;
+      if (isBicycle) {
+          newModelType = 'bicycle';
+      } else if (isSynth) {
+          newModelType = 'synth';
+      } else {
+          // Toggle for demo
+          newModelType = state.activeModelType === 'bicycle' ? 'synth' : 'bicycle';
+      }
+
       const tree = newModelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+      const modelName = newModelType === 'bicycle' ? 'Urban Commuter Bicycle' : 'Synth Assembly';
+      const partCount = countParts(tree);
 
       // Clear everything for fresh start with new model
       return {
@@ -429,6 +494,9 @@ export const useStore = create<AppState>((set) => ({
           insightCards: [],
           heatmapValues: {},
           isImporting: false,
+          importError: null,
+          importSuccess: `Successfully imported "${fileName}" as ${modelName} (${partCount} parts)`,
+          lastImportedFileName: fileName,
           // Reset any active selections
           activeAgentId: null,
           leaderId: null,
@@ -440,11 +508,18 @@ export const useStore = create<AppState>((set) => ({
           pendingCommentPosition: null,
           pendingCommentNodeId: null,
           pendingCommentNodeName: null,
-          drawingCanvas: null
+          drawingCanvas: null,
+          capturedScreenshot: null
       };
   }),
 
   setIsImporting: (importing) => set({ isImporting: importing }),
+
+  setImportError: (error) => set({ importError: error, importSuccess: null }),
+
+  setImportSuccess: (message) => set({ importSuccess: message, importError: null }),
+
+  clearImportStatus: () => set({ importError: null, importSuccess: null }),
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode) => set({ commentMode: mode }),
@@ -472,6 +547,7 @@ export const useStore = create<AppState>((set) => ({
   })),
 
   setDrawingCanvas: (data) => set({ drawingCanvas: data }),
+  setCapturedScreenshot: (data) => set({ capturedScreenshot: data }),
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode) => set({ rightPanelMode: mode }),
