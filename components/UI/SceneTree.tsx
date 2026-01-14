@@ -1,7 +1,7 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useStore, getCurrentSceneTree } from '../../store';
 import { SceneNode } from '../../types';
-import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth }) => {
@@ -97,23 +97,61 @@ const SceneTree: React.FC = () => {
     const importSTEPFile = useStore(state => state.importSTEPFile);
     const isImporting = useStore(state => state.isImporting);
     const setIsImporting = useStore(state => state.setIsImporting);
+    const importError = useStore(state => state.importError);
+    const importSuccess = useStore(state => state.importSuccess);
+    const lastImportedFileName = useStore(state => state.lastImportedFileName);
+    const clearImportStatus = useStore(state => state.clearImportStatus);
+    const setImportError = useStore(state => state.setImportError);
 
     const currentTree = getCurrentSceneTree(activeModelType);
 
+    // Auto-clear success message after 5 seconds
+    useEffect(() => {
+        if (importSuccess) {
+            const timer = setTimeout(() => {
+                clearImportStatus();
+            }, 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [importSuccess, clearImportStatus]);
+
     const handleImportClick = () => {
         fileInputRef.current?.click();
+    };
+
+    const validateFile = (file: File): string | null => {
+        const extension = file.name.split('.').pop()?.toLowerCase();
+        if (!extension || !['step', 'stp'].includes(extension)) {
+            return `Invalid file type: .${extension || 'unknown'}. Please select a .step or .stp file.`;
+        }
+        if (file.size > 100 * 1024 * 1024) {
+            return 'File too large. Maximum size is 100MB.';
+        }
+        return null;
     };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        setIsImporting(true);
+        // Validate file
+        const error = validateFile(file);
+        if (error) {
+            setImportError(error);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+            return;
+        }
 
-        // Simulate import delay for demo
+        setIsImporting(true);
+        clearImportStatus();
+
+        // Simulate import delay for demo (would be actual parsing in production)
+        const delay = Math.min(1500, Math.max(500, file.size / 10000)); // Scale delay with file size
         setTimeout(() => {
-            importSTEPFile(file.name);
-        }, 1500);
+            importSTEPFile(file.name, file.size);
+        }, delay);
 
         // Clear input for re-selection
         if (fileInputRef.current) {
@@ -172,8 +210,35 @@ const SceneTree: React.FC = () => {
                 {/* Current Model Info */}
                 <div className="mt-2 text-[9px] text-gray-400 flex items-center gap-1">
                     <FileBox size={10} />
-                    {activeModelType === 'bicycle' ? 'urban_commuter_bicycle.step' : 'synth_assembly.step'}
+                    {lastImportedFileName || (activeModelType === 'bicycle' ? 'urban_commuter_bicycle.step' : 'synth_assembly.step')}
                 </div>
+
+                {/* Import Status Messages */}
+                {importSuccess && (
+                    <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-[10px] text-green-700 flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
+                        <CheckCircle2 size={14} className="text-green-500 shrink-0 mt-0.5" />
+                        <div className="flex-1">{importSuccess}</div>
+                        <button
+                            onClick={clearImportStatus}
+                            className="text-green-400 hover:text-green-600"
+                        >
+                            <X size={12} />
+                        </button>
+                    </div>
+                )}
+
+                {importError && (
+                    <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-[10px] text-red-700 flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
+                        <AlertCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
+                        <div className="flex-1">{importError}</div>
+                        <button
+                            onClick={clearImportStatus}
+                            className="text-red-400 hover:text-red-600"
+                        >
+                            <X size={12} />
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Tree View */}
