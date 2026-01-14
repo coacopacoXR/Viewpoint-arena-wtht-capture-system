@@ -1,7 +1,23 @@
-import React, { useRef } from 'react';
+import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { useStore, SCENE_TREE } from '../../store';
+import { useStore, SYNTH_SCENE_TREE, BICYCLE_SCENE_TREE } from '../../store';
 import { InsightType, InsightDetails, SceneNode, DecisionRole, ChatMessage } from '../../types';
+
+// Helper to collect all node names from scene tree
+const collectNodeNames = (node: SceneNode, names: string[] = []): string[] => {
+    names.push(node.name);
+    if (node.children) {
+        node.children.forEach(child => collectNodeNames(child, names));
+    }
+    return names;
+};
+
+// Helper to get random component names from tree
+const getRandomComponents = (tree: SceneNode, count: number = 3): string[] => {
+    const allNames = collectNodeNames(tree);
+    const shuffled = [...allNames].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, count);
+};
 
 // ============================================================================
 // ADVANCED DIALOGUE GENERATION ENGINE
@@ -833,13 +849,33 @@ const DialogueEngine: React.FC = () => {
     const addInsightCard = useStore(state => state.addInsightCard);
     const requirements = useStore(state => state.requirements);
     const chatHistory = useStore(state => state.chatHistory);
+    const activeModelType = useStore(state => state.activeModelType);
+    const objectStates = useStore(state => state.objectStates);
 
     const lastSpeakTime = useRef<Record<string, number>>({});
     const messageBuffer = useRef<string[]>([]);
     const contextManager = useRef(new ConversationContextManager());
+    const lastComponentIndex = useRef(0);
 
     // Decision state per component
     const poiDecisionState = useRef<Record<string, "NONE" | "INTERMEDIATE" | "FINAL">>({});
+
+    // Get current scene tree and available component names
+    const currentTree = activeModelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+    const allComponentNames = useMemo(() => collectNodeNames(currentTree), [currentTree]);
+
+    // Get next component in round-robin fashion for structured discussion
+    const getNextComponent = (): { name: string; id: string } => {
+        const allNodes: { name: string; id: string }[] = [];
+        const collectNodes = (node: SceneNode) => {
+            allNodes.push({ name: node.name, id: node.id });
+            if (node.children) node.children.forEach(collectNodes);
+        };
+        collectNodes(currentTree);
+
+        lastComponentIndex.current = (lastComponentIndex.current + 1) % allNodes.length;
+        return allNodes[lastComponentIndex.current];
+    };
 
     // Build enhanced dialogue with personality and reasoning chains
     const buildEnhancedDialogue = (
@@ -894,18 +930,35 @@ const DialogueEngine: React.FC = () => {
             const last = lastSpeakTime.current[agent.id] || 0;
             const isInspecting = agent.behavior === 'INSPECTING' && agent.currentPoiId;
 
-            // Variable timing based on conversation depth
-            const baseInterval = 3500;
-            const randomInterval = Math.random() * 5000;
+            // FASTER timing for 10-min demo - generate more insights quickly
+            const baseInterval = 1800; // Reduced from 3500ms
+            const randomInterval = Math.random() * 2500; // Reduced from 5000ms
 
             if (now - last > (baseInterval + randomInterval)) {
-                if (Math.random() > 0.45) {
-                    if (isInspecting) {
+                // Higher probability - 70% chance to speak (was 55%)
+                if (Math.random() > 0.30) {
+                    // Check if user has selected a component in the tree
+                    const userSelectedId = Object.keys(objectStates).find(key => objectStates[key].selected);
+
+                    if (userSelectedId) {
+                        // User selected something - focus on that
+                        const name = findNodeName(userSelectedId, currentTree);
+                        if (name) {
+                            generateDialogue(agent.id, name, userSelectedId);
+                            lastSpeakTime.current[agent.id] = now;
+                        }
+                    } else if (isInspecting && agent.currentPoiId) {
+                        // Agent inspecting a POI
                         const poi = pois.find(p => p.id === agent.currentPoiId);
                         if (poi) {
                             generateDialogue(agent.id, poi.label, poi.id);
                             lastSpeakTime.current[agent.id] = now;
                         }
+                    } else {
+                        // No user selection or POI - pick from model tree components
+                        const component = getNextComponent();
+                        generateDialogue(agent.id, component.name, component.id);
+                        lastSpeakTime.current[agent.id] = now;
                     }
                 }
             }
@@ -914,17 +967,12 @@ const DialogueEngine: React.FC = () => {
 
     const generateDialogue = (agentId: string, poiLabel: string, poiId: string) => {
         const state = useStore.getState();
-        const objectStates = state.objectStates;
-        const activeModelType = state.activeModelType;
-        const userSelectedId = Object.keys(objectStates).find(key => objectStates[key].selected);
+        const currentObjectStates = state.objectStates;
+        const userSelectedId = Object.keys(currentObjectStates).find(key => currentObjectStates[key].selected);
 
         let targetLabel = poiLabel;
         let targetId = poiId;
         let isUserDriven = false;
-
-        // Import the correct scene tree based on model type
-        const { BICYCLE_SCENE_TREE, SYNTH_SCENE_TREE } = require('../../store');
-        const currentTree = activeModelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
 
         if (userSelectedId) {
             const name = findNodeName(userSelectedId, currentTree);
@@ -945,7 +993,8 @@ const DialogueEngine: React.FC = () => {
 
         // --- INTELLIGENT PHASE SELECTION ---
         // Use bicycle-specific library when bicycle model is active
-        const basePhraseLibrary = activeModelType === 'bicycle' ? BICYCLE_PHRASE_LIBRARY : PHRASE_LIBRARY;
+        const currentModelType = state.activeModelType;
+        const basePhraseLibrary = currentModelType === 'bicycle' ? BICYCLE_PHRASE_LIBRARY : PHRASE_LIBRARY;
         let candidates = basePhraseLibrary;
         const step = context.step;
 
@@ -998,9 +1047,10 @@ const DialogueEngine: React.FC = () => {
         messageBuffer.current.push(messageId);
         if (messageBuffer.current.length > 5) messageBuffer.current.shift();
 
-        // Insight capture logic
+        // Insight capture logic - INCREASED CAPTURE RATE for demo
         if (template.type === 'action' || template.type === 'risk' || template.type === 'rationale' || template.type === 'synthesis' || isUserDriven) {
-            const shouldCapture = isUserDriven || Math.random() > 0.5;
+            // Higher capture rate: 80% for user-driven, 70% for AI-driven (was 50%)
+            const shouldCapture = isUserDriven || Math.random() > 0.30;
 
             if (shouldCapture) {
                 setTimeout(() => {

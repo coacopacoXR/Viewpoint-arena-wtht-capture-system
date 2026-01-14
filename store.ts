@@ -204,6 +204,9 @@ interface AppState {
   // --- NEW: Panel Mode ---
   rightPanelMode: RightPanelMode;
 
+  // --- NEW: Comments Display State ---
+  commentsExpandedInScene: boolean; // Toggle all comments expanded in 3D
+
   // Actions
   setViewMode: (mode: ViewMode) => void;
   setRepresentationMode: (mode: RepresentationMode) => void;
@@ -257,6 +260,11 @@ interface AppState {
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode: RightPanelMode) => void;
+
+  // --- NEW: Comments Display Actions ---
+  toggleCommentsExpandedInScene: () => void;
+  setCommentScreenOffset: (id: string, offset: { x: number; y: number }) => void;
+  toggleCommentExpanded: (id: string) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -305,6 +313,9 @@ export const useStore = create<AppState>((set) => ({
 
   // --- NEW: Panel Mode ---
   rightPanelMode: 'meeting',
+
+  // --- NEW: Comments Display State ---
+  commentsExpandedInScene: false,
 
   setViewMode: (mode) => set({ viewMode: mode }),
   setRepresentationMode: (mode) => set({ representationMode: mode }),
@@ -403,18 +414,33 @@ export const useStore = create<AppState>((set) => ({
                         fileName.toLowerCase().includes('bike') ||
                         fileName.toLowerCase().includes('cycle');
 
-      const tree = isBicycle ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
-      const modelType = isBicycle ? 'bicycle' : 'synth';
+      // Toggle between models - if currently bicycle, switch to synth and vice versa
+      // This allows re-importing to cycle through models for demo
+      const newModelType = state.activeModelType === 'bicycle' ? 'synth' : 'bicycle';
+      const tree = newModelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
 
+      // Clear everything for fresh start with new model
       return {
-          activeModelType: modelType,
+          activeModelType: newModelType,
           objectStates: initObjectStates(tree),
           pois: [],
           comments: [],
           chatHistory: [],
           insightCards: [],
           heatmapValues: {},
-          isImporting: false
+          isImporting: false,
+          // Reset any active selections
+          activeAgentId: null,
+          leaderId: null,
+          splitScreenTargetId: null,
+          isMeetingEnded: false,
+          time: 0,
+          // Reset comment mode
+          commentMode: 'none',
+          pendingCommentPosition: null,
+          pendingCommentNodeId: null,
+          pendingCommentNodeName: null,
+          drawingCanvas: null
       };
   }),
 
@@ -448,7 +474,20 @@ export const useStore = create<AppState>((set) => ({
   setDrawingCanvas: (data) => set({ drawingCanvas: data }),
 
   // --- NEW: Panel Mode Action ---
-  setRightPanelMode: (mode) => set({ rightPanelMode: mode })
+  setRightPanelMode: (mode) => set({ rightPanelMode: mode }),
+
+  // --- NEW: Comments Display Actions ---
+  toggleCommentsExpandedInScene: () => set((state) => ({
+      commentsExpandedInScene: !state.commentsExpandedInScene
+  })),
+
+  setCommentScreenOffset: (id, offset) => set((state) => ({
+      comments: state.comments.map(c => c.id === id ? { ...c, screenOffset: offset } : c)
+  })),
+
+  toggleCommentExpanded: (id) => set((state) => ({
+      comments: state.comments.map(c => c.id === id ? { ...c, expanded: !c.expanded } : c)
+  }))
 
 }));
 
