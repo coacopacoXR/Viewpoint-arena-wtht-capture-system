@@ -264,6 +264,9 @@ export interface SpatialComment {
     assignees: string[]; // @mentioned users
     resolved: boolean;
     linkedToMeeting: boolean; // If captured in meeting transcript
+    // NEW: UI state for 3D display
+    expanded?: boolean; // Whether comment text is expanded in 3D scene
+    screenOffset?: { x: number; y: number }; // Offset for drag positioning
 }
 
 export type CommentMode = 'none' | 'placing-comment' | 'placing-drawing' | 'positioning-drawing' | 'drawing';
