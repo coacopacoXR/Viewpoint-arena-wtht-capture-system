@@ -459,10 +459,11 @@ const CommentsPanel: React.FC = () => {
 
     return (
         <div className="h-full flex flex-col">
-            {/* Drawing Canvas Overlay */}
+            {/* Drawing Canvas Overlay - Full Screen */}
             {showDrawingCanvas && (
                 <DrawingCanvas
                     backgroundImage={capturedScreenshot}
+                    attachedToName={pendingCommentNodeName || (directDrawingMode ? 'Screen Annotation' : undefined)}
                     onSave={(dataUrl) => {
                         if (directDrawingMode) {
                             handleDirectDrawingSave(dataUrl);
