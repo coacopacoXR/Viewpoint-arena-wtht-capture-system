@@ -3,7 +3,7 @@ import { useStore } from '../../store';
 import {
     MessageSquare, Pencil, Plus, X, Check, Send, AtSign,
     CheckCircle2, Trash2, MoreVertical, Link2, ChevronDown,
-    GripVertical
+    GripVertical, Maximize2, Minimize2, Eye, EyeOff
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SpatialComment } from '../../types';
@@ -299,11 +299,15 @@ const CommentsPanel: React.FC = () => {
         currentUserColor,
         addChatMessage,
         setDrawingCanvas,
-        drawingCanvas
+        drawingCanvas,
+        commentsExpandedInScene,
+        toggleCommentsExpandedInScene,
+        objectStates
     } = useStore();
 
     const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all');
     const [showDrawingCanvas, setShowDrawingCanvas] = useState(false);
+    const [directDrawingMode, setDirectDrawingMode] = useState(false); // Drawing directly on screen
 
     const filteredComments = comments.filter(c => {
         if (filter === 'open') return !c.resolved;
@@ -317,6 +321,38 @@ const CommentsPanel: React.FC = () => {
 
     const handleNewDrawing = () => {
         setCommentMode('placing-drawing');
+    };
+
+    // Direct screen drawing - doesn't require clicking on model first
+    const handleDirectScreenDrawing = () => {
+        setDirectDrawingMode(true);
+        setShowDrawingCanvas(true);
+    };
+
+    const handleDirectDrawingSave = (dataUrl: string) => {
+        // Get currently selected component, or use a default
+        const selectedNodeId = Object.keys(objectStates).find(key => objectStates[key].selected);
+
+        // Create comment with drawing attached to view (or selected component)
+        const newComment: SpatialComment = {
+            id: Math.random().toString(36).substr(2, 9),
+            type: 'drawing',
+            content: 'Screen annotation',
+            drawingData: dataUrl,
+            author: currentUser,
+            authorColor: currentUserColor,
+            timestamp: Date.now(),
+            position: { x: 0, y: 0.5, z: 0 }, // Default position
+            attachedToNodeId: selectedNodeId || 'view',
+            attachedToNodeName: selectedNodeId ? (objectStates[selectedNodeId] as any)?.name || 'Current View' : 'Current View',
+            assignees: [],
+            resolved: false,
+            linkedToMeeting: false
+        };
+
+        addComment(newComment);
+        setDirectDrawingMode(false);
+        setShowDrawingCanvas(false);
     };
 
     const handleCancelPlacement = () => {
@@ -407,55 +443,98 @@ const CommentsPanel: React.FC = () => {
             {showDrawingCanvas && (
                 <DrawingCanvas
                     onSave={(dataUrl) => {
-                        setDrawingCanvas(dataUrl);
-                        setShowDrawingCanvas(false);
+                        if (directDrawingMode) {
+                            handleDirectDrawingSave(dataUrl);
+                        } else {
+                            setDrawingCanvas(dataUrl);
+                            setShowDrawingCanvas(false);
+                        }
                     }}
                     onCancel={() => {
                         setShowDrawingCanvas(false);
+                        setDirectDrawingMode(false);
                         handleCancelPlacement();
                     }}
                 />
             )}
 
             {/* Header */}
-            <div className="p-3 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <MessageSquare size={14} className="text-gray-500" />
-                    <span className="text-xs font-bold text-gray-700">Comments</span>
-                    <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full">
-                        {comments.filter(c => !c.resolved).length}
-                    </span>
+            <div className="p-3 border-b border-gray-100 bg-gray-50/50">
+                <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                        <MessageSquare size={14} className="text-gray-500" />
+                        <span className="text-xs font-bold text-gray-700">Comments</span>
+                        <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full">
+                            {comments.filter(c => !c.resolved).length}
+                        </span>
+                    </div>
+
+                    {/* Filter dropdown */}
+                    <select
+                        value={filter}
+                        onChange={(e) => setFilter(e.target.value as any)}
+                        className="text-[10px] border border-gray-200 rounded px-2 py-1 bg-white"
+                    >
+                        <option value="all">All</option>
+                        <option value="open">Open</option>
+                        <option value="resolved">Resolved</option>
+                    </select>
                 </div>
 
-                {/* Filter dropdown */}
-                <select
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value as any)}
-                    className="text-[10px] border border-gray-200 rounded px-2 py-1 bg-white"
-                >
-                    <option value="all">All</option>
-                    <option value="open">Open</option>
-                    <option value="resolved">Resolved</option>
-                </select>
+                {/* Expand/Collapse All Toggle */}
+                {comments.length > 0 && (
+                    <button
+                        onClick={toggleCommentsExpandedInScene}
+                        className={clsx(
+                            "w-full px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all border",
+                            commentsExpandedInScene
+                                ? "bg-blue-500 text-white border-blue-500"
+                                : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                        )}
+                    >
+                        {commentsExpandedInScene ? (
+                            <>
+                                <Minimize2 size={12} />
+                                Collapse All in Scene
+                            </>
+                        ) : (
+                            <>
+                                <Maximize2 size={12} />
+                                Expand All in Scene
+                            </>
+                        )}
+                    </button>
+                )}
             </div>
 
             {/* Action buttons */}
-            <div className="p-2 border-b border-gray-100 flex gap-2">
-                {commentMode === 'none' ? (
+            <div className="p-2 border-b border-gray-100 flex flex-col gap-2">
+                {commentMode === 'none' && !directDrawingMode ? (
                     <>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={handleNewComment}
+                                className="flex-1 px-3 py-2 bg-blue-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 hover:bg-blue-600"
+                            >
+                                <Plus size={12} />
+                                New Comment
+                            </button>
+                            <button
+                                onClick={handleNewDrawing}
+                                className="flex-1 px-3 py-2 bg-purple-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 hover:bg-purple-600"
+                            >
+                                <Pencil size={12} />
+                                Attach Drawing
+                            </button>
+                        </div>
+                        {/* Direct Screen Drawing Button */}
                         <button
-                            onClick={handleNewComment}
-                            className="flex-1 px-3 py-2 bg-blue-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 hover:bg-blue-600"
-                        >
-                            <Plus size={12} />
-                            New Comment
-                        </button>
-                        <button
-                            onClick={handleNewDrawing}
-                            className="flex-1 px-3 py-2 bg-purple-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 hover:bg-purple-600"
+                            onClick={handleDirectScreenDrawing}
+                            className="w-full px-3 py-2 bg-gradient-to-r from-orange-500 to-pink-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-2 hover:from-orange-600 hover:to-pink-600 shadow-sm"
                         >
                             <Pencil size={12} />
-                            New Drawing
+                            Draw on Screen
+                            <span className="text-[8px] bg-white/20 px-1.5 py-0.5 rounded">New</span>
                         </button>
                     </>
                 ) : (
@@ -463,7 +542,7 @@ const CommentsPanel: React.FC = () => {
                         <div className="text-[10px] text-blue-600 font-bold mb-1">
                             {commentMode === 'placing-comment' ? 'Click on the 3D model to place comment' :
                              commentMode === 'placing-drawing' ? 'Click on the 3D model to attach drawing' :
-                             'Position your view, then draw'}
+                             'Drawing mode active - draw on the screen'}
                         </div>
                         <button
                             onClick={handleCancelPlacement}
