@@ -140,6 +140,17 @@ const initObjectStates = (node: SceneNode, states: Record<string, ObjectState> =
     return states;
 };
 
+// Helper to count parts in scene tree
+const countParts = (node: SceneNode): number => {
+    let count = node.type === 'PART' || node.type === 'MESH' ? 1 : 0;
+    if (node.children) {
+        node.children.forEach(child => {
+            count += countParts(child);
+        });
+    }
+    return count;
+};
+
 
 interface AppState {
   viewMode: ViewMode;
@@ -203,9 +214,13 @@ interface AppState {
 
   // --- NEW: Drawing State ---
   drawingCanvas: string | null; // Base64 of current drawing
+  capturedScreenshot: string | null; // Base64 of captured 3D view for drawing overlay
 
   // --- NEW: Panel Mode ---
   rightPanelMode: RightPanelMode;
+
+  // --- NEW: Comments Display State ---
+  commentsExpandedInScene: boolean; // Toggle all comments expanded in 3D
 
   // Actions
   setViewMode: (mode: ViewMode) => void;
@@ -246,7 +261,7 @@ interface AppState {
 
   // --- NEW: Model Import Actions ---
   setActiveModelType: (type: ModelType) => void;
-  importSTEPFile: (fileName: string) => void;
+  importSTEPFile: (fileName: string, fileSize?: number) => void;
   setIsImporting: (importing: boolean) => void;
   setImportedModel: (meshes: Group, sceneTree: SceneNode, fileName: string) => void;
 
@@ -258,9 +273,15 @@ interface AppState {
   deleteComment: (id: string) => void;
   resolveComment: (id: string) => void;
   setDrawingCanvas: (data: string | null) => void;
+  setCapturedScreenshot: (data: string | null) => void;
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode: RightPanelMode) => void;
+
+  // --- NEW: Comments Display Actions ---
+  toggleCommentsExpandedInScene: () => void;
+  setCommentScreenOffset: (id: string, offset: { x: number; y: number }) => void;
+  toggleCommentExpanded: (id: string) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -309,9 +330,13 @@ export const useStore = create<AppState>((set) => ({
 
   // --- NEW: Drawing State ---
   drawingCanvas: null,
+  capturedScreenshot: null,
 
   // --- NEW: Panel Mode ---
   rightPanelMode: 'meeting',
+
+  // --- NEW: Comments Display State ---
+  commentsExpandedInScene: false,
 
   setViewMode: (mode) => set({ viewMode: mode }),
   setRepresentationMode: (mode) => set({ representationMode: mode }),
@@ -435,7 +460,23 @@ export const useStore = create<AppState>((set) => ({
           chatHistory: [],
           insightCards: [],
           heatmapValues: {},
-          isImporting: false
+          isImporting: false,
+          importError: null,
+          importSuccess: `Successfully imported "${fileName}" as ${modelName} (${partCount} parts)`,
+          lastImportedFileName: fileName,
+          // Reset any active selections
+          activeAgentId: null,
+          leaderId: null,
+          splitScreenTargetId: null,
+          isMeetingEnded: false,
+          time: 0,
+          // Reset comment mode
+          commentMode: 'none',
+          pendingCommentPosition: null,
+          pendingCommentNodeId: null,
+          pendingCommentNodeName: null,
+          drawingCanvas: null,
+          capturedScreenshot: null
       };
   }),
 
@@ -465,9 +506,23 @@ export const useStore = create<AppState>((set) => ({
   })),
 
   setDrawingCanvas: (data) => set({ drawingCanvas: data }),
+  setCapturedScreenshot: (data) => set({ capturedScreenshot: data }),
 
   // --- NEW: Panel Mode Action ---
-  setRightPanelMode: (mode) => set({ rightPanelMode: mode })
+  setRightPanelMode: (mode) => set({ rightPanelMode: mode }),
+
+  // --- NEW: Comments Display Actions ---
+  toggleCommentsExpandedInScene: () => set((state) => ({
+      commentsExpandedInScene: !state.commentsExpandedInScene
+  })),
+
+  setCommentScreenOffset: (id, offset) => set((state) => ({
+      comments: state.comments.map(c => c.id === id ? { ...c, screenOffset: offset } : c)
+  })),
+
+  toggleCommentExpanded: (id) => set((state) => ({
+      comments: state.comments.map(c => c.id === id ? { ...c, expanded: !c.expanded } : c)
+  }))
 
 }));
 
