@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode } from './types';
-import { Vector3 } from 'three';
+import { Vector3, Group } from 'three';
 
 const INITIAL_AGENTS: AgentState[] = [
   { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: '#ff4400', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
@@ -140,6 +140,17 @@ const initObjectStates = (node: SceneNode, states: Record<string, ObjectState> =
     return states;
 };
 
+// Helper to count parts in scene tree
+const countParts = (node: SceneNode): number => {
+    let count = node.type === 'PART' || node.type === 'MESH' ? 1 : 0;
+    if (node.children) {
+        node.children.forEach(child => {
+            count += countParts(child);
+        });
+    }
+    return count;
+};
+
 
 interface AppState {
   viewMode: ViewMode;
@@ -188,6 +199,9 @@ interface AppState {
   // --- NEW: Model Type ---
   activeModelType: ModelType;
   isImporting: boolean;
+  importedMeshes: Group | null;
+  importedSceneTree: SceneNode | null;
+  importedFileName: string | null;
 
   // --- NEW: Comments System ---
   comments: SpatialComment[];
@@ -200,6 +214,7 @@ interface AppState {
 
   // --- NEW: Drawing State ---
   drawingCanvas: string | null; // Base64 of current drawing
+  capturedScreenshot: string | null; // Base64 of captured 3D view for drawing overlay
 
   // --- NEW: Panel Mode ---
   rightPanelMode: RightPanelMode;
@@ -246,8 +261,9 @@ interface AppState {
 
   // --- NEW: Model Import Actions ---
   setActiveModelType: (type: ModelType) => void;
-  importSTEPFile: (fileName: string) => void;
+  importSTEPFile: (fileName: string, fileSize?: number) => void;
   setIsImporting: (importing: boolean) => void;
+  setImportedModel: (meshes: Group, sceneTree: SceneNode, fileName: string) => void;
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode: CommentMode) => void;
@@ -257,6 +273,7 @@ interface AppState {
   deleteComment: (id: string) => void;
   resolveComment: (id: string) => void;
   setDrawingCanvas: (data: string | null) => void;
+  setCapturedScreenshot: (data: string | null) => void;
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode: RightPanelMode) => void;
@@ -298,6 +315,9 @@ export const useStore = create<AppState>((set) => ({
   // --- NEW: Model Type ---
   activeModelType: 'synth',
   isImporting: false,
+  importedMeshes: null,
+  importedSceneTree: null,
+  importedFileName: null,
 
   // --- NEW: Comments System ---
   comments: [],
@@ -310,6 +330,7 @@ export const useStore = create<AppState>((set) => ({
 
   // --- NEW: Drawing State ---
   drawingCanvas: null,
+  capturedScreenshot: null,
 
   // --- NEW: Panel Mode ---
   rightPanelMode: 'meeting',
@@ -407,28 +428,42 @@ export const useStore = create<AppState>((set) => ({
       };
   }),
 
+  // Legacy demo import - kept for fallback
   importSTEPFile: (fileName) => set((state) => {
-      // Simulate STEP import - in real implementation would parse actual STEP file
-      // For demo, we detect if it's a bicycle file and switch to bicycle model
-      const isBicycle = fileName.toLowerCase().includes('bicycle') ||
-                        fileName.toLowerCase().includes('bike') ||
-                        fileName.toLowerCase().includes('cycle');
-
-      // Toggle between models - if currently bicycle, switch to synth and vice versa
-      // This allows re-importing to cycle through models for demo
-      const newModelType = state.activeModelType === 'bicycle' ? 'synth' : 'bicycle';
-      const tree = newModelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
-
-      // Clear everything for fresh start with new model
       return {
-          activeModelType: newModelType,
-          objectStates: initObjectStates(tree),
+          activeModelType: 'bicycle' as ModelType,
+          objectStates: initObjectStates(BICYCLE_SCENE_TREE),
           pois: [],
           comments: [],
           chatHistory: [],
           insightCards: [],
           heatmapValues: {},
           isImporting: false,
+          importedMeshes: null,
+          importedSceneTree: null,
+          importedFileName: null
+      };
+  }),
+
+  setIsImporting: (importing) => set({ isImporting: importing }),
+
+  // Real STEP import - sets the parsed meshes and scene tree
+  setImportedModel: (meshes, sceneTree, fileName) => set((state) => {
+      return {
+          activeModelType: 'imported' as ModelType,
+          importedMeshes: meshes,
+          importedSceneTree: sceneTree,
+          importedFileName: fileName,
+          objectStates: initObjectStates(sceneTree),
+          pois: [],
+          comments: [],
+          chatHistory: [],
+          insightCards: [],
+          heatmapValues: {},
+          isImporting: false,
+          importError: null,
+          importSuccess: `Successfully imported "${fileName}" as ${modelName} (${partCount} parts)`,
+          lastImportedFileName: fileName,
           // Reset any active selections
           activeAgentId: null,
           leaderId: null,
@@ -440,11 +475,10 @@ export const useStore = create<AppState>((set) => ({
           pendingCommentPosition: null,
           pendingCommentNodeId: null,
           pendingCommentNodeName: null,
-          drawingCanvas: null
+          drawingCanvas: null,
+          capturedScreenshot: null
       };
   }),
-
-  setIsImporting: (importing) => set({ isImporting: importing }),
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode) => set({ commentMode: mode }),
@@ -472,6 +506,7 @@ export const useStore = create<AppState>((set) => ({
   })),
 
   setDrawingCanvas: (data) => set({ drawingCanvas: data }),
+  setCapturedScreenshot: (data) => set({ capturedScreenshot: data }),
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode) => set({ rightPanelMode: mode }),
@@ -492,6 +527,9 @@ export const useStore = create<AppState>((set) => ({
 }));
 
 // Helper to get current scene tree
-export const getCurrentSceneTree = (modelType: ModelType): SceneNode => {
+export const getCurrentSceneTree = (modelType: ModelType, importedTree?: SceneNode | null): SceneNode => {
+    if (modelType === 'imported' && importedTree) {
+        return importedTree;
+    }
     return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
 };

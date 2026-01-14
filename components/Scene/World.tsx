@@ -1,12 +1,68 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Grid, Environment, ContactShadows } from '@react-three/drei';
+import * as THREE from 'three';
 import Product from './Product';
 import Bicycle from './Bicycle';
 import Agent from './Agent';
 import HeatmapOverlay from './HeatmapOverlay';
 import { useStore } from '../../store';
 import { ViewMode } from '../../types';
+
+// Component to render imported STEP geometry
+const ImportedSTEPModel: React.FC = () => {
+    const importedMeshes = useStore(state => state.importedMeshes);
+    const objectStates = useStore(state => state.objectStates);
+    const groupRef = useRef<THREE.Group>(null);
+    const registerPOI = useStore(state => state.registerPOI);
+
+    // Register POIs for imported parts
+    useEffect(() => {
+        if (!importedMeshes) return;
+
+        importedMeshes.children.forEach((child, index) => {
+            if (child instanceof THREE.Mesh) {
+                const box = new THREE.Box3().setFromObject(child);
+                const center = box.getCenter(new THREE.Vector3());
+                const id = child.userData.modelId || `imported_${index}`;
+                registerPOI({
+                    id: id,
+                    position: center,
+                    label: child.name || `Part ${index + 1}`,
+                    type: 'GENERAL'
+                });
+            }
+        });
+    }, [importedMeshes, registerPOI]);
+
+    // Update material based on selection state
+    useEffect(() => {
+        if (!importedMeshes) return;
+
+        importedMeshes.children.forEach((child, index) => {
+            if (child instanceof THREE.Mesh) {
+                const id = child.userData.modelId || `imported_${index}`;
+                const state = objectStates[id];
+                const mat = child.material as THREE.MeshStandardMaterial;
+
+                if (state) {
+                    child.visible = state.visible;
+                    if (state.selected) {
+                        mat.emissive = new THREE.Color(0x0044aa);
+                        mat.emissiveIntensity = 0.5;
+                    } else {
+                        mat.emissive = new THREE.Color(0x000000);
+                        mat.emissiveIntensity = 0;
+                    }
+                }
+            }
+        });
+    }, [importedMeshes, objectStates]);
+
+    if (!importedMeshes) return null;
+
+    return <primitive ref={groupRef} object={importedMeshes} />;
+};
 
 const World: React.FC = () => {
   // Use selectors to improve performance and prevent re-renders
@@ -69,7 +125,13 @@ const World: React.FC = () => {
 
       <group position={[0, 0, 0]}>
         {/* Conditionally render model based on activeModelType */}
-        {activeModelType === 'bicycle' ? <Bicycle /> : <Product />}
+        {activeModelType === 'imported' ? (
+          <ImportedSTEPModel />
+        ) : activeModelType === 'bicycle' ? (
+          <Bicycle />
+        ) : (
+          <Product />
+        )}
 
         <ContactShadows
             opacity={0.4}
