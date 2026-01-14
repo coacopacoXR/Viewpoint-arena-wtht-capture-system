@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useStore, getCurrentSceneTree } from '../../store';
 import { SceneNode } from '../../types';
 import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle } from 'lucide-react';
@@ -105,6 +105,16 @@ const SceneTree: React.FC = () => {
 
     const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
 
+    // Auto-clear success message after 5 seconds
+    useEffect(() => {
+        if (importSuccess) {
+            const timer = setTimeout(() => {
+                clearImportStatus();
+            }, 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [importSuccess, clearImportStatus]);
+
     const handleImportClick = () => {
         fileInputRef.current?.click();
     };
@@ -112,6 +122,16 @@ const SceneTree: React.FC = () => {
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
+
+        // Validate file
+        const error = validateFile(file);
+        if (error) {
+            setImportError(error);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+            return;
+        }
 
         setIsImporting(true);
         setImportError(null);
@@ -206,6 +226,33 @@ const SceneTree: React.FC = () => {
                     <FileBox size={10} />
                     <span className="truncate">{getModelFileName()}</span>
                 </div>
+
+                {/* Import Status Messages */}
+                {importSuccess && (
+                    <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-[10px] text-green-700 flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
+                        <CheckCircle2 size={14} className="text-green-500 shrink-0 mt-0.5" />
+                        <div className="flex-1">{importSuccess}</div>
+                        <button
+                            onClick={clearImportStatus}
+                            className="text-green-400 hover:text-green-600"
+                        >
+                            <X size={12} />
+                        </button>
+                    </div>
+                )}
+
+                {importError && (
+                    <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-[10px] text-red-700 flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
+                        <AlertCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
+                        <div className="flex-1">{importError}</div>
+                        <button
+                            onClick={clearImportStatus}
+                            className="text-red-400 hover:text-red-600"
+                        >
+                            <X size={12} />
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Tree View */}

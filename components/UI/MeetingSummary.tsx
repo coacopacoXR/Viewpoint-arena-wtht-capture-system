@@ -395,8 +395,9 @@ const MeetingSummary: React.FC = () => {
     const time = useStore(state => state.time);
     const updateInsightType = useStore(state => state.updateInsightType);
     const updateInsight = useStore(state => state.updateInsight);
+    const comments = useStore(state => state.comments);
 
-    const [activeTab, setActiveTab] = useState<'DECISIONS' | 'REQUIREMENTS' | 'ASSIGNEES' | 'COMPONENTS' | 'THREADS' | 'ANALYSIS' | 'TREE'>('DECISIONS');
+    const [activeTab, setActiveTab] = useState<'DECISIONS' | 'REQUIREMENTS' | 'ASSIGNEES' | 'COMPONENTS' | 'THREADS' | 'ANALYSIS' | 'TREE' | 'COMMENTS'>('DECISIONS');
     const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
     const [selectedCard, setSelectedCard] = useState<InsightCard | null>(null);
     const [assigneeMode, setAssigneeMode] = useState<'INDIVIDUAL' | 'DEPARTMENT'>('INDIVIDUAL');
@@ -410,6 +411,11 @@ const MeetingSummary: React.FC = () => {
             title: 'Decision Board',
             description: 'Kanban-style board organizing all captured insights into three categories: Risks (potential issues), Actions (tasks to complete), and Rationale (design decisions). Drag cards between columns to reclassify.',
             icon: LayoutDashboard
+        },
+        COMMENTS: {
+            title: 'Spatial Comments',
+            description: 'Review all spatial comments and annotations made during the session. See which components were discussed, view drawing annotations, and track comment resolution status.',
+            icon: MessageSquare
         },
         REQUIREMENTS: {
             title: 'Requirements Impact',
@@ -756,6 +762,7 @@ const MeetingSummary: React.FC = () => {
                         <div className="text-gray-400 text-xs font-mono flex items-center gap-4">
                             <span>DURATION: {(time / 60).toFixed(1)} MIN</span>
                             <span>DECISIONS: {insightCards.length}</span>
+                            <span>COMMENTS: {comments.length}</span>
                             <span>PATTERNS: {threads.reduce((sum, t) => sum + t.causalChain.patterns.length, 0)}</span>
                         </div>
                     </div>
@@ -811,6 +818,14 @@ const MeetingSummary: React.FC = () => {
                          <button onClick={() => setActiveTab('DECISIONS')} className={clsx("px-3 py-1.5 rounded text-xs font-bold uppercase flex items-center gap-2 transition-colors", activeTab === 'DECISIONS' ? "bg-white text-black" : "text-gray-400 hover:text-white")}>
                             <LayoutDashboard size={14} /> Board
                          </button>
+                         <button onClick={() => setActiveTab('COMMENTS')} className={clsx("px-3 py-1.5 rounded text-xs font-bold uppercase flex items-center gap-2 transition-colors relative", activeTab === 'COMMENTS' ? "bg-white text-black" : "text-gray-400 hover:text-white")}>
+                            <MessageSquare size={14} /> Comments
+                            {comments.length > 0 && (
+                                <span className={clsx("ml-1 w-4 h-4 rounded-full text-[9px] flex items-center justify-center", activeTab === 'COMMENTS' ? "bg-black text-white" : "bg-blue-500 text-white")}>
+                                    {comments.length}
+                                </span>
+                            )}
+                         </button>
                          <button onClick={() => setActiveTab('REQUIREMENTS')} className={clsx("px-3 py-1.5 rounded text-xs font-bold uppercase flex items-center gap-2 transition-colors", activeTab === 'REQUIREMENTS' ? "bg-white text-black" : "text-gray-400 hover:text-white")}>
                             <List size={14} /> Requirements
                          </button>
@@ -861,6 +876,154 @@ const MeetingSummary: React.FC = () => {
                                     <div className="flex items-center gap-2 text-amber-800 font-bold text-sm uppercase px-2 py-1"><Lightbulb size={16}/> Rationale ({rationale.length})</div>
                                     {rationale.map(card => <SummaryCard key={card.id} card={card} agents={agents} setHover={setHoveredCardId} onClick={() => setSelectedCard(card)} color="bg-white border-amber-200 shadow-sm" />)}
                                 </div>
+                            </div>
+                        )}
+
+                        {/* COMMENTS TAB */}
+                        {activeTab === 'COMMENTS' && (
+                            <div className="h-full">
+                                {comments.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                                        <MessageSquare size={48} className="opacity-20 mb-4" />
+                                        <div className="text-sm font-bold">No Comments</div>
+                                        <div className="text-xs">Spatial comments made during the session will appear here</div>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-2 gap-6">
+                                        {/* Text Comments Column */}
+                                        <div className="flex flex-col gap-3">
+                                            <div className="flex items-center gap-2 text-blue-800 font-bold text-sm uppercase px-2 py-1 border-b border-gray-200 pb-2">
+                                                <MessageSquare size={16}/> Text Comments ({comments.filter(c => c.type === 'text').length})
+                                            </div>
+                                            {comments.filter(c => c.type === 'text').map(comment => (
+                                                <div key={comment.id} className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 hover:shadow-md transition-shadow">
+                                                    <div className="flex items-start gap-3 mb-2">
+                                                        <div
+                                                            className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
+                                                            style={{ backgroundColor: comment.authorColor }}
+                                                        >
+                                                            {comment.author[0]}
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-bold text-sm">{comment.author}</span>
+                                                                <span className="text-[10px] text-gray-400">
+                                                                    {new Date(comment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex items-center gap-1.5 mt-1 text-[10px] text-blue-600">
+                                                                <Link2 size={10} />
+                                                                <span className="font-mono font-bold">{comment.attachedToNodeName}</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-1.5">
+                                                            {comment.resolved && (
+                                                                <span className="text-[9px] bg-green-50 text-green-600 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                                                    <CheckCircle2 size={10} /> Resolved
+                                                                </span>
+                                                            )}
+                                                            {comment.linkedToMeeting && (
+                                                                <span className="text-[9px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                                                    <Link2 size={10} /> In Transcript
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-xs text-gray-700 leading-relaxed pl-11">
+                                                        {comment.content}
+                                                    </div>
+                                                    {comment.assignees.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1 pl-11 mt-2">
+                                                            {comment.assignees.map((assignee, i) => (
+                                                                <span key={i} className="text-[9px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full">
+                                                                    @{assignee}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                            {comments.filter(c => c.type === 'text').length === 0 && (
+                                                <div className="text-center py-8 text-gray-400 text-xs">No text comments</div>
+                                            )}
+                                        </div>
+
+                                        {/* Drawing Annotations Column */}
+                                        <div className="flex flex-col gap-3">
+                                            <div className="flex items-center gap-2 text-purple-800 font-bold text-sm uppercase px-2 py-1 border-b border-gray-200 pb-2">
+                                                <Zap size={16}/> Drawing Annotations ({comments.filter(c => c.type === 'drawing').length})
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                {comments.filter(c => c.type === 'drawing').map(comment => (
+                                                    <div key={comment.id} className="bg-white rounded-lg border border-purple-200 shadow-sm p-3 hover:shadow-md transition-shadow">
+                                                        {comment.drawingData && (
+                                                            <div className="mb-2 rounded overflow-hidden border border-gray-200 bg-gray-100">
+                                                                <img
+                                                                    src={comment.drawingData}
+                                                                    alt="Drawing annotation"
+                                                                    className="w-full h-32 object-contain"
+                                                                />
+                                                            </div>
+                                                        )}
+                                                        <div className="flex items-center gap-2">
+                                                            <div
+                                                                className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold"
+                                                                style={{ backgroundColor: comment.authorColor }}
+                                                            >
+                                                                {comment.author[0]}
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-xs font-bold truncate">{comment.author}</div>
+                                                                <div className="text-[9px] text-gray-400">
+                                                                    {new Date(comment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-1.5 mt-2 text-[9px] text-purple-600 bg-purple-50 px-2 py-1 rounded">
+                                                            <Link2 size={9} />
+                                                            <span className="font-mono font-bold truncate">{comment.attachedToNodeName}</span>
+                                                        </div>
+                                                        {comment.content && comment.content !== 'Screen annotation' && (
+                                                            <div className="text-[10px] text-gray-600 mt-2 line-clamp-2">
+                                                                {comment.content}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            {comments.filter(c => c.type === 'drawing').length === 0 && (
+                                                <div className="text-center py-8 text-gray-400 text-xs">No drawing annotations</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Comment Summary Stats */}
+                                {comments.length > 0 && (
+                                    <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                        <div className="text-xs font-bold uppercase text-gray-500 mb-3">Comment Analytics</div>
+                                        <div className="grid grid-cols-4 gap-4">
+                                            <div className="text-center">
+                                                <div className="text-2xl font-bold text-gray-800">{comments.length}</div>
+                                                <div className="text-[10px] text-gray-500 uppercase">Total Comments</div>
+                                            </div>
+                                            <div className="text-center">
+                                                <div className="text-2xl font-bold text-green-600">{comments.filter(c => c.resolved).length}</div>
+                                                <div className="text-[10px] text-gray-500 uppercase">Resolved</div>
+                                            </div>
+                                            <div className="text-center">
+                                                <div className="text-2xl font-bold text-blue-600">{comments.filter(c => c.linkedToMeeting).length}</div>
+                                                <div className="text-[10px] text-gray-500 uppercase">In Transcript</div>
+                                            </div>
+                                            <div className="text-center">
+                                                <div className="text-2xl font-bold text-purple-600">
+                                                    {new Set(comments.map(c => c.attachedToNodeName)).size}
+                                                </div>
+                                                <div className="text-[10px] text-gray-500 uppercase">Components</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
 
