@@ -278,7 +278,7 @@ export interface ImportedModel {
     sceneTree: SceneNode;
 }
 
-export type ModelType = 'synth' | 'bicycle';
+export type ModelType = 'synth' | 'bicycle' | 'imported';
 
 // --- PANEL MODE TYPES ---
 
