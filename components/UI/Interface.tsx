@@ -275,16 +275,16 @@ const Interface: React.FC = () => {
            )}
       </div>
 
-      {/* Participants Panel */}
+      {/* Participants Panel - Positioned to not overlap with right panel */}
       {showParticipants && (
-          <div className="absolute top-20 right-[360px] z-[45] pointer-events-auto w-64 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-lg animate-in fade-in slide-in-from-right-4 duration-200">
-              <div className="p-3 border-b border-gray-100 flex items-center justify-between">
+          <div className="absolute top-28 right-[356px] z-[45] pointer-events-auto w-56 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-lg animate-in fade-in slide-in-from-right-4 duration-200">
+              <div className="p-2 border-b border-gray-100 flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider flex items-center gap-2">
                       <Users size={12} /> Participants
                   </span>
                   <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full font-mono">{agents.length}</span>
               </div>
-              <div className="p-2 flex flex-col gap-1 max-h-80 overflow-y-auto">
+              <div className="p-2 flex flex-col gap-1 max-h-64 overflow-y-auto custom-scrollbar">
                   {agents.map(agent => {
                       const isFollowing = followedAgentId === agent.id;
                       const isVR = agent.id === '4';
@@ -303,24 +303,24 @@ const Interface: React.FC = () => {
                                   }
                               }}
                               className={clsx(
-                                  "w-full p-3 rounded-lg text-left flex items-center gap-3 transition-all",
+                                  "w-full p-2 rounded-lg text-left flex items-center gap-2 transition-all",
                                   isFollowing
                                       ? "bg-black text-white shadow-md"
                                       : "bg-gray-50 hover:bg-gray-100 text-gray-700"
                               )}
                           >
                               <div
-                                  className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[10px] font-bold shadow-sm"
+                                  className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[9px] font-bold shadow-sm shrink-0"
                                   style={{ backgroundColor: agent.color }}
                               >
-                                  {isVR ? <Glasses size={14} /> : agent.name[0]}
+                                  {isVR ? <Glasses size={12} /> : agent.name[0]}
                               </div>
-                              <div className="flex-1">
-                                  <div className="font-mono text-xs font-bold flex items-center gap-2">
+                              <div className="flex-1 min-w-0">
+                                  <div className="font-mono text-[10px] font-bold flex items-center gap-1 truncate">
                                       {agent.name}
                                       {isVR && (
                                           <span className={clsx(
-                                              "text-[8px] px-1 py-0.5 rounded uppercase",
+                                              "text-[7px] px-1 py-0.5 rounded uppercase shrink-0",
                                               isFollowing ? "bg-white/20 text-white" : "bg-purple-100 text-purple-600"
                                           )}>
                                               VR
@@ -328,15 +328,15 @@ const Interface: React.FC = () => {
                                       )}
                                   </div>
                                   <div className={clsx(
-                                      "text-[9px] capitalize",
+                                      "text-[8px] capitalize truncate",
                                       isFollowing ? "text-gray-300" : "text-gray-400"
                                   )}>
-                                      {agent.role.toLowerCase()} · {agent.behavior.toLowerCase().replace('_', ' ')}
+                                      {agent.role.toLowerCase()}
                                   </div>
                               </div>
                               {isFollowing && (
-                                  <div className="text-[9px] bg-white/20 px-2 py-0.5 rounded font-bold">
-                                      Following
+                                  <div className="text-[8px] bg-white/20 px-1.5 py-0.5 rounded font-bold shrink-0">
+                                      POV
                                   </div>
                               )}
                           </button>
@@ -407,26 +407,26 @@ const Interface: React.FC = () => {
         </div>
       )}
       
-      {/* OVERLAY: AI View Sliders */}
+      {/* OVERLAY: AI View Sliders - Positioned to the left of right panel */}
       {showAIControls && (
-         <div className="absolute top-20 right-[340px] z-[40] pointer-events-auto w-52 bg-white/90 backdrop-blur-md border border-gray-200 rounded shadow-sm p-3 animate-in slide-in-from-right-4">
-             <div className="flex items-center gap-2 mb-3 border-b border-gray-100 pb-2">
-                 <Sparkles size={14} className="text-purple-600"/>
-                 <span className="text-xs font-bold text-gray-700">AI Camera Weights</span>
+         <div className="absolute top-28 right-[356px] z-[40] pointer-events-auto w-48 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-sm p-2.5 animate-in slide-in-from-right-4">
+             <div className="flex items-center gap-2 mb-2 border-b border-gray-100 pb-2">
+                 <Sparkles size={12} className="text-purple-600"/>
+                 <span className="text-[10px] font-bold text-gray-700">AI Camera Weights</span>
              </div>
-             <div className="flex flex-col gap-4">
+             <div className="flex flex-col gap-3">
                 {agents.map(agent => (
                     <div key={agent.id} className="flex flex-col gap-1">
-                        <div className="flex justify-between text-[10px] font-mono text-gray-500 uppercase">
+                        <div className="flex justify-between text-[9px] font-mono text-gray-500 uppercase">
                             <span style={{color: agent.color}}>{agent.name}</span>
                             <span>{agentWeights[agent.id]}</span>
                         </div>
-                        <input 
-                            type="range" 
-                            min="0" 
-                            max="10" 
-                            step="1" 
-                            value={agentWeights[agent.id] || 0} 
+                        <input
+                            type="range"
+                            min="0"
+                            max="10"
+                            step="1"
+                            value={agentWeights[agent.id] || 0}
                             onChange={(e) => setAgentWeight(agent.id, parseInt(e.target.value))}
                             className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-black"
                         />
