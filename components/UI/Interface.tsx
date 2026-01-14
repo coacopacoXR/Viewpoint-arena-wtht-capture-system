@@ -4,7 +4,8 @@ import {
   Video, User, Map, Activity, Flame, Footprints,
   SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
-  ShieldOff, Shield, Radio, Glasses, MessageSquare, Mic
+  ShieldOff, Shield, Radio, Glasses, MessageSquare, Mic,
+  ChevronDown, ChevronRight
 } from 'lucide-react';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
@@ -58,12 +59,19 @@ const Interface: React.FC = () => {
     followedAgentId, setFollowedAgent,
     rightPanelMode, setRightPanelMode,
     comments,
-    commentMode
+    commentMode,
+    temporarilyDisengagedFromAgentId,
+    resumeFollowingAgent
   } = useStore();
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
+
+  // Expandable panel states
+  const [isSceneTreeExpanded, setIsSceneTreeExpanded] = useState(true);
+  const [isSessionSyncExpanded, setIsSessionSyncExpanded] = useState(true);
+  const [isFollowersExpanded, setIsFollowersExpanded] = useState(true);
 
   const unresolvedComments = comments.filter(c => !c.resolved).length;
 
@@ -131,45 +139,81 @@ const Interface: React.FC = () => {
             </div>
           </header>
           
-          {/* Scene Tree Integration */}
-          <SceneTree />
-
-          {/* SYNC / LEADER CONTROLS (Moved under Tree) */}
-          <div className="mt-4 pointer-events-auto animate-in slide-in-from-left-4 fade-in duration-500">
-                <div className="text-[10px] font-mono uppercase text-gray-400 tracking-widest mb-1 bg-white/40 px-2 py-0.5 rounded backdrop-blur-sm shadow-sm w-fit">
-                    Session Sync
-                </div>
-                <button 
-                    onClick={handleLeaderToggle}
-                    className={clsx(
-                        "w-64 px-3 py-2 rounded text-xs font-mono flex items-center justify-between shadow-sm border transition-all duration-300 group",
-                        leaderId 
-                            ? "bg-indigo-600 text-white border-indigo-600 shadow-indigo-200" 
-                            : "bg-white/90 backdrop-blur text-gray-600 border-gray-200 hover:border-gray-400"
-                    )}
-                >
-                    <div className="flex items-center gap-2">
-                        <Users size={14} className={leaderId ? "text-white" : "text-gray-400 group-hover:text-gray-600"} />
-                        <span className="font-bold">{leaderId ? "SYNC ACTIVE: LEADING" : "SYNC INACTIVE"}</span>
-                    </div>
-                    <div className={clsx(
-                        "w-2 h-2 rounded-full",
-                        leaderId ? "bg-white animate-pulse" : "bg-gray-300"
-                    )}></div>
-                </button>
-                {leaderId && (
-                    <div className="w-64 mt-1 px-2 py-1.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] text-indigo-800 leading-tight">
-                        You are the session leader. All agents are currently following your viewport formation.
-                    </div>
-                )}
+          {/* Scene Tree Integration - Expandable */}
+          <div className="mt-2 pointer-events-auto">
+            <button
+              onClick={() => setIsSceneTreeExpanded(!isSceneTreeExpanded)}
+              className="flex items-center gap-2 text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-1 bg-white/60 px-2 py-1 rounded backdrop-blur-sm shadow-sm hover:bg-white/80 transition-colors w-fit"
+            >
+              {isSceneTreeExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              <Layers size={10} />
+              Model Tree
+            </button>
+            <div className={clsx(
+              "transition-all duration-300 overflow-hidden",
+              isSceneTreeExpanded ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
+            )}>
+              <SceneTree />
+            </div>
           </div>
 
-          {/* FOLLOWERS HUD */}
-          {myFollowers.length > 0 && !leaderId && (
-              <div className="mt-4 animate-in slide-in-from-left-4 fade-in duration-500">
-                  <div className="text-[10px] font-mono uppercase text-gray-400 tracking-widest mb-1 bg-white/40 px-2 py-0.5 rounded backdrop-blur-sm shadow-sm w-fit">
-                        Linked Viewers
+          {/* SYNC / LEADER CONTROLS - Expandable */}
+          <div className="mt-4 pointer-events-auto animate-in slide-in-from-left-4 fade-in duration-500">
+            <button
+              onClick={() => setIsSessionSyncExpanded(!isSessionSyncExpanded)}
+              className="flex items-center gap-2 text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-1 bg-white/60 px-2 py-1 rounded backdrop-blur-sm shadow-sm hover:bg-white/80 transition-colors w-fit"
+            >
+              {isSessionSyncExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              <Users size={10} />
+              Session Sync
+              {leaderId && <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>}
+            </button>
+            <div className={clsx(
+              "transition-all duration-300 overflow-hidden",
+              isSessionSyncExpanded ? "max-h-[200px] opacity-100" : "max-h-0 opacity-0"
+            )}>
+              <button
+                  onClick={handleLeaderToggle}
+                  className={clsx(
+                      "w-64 px-3 py-2 rounded text-xs font-mono flex items-center justify-between shadow-sm border transition-all duration-300 group",
+                      leaderId
+                          ? "bg-indigo-600 text-white border-indigo-600 shadow-indigo-200"
+                          : "bg-white/90 backdrop-blur text-gray-600 border-gray-200 hover:border-gray-400"
+                  )}
+              >
+                  <div className="flex items-center gap-2">
+                      <Users size={14} className={leaderId ? "text-white" : "text-gray-400 group-hover:text-gray-600"} />
+                      <span className="font-bold">{leaderId ? "SYNC ACTIVE: LEADING" : "SYNC INACTIVE"}</span>
                   </div>
+                  <div className={clsx(
+                      "w-2 h-2 rounded-full",
+                      leaderId ? "bg-white animate-pulse" : "bg-gray-300"
+                  )}></div>
+              </button>
+              {leaderId && (
+                  <div className="w-64 mt-1 px-2 py-1.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] text-indigo-800 leading-tight">
+                      You are the session leader. All agents are currently following your viewport formation.
+                  </div>
+              )}
+            </div>
+          </div>
+
+          {/* FOLLOWERS HUD - Expandable */}
+          {myFollowers.length > 0 && !leaderId && (
+              <div className="mt-4 pointer-events-auto animate-in slide-in-from-left-4 fade-in duration-500">
+                <button
+                  onClick={() => setIsFollowersExpanded(!isFollowersExpanded)}
+                  className="flex items-center gap-2 text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-1 bg-white/60 px-2 py-1 rounded backdrop-blur-sm shadow-sm hover:bg-white/80 transition-colors w-fit"
+                >
+                  {isFollowersExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  <Link size={10} />
+                  Linked Viewers
+                  <span className="bg-indigo-100 text-indigo-600 px-1.5 rounded text-[9px] font-bold">{myFollowers.length}</span>
+                </button>
+                <div className={clsx(
+                  "transition-all duration-300 overflow-hidden",
+                  isFollowersExpanded ? "max-h-[300px] opacity-100" : "max-h-0 opacity-0"
+                )}>
                   <div className="w-64 flex flex-col gap-1">
                       {myFollowers.map(agent => (
                           <div key={agent.id} className="bg-white/80 backdrop-blur border border-gray-200 p-2 rounded flex items-center gap-2 shadow-sm">
@@ -182,6 +226,7 @@ const Interface: React.FC = () => {
                           </div>
                       ))}
                   </div>
+                </div>
               </div>
           )}
       </div>
@@ -271,6 +316,20 @@ const Interface: React.FC = () => {
                   <User size={12} />
                   POSSESSING: {agents.find(a => a.id === activeAgentId)?.name}
                   <button onClick={() => { setActiveAgent(null); setViewMode(ViewMode.FREE); }} className="ml-2 hover:text-gray-300">✕</button>
+               </div>
+           )}
+
+           {/* Temporarily Disengaged Indicator */}
+           {temporarilyDisengagedFromAgentId && (
+               <div className="bg-orange-500 text-white px-3 py-1.5 rounded text-xs font-mono flex items-center gap-2 shadow-lg animate-in fade-in slide-in-from-right-4">
+                  <Eye size={12} className="animate-pulse" />
+                  <span>PAUSED: {agents.find(a => a.id === temporarilyDisengagedFromAgentId)?.name}</span>
+                  <button
+                    onClick={resumeFollowingAgent}
+                    className="ml-2 bg-white/20 hover:bg-white/30 px-2 py-0.5 rounded text-[10px] font-bold transition-colors"
+                  >
+                    Resume
+                  </button>
                </div>
            )}
       </div>

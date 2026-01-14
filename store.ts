@@ -184,6 +184,9 @@ interface AppState {
   // Followed Agent (for participant list)
   followedAgentId: string | null;
 
+  // Temporary disengage from agent following
+  temporarilyDisengagedFromAgentId: string | null;
+
   // Heatmap
   heatmapValues: Record<string, number>;
 
@@ -222,6 +225,10 @@ interface AppState {
   // --- NEW: Comments Display State ---
   commentsExpandedInScene: boolean; // Toggle all comments expanded in 3D
 
+  // --- NEW: Import Status Messages ---
+  importError: string | null;
+  importSuccess: string | null;
+
   // Actions
   setViewMode: (mode: ViewMode) => void;
   setRepresentationMode: (mode: RepresentationMode) => void;
@@ -242,6 +249,9 @@ interface AppState {
   setFollowRequest: (req: { agentId: string; timestamp: number } | null) => void;
   togglePrivacyMode: () => void;
   setFollowedAgent: (id: string | null) => void;
+  temporarilyDisengageFromAgent: () => void;
+  resumeFollowingAgent: () => void;
+  clearTemporaryDisengage: () => void;
 
   setAgentStyle: (style: AgentStyle) => void;
   setAgentWeight: (id: string, weight: number) => void;
@@ -282,6 +292,9 @@ interface AppState {
   toggleCommentsExpandedInScene: () => void;
   setCommentScreenOffset: (id: string, offset: { x: number; y: number }) => void;
   toggleCommentExpanded: (id: string) => void;
+
+  // --- NEW: Import Status Actions ---
+  clearImportStatus: () => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -305,6 +318,7 @@ export const useStore = create<AppState>((set) => ({
   followRequest: null,
   isPrivacyMode: false,
   followedAgentId: null,
+  temporarilyDisengagedFromAgentId: null,
   heatmapValues: {},
   chatHistory: [],
   insightCards: [],
@@ -338,6 +352,10 @@ export const useStore = create<AppState>((set) => ({
   // --- NEW: Comments Display State ---
   commentsExpandedInScene: false,
 
+  // --- NEW: Import Status Messages ---
+  importError: null,
+  importSuccess: null,
+
   setViewMode: (mode) => set({ viewMode: mode }),
   setRepresentationMode: (mode) => set({ representationMode: mode }),
   toggleFrustums: () => set((state) => ({ showFrustums: !state.showFrustums })),
@@ -360,6 +378,32 @@ export const useStore = create<AppState>((set) => ({
   setFollowRequest: (req) => set({ followRequest: req }),
   togglePrivacyMode: () => set((state) => ({ isPrivacyMode: !state.isPrivacyMode })),
   setFollowedAgent: (id) => set({ followedAgentId: id }),
+
+  // Temporarily disengage from POV following - stores current agent and switches to FREE mode
+  temporarilyDisengageFromAgent: () => set((state) => {
+    if (state.viewMode === ViewMode.POV_AGENT && state.activeAgentId) {
+      return {
+        temporarilyDisengagedFromAgentId: state.activeAgentId,
+        viewMode: ViewMode.FREE
+      };
+    }
+    return state;
+  }),
+
+  // Resume following the temporarily disengaged agent
+  resumeFollowingAgent: () => set((state) => {
+    if (state.temporarilyDisengagedFromAgentId) {
+      return {
+        activeAgentId: state.temporarilyDisengagedFromAgentId,
+        viewMode: ViewMode.POV_AGENT,
+        temporarilyDisengagedFromAgentId: null
+      };
+    }
+    return state;
+  }),
+
+  // Clear temporary disengage state without resuming
+  clearTemporaryDisengage: () => set({ temporarilyDisengagedFromAgentId: null }),
   
   setAgentStyle: (style) => set({ agentStyle: style }),
   setAgentWeight: (id, weight) => set((state) => ({
@@ -449,6 +493,8 @@ export const useStore = create<AppState>((set) => ({
 
   // Real STEP import - sets the parsed meshes and scene tree
   setImportedModel: (meshes, sceneTree, fileName) => set((state) => {
+      const partCount = countParts(sceneTree);
+      const modelName = fileName.replace(/\.(step|stp)$/i, '');
       return {
           activeModelType: 'imported' as ModelType,
           importedMeshes: meshes,
@@ -463,7 +509,6 @@ export const useStore = create<AppState>((set) => ({
           isImporting: false,
           importError: null,
           importSuccess: `Successfully imported "${fileName}" as ${modelName} (${partCount} parts)`,
-          lastImportedFileName: fileName,
           // Reset any active selections
           activeAgentId: null,
           leaderId: null,
@@ -522,7 +567,10 @@ export const useStore = create<AppState>((set) => ({
 
   toggleCommentExpanded: (id) => set((state) => ({
       comments: state.comments.map(c => c.id === id ? { ...c, expanded: !c.expanded } : c)
-  }))
+  })),
+
+  // --- NEW: Import Status Actions ---
+  clearImportStatus: () => set({ importError: null, importSuccess: null })
 
 }));
 
