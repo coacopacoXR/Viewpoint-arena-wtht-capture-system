@@ -5,6 +5,7 @@ import { clsx } from 'clsx';
 interface DrawingCanvasProps {
     onSave: (dataUrl: string) => void;
     onCancel: () => void;
+    backgroundImage?: string | null; // Captured 3D perspective screenshot
 }
 
 type Tool = 'pen' | 'eraser' | 'line' | 'circle' | 'rectangle';
@@ -21,7 +22,7 @@ interface Path {
     points: { x: number; y: number }[];
 }
 
-const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel }) => {
+const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgroundImage }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [tool, setTool] = useState<Tool>('pen');
@@ -56,10 +57,37 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel }) => {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
 
-        // Fill with semi-transparent overlay to show drawing area
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }, []);
+        if (backgroundImage) {
+            // Load and draw the captured 3D perspective
+            const img = new Image();
+            img.onload = () => {
+                // Draw the background image
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                // Add slight overlay to make drawings more visible
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            };
+            img.src = backgroundImage;
+        } else {
+            // Fallback: Fill with semi-transparent overlay to show drawing area
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+    }, [backgroundImage]);
+
+    // Background image ref for redraw
+    const bgImageRef = useRef<HTMLImageElement | null>(null);
+
+    // Load background image on mount
+    useEffect(() => {
+        if (backgroundImage) {
+            const img = new Image();
+            img.onload = () => {
+                bgImageRef.current = img;
+            };
+            img.src = backgroundImage;
+        }
+    }, [backgroundImage]);
 
     // Redraw canvas
     const redraw = useCallback(() => {
@@ -69,9 +97,19 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel }) => {
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // Clear and set background
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Clear canvas first
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw background
+        if (bgImageRef.current) {
+            ctx.drawImage(bgImageRef.current, 0, 0, canvas.width, canvas.height);
+            // Add slight overlay to make drawings more visible
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        } else {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
 
         // Draw all paths from history
         const state = history[historyIndex];
@@ -119,7 +157,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel }) => {
         });
 
         ctx.globalCompositeOperation = 'source-over';
-    }, [history, historyIndex, currentPath]);
+    }, [history, historyIndex, currentPath, backgroundImage]);
 
     useEffect(() => {
         redraw();
