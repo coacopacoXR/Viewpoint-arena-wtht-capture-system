@@ -1,19 +1,14 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import {
-    Pencil, Eraser, Undo2, Redo2, Check, X, Circle, Minus, Square,
-    ArrowRight, Type, Highlighter, Move, ZoomIn, ZoomOut, RotateCcw,
-    Maximize2, Grid3X3, MousePointer2, PenTool
-} from 'lucide-react';
+import { Pencil, Eraser, Undo2, Redo2, Check, X, Circle, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 
 interface DrawingCanvasProps {
     onSave: (dataUrl: string) => void;
     onCancel: () => void;
-    backgroundImage?: string | null;
-    attachedToName?: string;
+    backgroundImage?: string | null; // Captured 3D perspective screenshot
 }
 
-type Tool = 'pen' | 'eraser' | 'line' | 'circle' | 'rectangle' | 'arrow' | 'highlighter' | 'text' | 'select';
+type Tool = 'pen' | 'eraser' | 'line' | 'circle' | 'rectangle';
 
 interface DrawingState {
     paths: Path[];
@@ -25,140 +20,32 @@ interface Path {
     color: string;
     width: number;
     points: { x: number; y: number }[];
-    text?: string;
 }
 
-const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgroundImage, attachedToName }) => {
+const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgroundImage }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [tool, setTool] = useState<Tool>('pen');
-    const [color, setColor] = useState('#ef4444');
+    const [color, setColor] = useState('#ef4444'); // Red default
     const [lineWidth, setLineWidth] = useState(3);
     const [history, setHistory] = useState<DrawingState[]>([{ paths: [], currentPath: null }]);
     const [historyIndex, setHistoryIndex] = useState(0);
     const [currentPath, setCurrentPath] = useState<Path | null>(null);
-    const [showGrid, setShowGrid] = useState(false);
-    const [textInput, setTextInput] = useState('');
-    const [textPosition, setTextPosition] = useState<{ x: number; y: number } | null>(null);
-    const [isFullscreen, setIsFullscreen] = useState(false);
-    const bgImageRef = useRef<HTMLImageElement | null>(null);
 
     const colors = [
-        { value: '#ef4444', name: 'Red' },
-        { value: '#f97316', name: 'Orange' },
-        { value: '#eab308', name: 'Yellow' },
-        { value: '#22c55e', name: 'Green' },
-        { value: '#3b82f6', name: 'Blue' },
-        { value: '#8b5cf6', name: 'Purple' },
-        { value: '#ec4899', name: 'Pink' },
-        { value: '#000000', name: 'Black' },
-        { value: '#ffffff', name: 'White' },
+        '#ef4444', // red
+        '#f97316', // orange
+        '#eab308', // yellow
+        '#22c55e', // green
+        '#3b82f6', // blue
+        '#8b5cf6', // purple
+        '#000000', // black
+        '#ffffff', // white
     ];
 
-    const lineWidths = [
-        { value: 2, name: 'Thin' },
-        { value: 4, name: 'Medium' },
-        { value: 6, name: 'Thick' },
-        { value: 10, name: 'Extra Thick' },
-    ];
+    const lineWidths = [2, 4, 6, 8];
 
-    const tools = [
-        { id: 'select' as Tool, icon: MousePointer2, name: 'Select', shortcut: 'V' },
-        { id: 'pen' as Tool, icon: PenTool, name: 'Pen', shortcut: 'P' },
-        { id: 'highlighter' as Tool, icon: Highlighter, name: 'Highlighter', shortcut: 'H' },
-        { id: 'line' as Tool, icon: Minus, name: 'Line', shortcut: 'L' },
-        { id: 'arrow' as Tool, icon: ArrowRight, name: 'Arrow', shortcut: 'A' },
-        { id: 'circle' as Tool, icon: Circle, name: 'Circle', shortcut: 'C' },
-        { id: 'rectangle' as Tool, icon: Square, name: 'Rectangle', shortcut: 'R' },
-        { id: 'text' as Tool, icon: Type, name: 'Text', shortcut: 'T' },
-        { id: 'eraser' as Tool, icon: Eraser, name: 'Eraser', shortcut: 'E' },
-    ];
-
-    // Enter fullscreen on mount
-    useEffect(() => {
-        const enterFullscreen = async () => {
-            try {
-                if (containerRef.current && document.fullscreenEnabled) {
-                    await containerRef.current.requestFullscreen();
-                    setIsFullscreen(true);
-                }
-            } catch (e) {
-                console.log('Fullscreen not available');
-            }
-        };
-        enterFullscreen();
-
-        const handleFullscreenChange = () => {
-            setIsFullscreen(!!document.fullscreenElement);
-        };
-
-        document.addEventListener('fullscreenchange', handleFullscreenChange);
-        return () => {
-            document.removeEventListener('fullscreenchange', handleFullscreenChange);
-        };
-    }, []);
-
-    // Keyboard shortcuts
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (textPosition) return; // Don't handle shortcuts when typing
-
-            const key = e.key.toLowerCase();
-
-            // Tool shortcuts
-            if (key === 'v') setTool('select');
-            if (key === 'p') setTool('pen');
-            if (key === 'h') setTool('highlighter');
-            if (key === 'l') setTool('line');
-            if (key === 'a') setTool('arrow');
-            if (key === 'c') setTool('circle');
-            if (key === 'r') setTool('rectangle');
-            if (key === 't') setTool('text');
-            if (key === 'e') setTool('eraser');
-
-            // Undo/Redo
-            if ((e.metaKey || e.ctrlKey) && key === 'z') {
-                if (e.shiftKey) {
-                    handleRedo();
-                } else {
-                    handleUndo();
-                }
-            }
-
-            // Escape to cancel
-            if (key === 'escape') {
-                if (textPosition) {
-                    setTextPosition(null);
-                    setTextInput('');
-                } else {
-                    onCancel();
-                }
-            }
-
-            // Save with Cmd/Ctrl + S
-            if ((e.metaKey || e.ctrlKey) && key === 's') {
-                e.preventDefault();
-                handleSave();
-            }
-
-            // Toggle grid with G
-            if (key === 'g') setShowGrid(prev => !prev);
-
-            // Increase/decrease brush size with [ and ]
-            if (key === '[') {
-                setLineWidth(prev => Math.max(1, prev - 2));
-            }
-            if (key === ']') {
-                setLineWidth(prev => Math.min(20, prev + 2));
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [textPosition, historyIndex, history]);
-
-    // Initialize canvas
+    // Initialize canvas with screenshot/background
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -166,25 +53,32 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
+        // Set canvas size to viewport
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
 
         if (backgroundImage) {
+            // Load and draw the captured 3D perspective
             const img = new Image();
             img.onload = () => {
-                bgImageRef.current = img;
+                // Draw the background image
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+                // Add slight overlay to make drawings more visible
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
             };
             img.src = backgroundImage;
         } else {
-            ctx.fillStyle = 'rgba(30, 30, 30, 0.85)';
+            // Fallback: Fill with semi-transparent overlay to show drawing area
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
     }, [backgroundImage]);
 
-    // Load background image for redraw
+    // Background image ref for redraw
+    const bgImageRef = useRef<HTMLImageElement | null>(null);
+
+    // Load background image on mount
     useEffect(() => {
         if (backgroundImage) {
             const img = new Image();
@@ -194,23 +88,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
             img.src = backgroundImage;
         }
     }, [backgroundImage]);
-
-    const drawArrow = (ctx: CanvasRenderingContext2D, fromX: number, fromY: number, toX: number, toY: number) => {
-        const headLength = 15;
-        const angle = Math.atan2(toY - fromY, toX - fromX);
-
-        ctx.beginPath();
-        ctx.moveTo(fromX, fromY);
-        ctx.lineTo(toX, toY);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.moveTo(toX, toY);
-        ctx.lineTo(toX - headLength * Math.cos(angle - Math.PI / 6), toY - headLength * Math.sin(angle - Math.PI / 6));
-        ctx.lineTo(toX - headLength * Math.cos(angle + Math.PI / 6), toY - headLength * Math.sin(angle + Math.PI / 6));
-        ctx.closePath();
-        ctx.fill();
-    };
 
     // Redraw canvas
     const redraw = useCallback(() => {
@@ -220,35 +97,18 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
+        // Clear canvas first
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         // Draw background
         if (bgImageRef.current) {
             ctx.drawImage(bgImageRef.current, 0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            // Add slight overlay to make drawings more visible
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         } else {
-            ctx.fillStyle = 'rgba(30, 30, 30, 0.85)';
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-        }
-
-        // Draw grid if enabled
-        if (showGrid) {
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-            ctx.lineWidth = 1;
-            const gridSize = 50;
-            for (let x = 0; x < canvas.width; x += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, canvas.height);
-                ctx.stroke();
-            }
-            for (let y = 0; y < canvas.height; y += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(0, y);
-                ctx.lineTo(canvas.width, y);
-                ctx.stroke();
-            }
         }
 
         // Draw all paths from history
@@ -257,23 +117,17 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
             if (!path) return;
 
             ctx.strokeStyle = path.color;
-            ctx.fillStyle = path.color;
             ctx.lineWidth = path.width;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
 
             if (path.tool === 'eraser') {
                 ctx.globalCompositeOperation = 'destination-out';
-            } else if (path.tool === 'highlighter') {
-                ctx.globalCompositeOperation = 'multiply';
-                ctx.globalAlpha = 0.4;
-                ctx.lineWidth = path.width * 4;
             } else {
                 ctx.globalCompositeOperation = 'source-over';
-                ctx.globalAlpha = 1;
             }
 
-            if (path.tool === 'pen' || path.tool === 'eraser' || path.tool === 'highlighter') {
+            if (path.tool === 'pen' || path.tool === 'eraser') {
                 ctx.beginPath();
                 path.points.forEach((point, i) => {
                     if (i === 0) {
@@ -288,10 +142,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                 ctx.moveTo(path.points[0].x, path.points[0].y);
                 ctx.lineTo(path.points[path.points.length - 1].x, path.points[path.points.length - 1].y);
                 ctx.stroke();
-            } else if (path.tool === 'arrow' && path.points.length >= 2) {
-                const start = path.points[0];
-                const end = path.points[path.points.length - 1];
-                drawArrow(ctx, start.x, start.y, end.x, end.y);
             } else if (path.tool === 'circle' && path.points.length >= 2) {
                 const start = path.points[0];
                 const end = path.points[path.points.length - 1];
@@ -303,15 +153,11 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                 const start = path.points[0];
                 const end = path.points[path.points.length - 1];
                 ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
-            } else if (path.tool === 'text' && path.text && path.points.length > 0) {
-                ctx.font = `${path.width * 6}px Inter, sans-serif`;
-                ctx.fillText(path.text, path.points[0].x, path.points[0].y);
             }
-
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.globalAlpha = 1;
         });
-    }, [history, historyIndex, currentPath, showGrid]);
+
+        ctx.globalCompositeOperation = 'source-over';
+    }, [history, historyIndex, currentPath, backgroundImage]);
 
     useEffect(() => {
         redraw();
@@ -332,14 +178,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         if (e.button !== 0) return;
 
         const point = getCanvasPoint(e);
-
-        if (tool === 'text') {
-            setTextPosition(point);
-            return;
-        }
-
-        if (tool === 'select') return;
-
         setIsDrawing(true);
         setCurrentPath({
             tool,
@@ -350,22 +188,13 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
     };
 
     const handleMouseMove = (e: React.MouseEvent) => {
-        if (!isDrawing || !currentPath || tool === 'select') return;
+        if (!isDrawing || !currentPath) return;
 
         const point = getCanvasPoint(e);
-
-        if (tool === 'pen' || tool === 'eraser' || tool === 'highlighter') {
-            setCurrentPath({
-                ...currentPath,
-                points: [...currentPath.points, point]
-            });
-        } else {
-            // For shapes, only keep first and last point
-            setCurrentPath({
-                ...currentPath,
-                points: [currentPath.points[0], point]
-            });
-        }
+        setCurrentPath({
+            ...currentPath,
+            points: [...currentPath.points, point]
+        });
     };
 
     const handleMouseUp = () => {
@@ -373,46 +202,19 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
         setIsDrawing(false);
 
+        // Add to history
         const newState: DrawingState = {
             paths: [...history[historyIndex].paths, currentPath],
             currentPath: null
         };
 
+        // Remove any future history if we're not at the end
         const newHistory = history.slice(0, historyIndex + 1);
         newHistory.push(newState);
 
         setHistory(newHistory);
         setHistoryIndex(newHistory.length - 1);
         setCurrentPath(null);
-    };
-
-    const handleTextSubmit = () => {
-        if (!textPosition || !textInput.trim()) {
-            setTextPosition(null);
-            setTextInput('');
-            return;
-        }
-
-        const textPath: Path = {
-            tool: 'text',
-            color,
-            width: lineWidth,
-            points: [textPosition],
-            text: textInput
-        };
-
-        const newState: DrawingState = {
-            paths: [...history[historyIndex].paths, textPath],
-            currentPath: null
-        };
-
-        const newHistory = history.slice(0, historyIndex + 1);
-        newHistory.push(newState);
-
-        setHistory(newHistory);
-        setHistoryIndex(newHistory.length - 1);
-        setTextPosition(null);
-        setTextInput('');
     };
 
     const handleUndo = () => {
@@ -427,250 +229,210 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         }
     };
 
-    const handleClear = () => {
-        const newState: DrawingState = { paths: [], currentPath: null };
-        const newHistory = history.slice(0, historyIndex + 1);
-        newHistory.push(newState);
-        setHistory(newHistory);
-        setHistoryIndex(newHistory.length - 1);
-    };
-
     const handleSave = () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        // Export the full canvas including background
-        const dataUrl = canvas.toDataURL('image/png');
+        // Create a clean canvas with just the drawing (no background)
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = canvas.width;
+        exportCanvas.height = canvas.height;
+        const ctx = exportCanvas.getContext('2d');
+        if (!ctx) return;
+
+        // Draw all paths
+        const state = history[historyIndex];
+        state.paths.forEach(path => {
+            ctx.strokeStyle = path.color;
+            ctx.lineWidth = path.width;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            if (path.tool === 'pen') {
+                ctx.beginPath();
+                path.points.forEach((point, i) => {
+                    if (i === 0) {
+                        ctx.moveTo(point.x, point.y);
+                    } else {
+                        ctx.lineTo(point.x, point.y);
+                    }
+                });
+                ctx.stroke();
+            } else if (path.tool === 'line' && path.points.length >= 2) {
+                ctx.beginPath();
+                ctx.moveTo(path.points[0].x, path.points[0].y);
+                ctx.lineTo(path.points[path.points.length - 1].x, path.points[path.points.length - 1].y);
+                ctx.stroke();
+            } else if (path.tool === 'circle' && path.points.length >= 2) {
+                const start = path.points[0];
+                const end = path.points[path.points.length - 1];
+                const radius = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
+                ctx.beginPath();
+                ctx.arc(start.x, start.y, radius, 0, Math.PI * 2);
+                ctx.stroke();
+            } else if (path.tool === 'rectangle' && path.points.length >= 2) {
+                const start = path.points[0];
+                const end = path.points[path.points.length - 1];
+                ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
+            }
+        });
+
+        const dataUrl = exportCanvas.toDataURL('image/png');
         onSave(dataUrl);
     };
 
-    const toggleFullscreen = async () => {
-        if (document.fullscreenElement) {
-            await document.exitFullscreen();
-        } else if (containerRef.current) {
-            await containerRef.current.requestFullscreen();
-        }
-    };
-
     return (
-        <div
-            ref={containerRef}
-            className="fixed inset-0 z-[500] bg-neutral-900 flex flex-col"
-        >
-            {/* Top Toolbar */}
-            <div className="flex items-center justify-between px-4 py-2 bg-neutral-800 border-b border-neutral-700">
-                {/* Left: Logo & Title */}
-                <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-                            <PenTool size={16} className="text-white" />
-                        </div>
-                        <div>
-                            <div className="text-white font-bold text-sm">Drawing Mode</div>
-                            {attachedToName && (
-                                <div className="text-neutral-400 text-[10px]">
-                                    Attaching to: {attachedToName}
-                                </div>
-                            )}
-                        </div>
-                    </div>
+        <div className="fixed inset-0 z-[300] pointer-events-auto">
+            {/* Canvas */}
+            <canvas
+                ref={canvasRef}
+                className="absolute inset-0 cursor-crosshair"
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+            />
+
+            {/* Toolbar */}
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white rounded-lg shadow-xl border border-gray-200 p-2 flex items-center gap-3">
+                {/* Tools */}
+                <div className="flex gap-1">
+                    <button
+                        onClick={() => setTool('pen')}
+                        className={clsx(
+                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
+                            tool === 'pen' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                        )}
+                        title="Pen"
+                    >
+                        <Pencil size={16} />
+                    </button>
+                    <button
+                        onClick={() => setTool('line')}
+                        className={clsx(
+                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
+                            tool === 'line' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                        )}
+                        title="Line"
+                    >
+                        <Minus size={16} />
+                    </button>
+                    <button
+                        onClick={() => setTool('circle')}
+                        className={clsx(
+                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
+                            tool === 'circle' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                        )}
+                        title="Circle"
+                    >
+                        <Circle size={16} />
+                    </button>
+                    <button
+                        onClick={() => setTool('rectangle')}
+                        className={clsx(
+                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
+                            tool === 'rectangle' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                        )}
+                        title="Rectangle"
+                    >
+                        <Square size={16} />
+                    </button>
+                    <button
+                        onClick={() => setTool('eraser')}
+                        className={clsx(
+                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
+                            tool === 'eraser' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                        )}
+                        title="Eraser"
+                    >
+                        <Eraser size={16} />
+                    </button>
                 </div>
 
-                {/* Center: Main Tools */}
-                <div className="flex items-center gap-1 bg-neutral-700/50 rounded-lg p-1">
-                    {tools.map(t => (
+                <div className="w-px h-8 bg-gray-200" />
+
+                {/* Colors */}
+                <div className="flex gap-1">
+                    {colors.map(c => (
                         <button
-                            key={t.id}
-                            onClick={() => setTool(t.id)}
+                            key={c}
+                            onClick={() => setColor(c)}
                             className={clsx(
-                                "w-9 h-9 rounded-lg flex items-center justify-center transition-all group relative",
-                                tool === t.id
-                                    ? "bg-blue-500 text-white shadow-lg"
-                                    : "text-neutral-400 hover:text-white hover:bg-neutral-600"
+                                "w-6 h-6 rounded-full border-2 transition-transform",
+                                color === c ? "border-blue-500 scale-110" : "border-gray-200 hover:scale-105"
                             )}
-                            title={`${t.name} (${t.shortcut})`}
+                            style={{ backgroundColor: c }}
+                        />
+                    ))}
+                </div>
+
+                <div className="w-px h-8 bg-gray-200" />
+
+                {/* Line widths */}
+                <div className="flex gap-1">
+                    {lineWidths.map(w => (
+                        <button
+                            key={w}
+                            onClick={() => setLineWidth(w)}
+                            className={clsx(
+                                "w-8 h-8 rounded flex items-center justify-center transition-colors",
+                                lineWidth === w ? "bg-gray-200" : "hover:bg-gray-100"
+                            )}
                         >
-                            <t.icon size={18} />
-                            {/* Tooltip */}
-                            <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50">
-                                {t.name} <span className="text-neutral-400">({t.shortcut})</span>
-                            </div>
+                            <div
+                                className="rounded-full bg-gray-800"
+                                style={{ width: w + 2, height: w + 2 }}
+                            />
                         </button>
                     ))}
                 </div>
 
-                {/* Right: Actions */}
-                <div className="flex items-center gap-2">
+                <div className="w-px h-8 bg-gray-200" />
+
+                {/* Undo/Redo */}
+                <div className="flex gap-1">
                     <button
                         onClick={handleUndo}
                         disabled={historyIndex === 0}
-                        className="w-9 h-9 rounded-lg flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-700 disabled:opacity-30 disabled:cursor-not-allowed"
-                        title="Undo (Cmd+Z)"
+                        className="w-9 h-9 rounded flex items-center justify-center hover:bg-gray-100 text-gray-600 disabled:opacity-30"
+                        title="Undo"
                     >
-                        <Undo2 size={18} />
+                        <Undo2 size={16} />
                     </button>
                     <button
                         onClick={handleRedo}
                         disabled={historyIndex === history.length - 1}
-                        className="w-9 h-9 rounded-lg flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-700 disabled:opacity-30 disabled:cursor-not-allowed"
-                        title="Redo (Cmd+Shift+Z)"
+                        className="w-9 h-9 rounded flex items-center justify-center hover:bg-gray-100 text-gray-600 disabled:opacity-30"
+                        title="Redo"
                     >
-                        <Redo2 size={18} />
+                        <Redo2 size={16} />
                     </button>
+                </div>
 
-                    <div className="w-px h-6 bg-neutral-600 mx-1" />
+                <div className="w-px h-8 bg-gray-200" />
 
-                    <button
-                        onClick={handleClear}
-                        className="w-9 h-9 rounded-lg flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-700"
-                        title="Clear All"
-                    >
-                        <RotateCcw size={18} />
-                    </button>
-                    <button
-                        onClick={() => setShowGrid(!showGrid)}
-                        className={clsx(
-                            "w-9 h-9 rounded-lg flex items-center justify-center transition-all",
-                            showGrid ? "bg-blue-500 text-white" : "text-neutral-400 hover:text-white hover:bg-neutral-700"
-                        )}
-                        title="Toggle Grid (G)"
-                    >
-                        <Grid3X3 size={18} />
-                    </button>
-                    <button
-                        onClick={toggleFullscreen}
-                        className="w-9 h-9 rounded-lg flex items-center justify-center text-neutral-400 hover:text-white hover:bg-neutral-700"
-                        title="Toggle Fullscreen"
-                    >
-                        <Maximize2 size={18} />
-                    </button>
-
-                    <div className="w-px h-6 bg-neutral-600 mx-1" />
-
+                {/* Save/Cancel */}
+                <div className="flex gap-2">
                     <button
                         onClick={onCancel}
-                        className="px-4 py-2 text-neutral-400 hover:text-white hover:bg-neutral-700 rounded-lg text-sm font-medium flex items-center gap-2"
+                        className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded text-xs font-bold flex items-center gap-1"
                     >
-                        <X size={16} />
+                        <X size={14} />
                         Cancel
                     </button>
                     <button
                         onClick={handleSave}
-                        className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-bold flex items-center gap-2 shadow-lg"
+                        className="px-3 py-1.5 bg-green-500 text-white rounded text-xs font-bold flex items-center gap-1 hover:bg-green-600"
                     >
-                        <Check size={16} />
+                        <Check size={14} />
                         Save Drawing
                     </button>
                 </div>
             </div>
 
-            {/* Main Canvas Area */}
-            <div className="flex-1 relative overflow-hidden">
-                <canvas
-                    ref={canvasRef}
-                    className={clsx(
-                        "absolute inset-0",
-                        tool === 'text' ? 'cursor-text' :
-                        tool === 'select' ? 'cursor-default' :
-                        tool === 'eraser' ? 'cursor-cell' :
-                        'cursor-crosshair'
-                    )}
-                    onMouseDown={handleMouseDown}
-                    onMouseMove={handleMouseMove}
-                    onMouseUp={handleMouseUp}
-                    onMouseLeave={handleMouseUp}
-                />
-
-                {/* Text Input Overlay */}
-                {textPosition && (
-                    <div
-                        className="absolute z-10"
-                        style={{ left: textPosition.x, top: textPosition.y + 60 }} // +60 for toolbar
-                    >
-                        <input
-                            type="text"
-                            value={textInput}
-                            onChange={(e) => setTextInput(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleTextSubmit();
-                                if (e.key === 'Escape') {
-                                    setTextPosition(null);
-                                    setTextInput('');
-                                }
-                            }}
-                            onBlur={handleTextSubmit}
-                            autoFocus
-                            className="bg-white border-2 border-blue-500 rounded px-2 py-1 text-sm outline-none min-w-[200px]"
-                            style={{ color }}
-                            placeholder="Type your text..."
-                        />
-                    </div>
-                )}
-            </div>
-
-            {/* Left Sidebar - Colors & Stroke */}
-            <div className="absolute left-4 top-1/2 -translate-y-1/2 bg-neutral-800/95 backdrop-blur-sm rounded-xl p-3 border border-neutral-700 shadow-2xl">
-                {/* Colors */}
-                <div className="mb-4">
-                    <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-2 font-bold">Color</div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                        {colors.map(c => (
-                            <button
-                                key={c.value}
-                                onClick={() => setColor(c.value)}
-                                className={clsx(
-                                    "w-7 h-7 rounded-lg border-2 transition-all hover:scale-110",
-                                    color === c.value ? "border-white scale-110 shadow-lg" : "border-transparent"
-                                )}
-                                style={{ backgroundColor: c.value }}
-                                title={c.name}
-                            />
-                        ))}
-                    </div>
-                </div>
-
-                {/* Stroke Width */}
-                <div>
-                    <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-2 font-bold">Stroke</div>
-                    <div className="flex flex-col gap-1">
-                        {lineWidths.map(w => (
-                            <button
-                                key={w.value}
-                                onClick={() => setLineWidth(w.value)}
-                                className={clsx(
-                                    "h-8 rounded-lg flex items-center justify-center gap-2 transition-all px-2",
-                                    lineWidth === w.value
-                                        ? "bg-blue-500 text-white"
-                                        : "text-neutral-400 hover:bg-neutral-700"
-                                )}
-                            >
-                                <div
-                                    className="rounded-full bg-current"
-                                    style={{ width: w.value + 2, height: w.value + 2 }}
-                                />
-                                <span className="text-[10px]">{w.name}</span>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            </div>
-
-            {/* Bottom Help Bar */}
-            <div className="bg-neutral-800 border-t border-neutral-700 px-4 py-2 flex items-center justify-between text-neutral-400 text-xs">
-                <div className="flex items-center gap-4">
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">P</kbd> Pen</span>
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">A</kbd> Arrow</span>
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">R</kbd> Rectangle</span>
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">T</kbd> Text</span>
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">E</kbd> Eraser</span>
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">G</kbd> Grid</span>
-                </div>
-                <div className="flex items-center gap-4">
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">[</kbd><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">]</kbd> Brush Size</span>
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">⌘Z</kbd> Undo</span>
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">⌘S</kbd> Save</span>
-                    <span><kbd className="px-1.5 py-0.5 bg-neutral-700 rounded text-[10px]">Esc</kbd> Cancel</span>
-                </div>
+            {/* Instructions */}
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/80 text-white px-4 py-2 rounded-lg text-xs">
+                Draw on the screen to annotate. Your drawing will be attached to the selected component.
             </div>
         </div>
     );
