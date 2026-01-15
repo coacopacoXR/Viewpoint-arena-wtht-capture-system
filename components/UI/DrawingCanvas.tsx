@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Pencil, Eraser, Undo2, Redo2, Check, X, Circle, Minus, Square, Play, Crosshair } from 'lucide-react';
+import { Pencil, Eraser, Undo2, Redo2, Check, X, Circle, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../store';
 
@@ -10,7 +10,6 @@ interface DrawingCanvasProps {
 }
 
 type Tool = 'pen' | 'eraser' | 'line' | 'circle' | 'rectangle';
-type AnimationPhase = 'init' | 'scanning' | 'framing' | 'ready' | 'drawing';
 
 interface DrawingState {
     paths: Path[];
@@ -28,8 +27,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const setDrawingInteractionActive = useStore(state => state.setDrawingInteractionActive);
     const [isDrawing, setIsDrawing] = useState(false);
-    const [animationPhase, setAnimationPhase] = useState<AnimationPhase>('init');
-    const [scanLinePosition, setScanLinePosition] = useState(0);
+    const [isReady, setIsReady] = useState(false);
     const [tool, setTool] = useState<Tool>('pen');
     const [color, setColor] = useState('#ef4444'); // Red default
     const [lineWidth, setLineWidth] = useState(3);
@@ -39,9 +37,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     // Ref for isArmed check in mouse handlers
     const isArmedRef = useRef(false);
-
-    // Derived state for backward compatibility
-    const isArmed = animationPhase === 'drawing';
 
     const colors = [
         '#ef4444', // red
@@ -59,53 +54,21 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
     // Background image ref for redraw
     const bgImageRef = useRef<HTMLImageElement | null>(null);
 
-    // Dramatic animation sequence: init -> scanning -> framing -> ready -> drawing
+    // Minimal animation: quick fade-in, immediately ready to draw
     useEffect(() => {
-        // Phase 1: Initial flash/capture effect
-        const initTimer = setTimeout(() => {
-            setAnimationPhase('scanning');
-        }, 100);
+        // Short delay for smooth transition, then enable drawing
+        const timer = setTimeout(() => {
+            setIsReady(true);
+            setDrawingInteractionActive(true);
+        }, 150);
 
-        // Phase 2: Scanning line animation
-        const scanTimer = setTimeout(() => {
-            setAnimationPhase('framing');
-        }, 800);
-
-        // Phase 3: Corner brackets frame in
-        const frameTimer = setTimeout(() => {
-            setAnimationPhase('ready');
-        }, 1400);
-
-        return () => {
-            clearTimeout(initTimer);
-            clearTimeout(scanTimer);
-            clearTimeout(frameTimer);
-        };
-    }, []);
-
-    // Animate the scan line during scanning phase
-    useEffect(() => {
-        if (animationPhase === 'scanning') {
-            const interval = setInterval(() => {
-                setScanLinePosition(prev => {
-                    if (prev >= 100) return 100;
-                    return prev + 4;
-                });
-            }, 16);
-            return () => clearInterval(interval);
-        }
-    }, [animationPhase]);
+        return () => clearTimeout(timer);
+    }, [setDrawingInteractionActive]);
 
     // Keep isArmedRef in sync
     useEffect(() => {
-        isArmedRef.current = isArmed;
-    }, [isArmed]);
-
-    // Start drawing mode - lock navigation
-    const handleStartDrawing = useCallback(() => {
-        setAnimationPhase('drawing');
-        setDrawingInteractionActive(true);
-    }, [setDrawingInteractionActive]);
+        isArmedRef.current = isReady;
+    }, [isReady]);
 
     // Cancel drawing mode
     const handleCancel = useCallback(() => {
@@ -287,14 +250,19 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        // Create a clean canvas with just the drawing (no background)
+        // Create export canvas with background + drawing annotations
         const exportCanvas = document.createElement('canvas');
         exportCanvas.width = canvas.width;
         exportCanvas.height = canvas.height;
         const ctx = exportCanvas.getContext('2d');
         if (!ctx) return;
 
-        // Draw all paths
+        // Draw background image (3D view snapshot) if available
+        if (bgImageRef.current) {
+            ctx.drawImage(bgImageRef.current, 0, 0, canvas.width, canvas.height);
+        }
+
+        // Draw all annotation paths on top
         const state = history[historyIndex];
         state.paths.forEach(path => {
             ctx.strokeStyle = path.color;
@@ -334,7 +302,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         const dataUrl = exportCanvas.toDataURL('image/png');
         setDrawingInteractionActive(false);
         onSave(dataUrl);
-    }, [history, historyIndex, onSave]);
+    }, [history, historyIndex, onSave, setDrawingInteractionActive]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -369,65 +337,25 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [handleRedo, handleSave, handleUndo, onCancel]);
 
-    // Check if we're in a phase before 'ready'
-    const isPreReady = animationPhase === 'init' || animationPhase === 'scanning' || animationPhase === 'framing';
-
     return (
         <>
-            {/* Full-screen takeover backdrop with vignette */}
+            {/* Minimal backdrop - simple dark overlay */}
             <div
                 className={clsx(
-                    "fixed inset-0 z-[300] transition-all ease-out",
-                    animationPhase === 'init'
-                        ? "bg-white duration-100"
-                        : animationPhase === 'scanning'
-                            ? "bg-black/70 duration-300"
-                            : animationPhase === 'framing'
-                                ? "bg-black/60 backdrop-blur-sm duration-500"
-                                : animationPhase === 'ready'
-                                    ? "bg-black/50 backdrop-blur-md duration-700"
-                                    : "bg-black/30 backdrop-blur-sm duration-500"
+                    "fixed inset-0 z-[300] transition-opacity duration-150",
+                    isReady ? "bg-black/20" : "bg-black/40"
                 )}
-                style={{
-                    pointerEvents: 'none',
-                    boxShadow: isPreReady ? 'inset 0 0 200px 100px rgba(0,0,0,0.8)' : 'inset 0 0 150px 50px rgba(0,0,0,0.5)'
-                }}
+                style={{ pointerEvents: 'none' }}
             />
 
-            {/* Scan line effect during scanning phase */}
-            {animationPhase === 'scanning' && (
-                <div
-                    className="fixed left-0 right-0 z-[305] h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent"
-                    style={{
-                        top: `${scanLinePosition}%`,
-                        boxShadow: '0 0 20px 5px rgba(34, 211, 238, 0.6), 0 0 60px 10px rgba(34, 211, 238, 0.3)',
-                        transition: 'top 16ms linear'
-                    }}
-                />
-            )}
-
-            {/* Initial flash effect */}
-            <div
-                className={clsx(
-                    "fixed inset-0 z-[304] bg-white pointer-events-none transition-opacity duration-200",
-                    animationPhase === 'init' ? "opacity-80" : "opacity-0"
-                )}
-            />
-
-            {/* Canvas - shows captured screenshot */}
+            {/* Canvas */}
             <canvas
                 ref={canvasRef}
                 className={clsx(
-                    "fixed inset-0 z-[301] transition-all",
-                    animationPhase === 'init'
-                        ? "opacity-0 scale-110 duration-100"
-                        : animationPhase === 'scanning'
-                            ? "opacity-60 scale-100 duration-500 pointer-events-none"
-                            : animationPhase === 'framing'
-                                ? "opacity-80 scale-100 duration-500 pointer-events-none"
-                                : animationPhase === 'ready'
-                                    ? "opacity-90 scale-100 duration-500 pointer-events-none"
-                                    : "opacity-100 scale-100 duration-300 cursor-crosshair pointer-events-auto"
+                    "fixed inset-0 z-[301] transition-opacity duration-150",
+                    isReady
+                        ? "opacity-100 cursor-crosshair pointer-events-auto"
+                        : "opacity-0 pointer-events-none"
                 )}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
@@ -435,335 +363,156 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                 onMouseLeave={handleMouseUp}
             />
 
-            {/* Corner brackets frame overlay */}
+            {/* Minimal toolbar - clean, functional design */}
             <div
                 className={clsx(
-                    "fixed inset-0 z-[302] pointer-events-none transition-all duration-500",
-                    animationPhase === 'framing' || animationPhase === 'ready' ? "opacity-100" : "opacity-0"
-                )}
-            >
-                {/* Top-left bracket */}
-                <div className={clsx(
-                    "absolute top-8 left-8 w-20 h-20 transition-all duration-700",
-                    animationPhase === 'framing' || animationPhase === 'ready'
-                        ? "opacity-100 translate-x-0 translate-y-0"
-                        : "opacity-0 -translate-x-4 -translate-y-4"
-                )}>
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-400 to-transparent"
-                         style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.5)' }} />
-                    <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-cyan-400 to-transparent"
-                         style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.5)' }} />
-                </div>
-                {/* Top-right bracket */}
-                <div className={clsx(
-                    "absolute top-8 right-8 w-20 h-20 transition-all duration-700 delay-75",
-                    animationPhase === 'framing' || animationPhase === 'ready'
-                        ? "opacity-100 translate-x-0 translate-y-0"
-                        : "opacity-0 translate-x-4 -translate-y-4"
-                )}>
-                    <div className="absolute top-0 right-0 w-full h-1 bg-gradient-to-l from-cyan-400 to-transparent"
-                         style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.5)' }} />
-                    <div className="absolute top-0 right-0 w-1 h-full bg-gradient-to-b from-cyan-400 to-transparent"
-                         style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.5)' }} />
-                </div>
-                {/* Bottom-left bracket */}
-                <div className={clsx(
-                    "absolute bottom-8 left-8 w-20 h-20 transition-all duration-700 delay-100",
-                    animationPhase === 'framing' || animationPhase === 'ready'
-                        ? "opacity-100 translate-x-0 translate-y-0"
-                        : "opacity-0 -translate-x-4 translate-y-4"
-                )}>
-                    <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-400 to-transparent"
-                         style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.5)' }} />
-                    <div className="absolute bottom-0 left-0 w-1 h-full bg-gradient-to-t from-cyan-400 to-transparent"
-                         style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.5)' }} />
-                </div>
-                {/* Bottom-right bracket */}
-                <div className={clsx(
-                    "absolute bottom-8 right-8 w-20 h-20 transition-all duration-700 delay-150",
-                    animationPhase === 'framing' || animationPhase === 'ready'
-                        ? "opacity-100 translate-x-0 translate-y-0"
-                        : "opacity-0 translate-x-4 translate-y-4"
-                )}>
-                    <div className="absolute bottom-0 right-0 w-full h-1 bg-gradient-to-l from-cyan-400 to-transparent"
-                         style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.5)' }} />
-                    <div className="absolute bottom-0 right-0 w-1 h-full bg-gradient-to-t from-cyan-400 to-transparent"
-                         style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.5)' }} />
-                </div>
-            </div>
-
-            {/* "DRAWING MODE" title overlay during transition */}
-            <div
-                className={clsx(
-                    "fixed inset-0 z-[303] flex items-center justify-center pointer-events-none transition-all duration-500",
-                    animationPhase === 'scanning' || animationPhase === 'framing'
-                        ? "opacity-100"
-                        : "opacity-0"
-                )}
-            >
-                <div className="text-center">
-                    <div className={clsx(
-                        "flex items-center justify-center gap-4 mb-4 transition-all duration-700",
-                        animationPhase === 'scanning' || animationPhase === 'framing'
-                            ? "opacity-100 scale-100"
-                            : "opacity-0 scale-90"
-                    )}>
-                        <Crosshair
-                            size={40}
-                            className="text-cyan-400"
-                            style={{ filter: 'drop-shadow(0 0 10px rgba(34, 211, 238, 0.8))' }}
-                        />
-                    </div>
-                    <h1
-                        className={clsx(
-                            "text-4xl font-black tracking-[0.3em] text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-white to-cyan-400 transition-all duration-700",
-                            animationPhase === 'scanning' || animationPhase === 'framing'
-                                ? "opacity-100 translate-y-0"
-                                : "opacity-0 translate-y-4"
-                        )}
-                        style={{
-                            textShadow: '0 0 30px rgba(34, 211, 238, 0.5)',
-                            filter: 'drop-shadow(0 0 20px rgba(34, 211, 238, 0.3))'
-                        }}
-                    >
-                        DRAWING MODE
-                    </h1>
-                    <p className={clsx(
-                        "text-cyan-200/60 text-sm mt-2 tracking-widest transition-all duration-700 delay-200",
-                        animationPhase === 'framing' ? "opacity-100" : "opacity-0"
-                    )}>
-                        CAPTURING VIEW...
-                    </p>
-                </div>
-            </div>
-
-            {/* "Start Drawing" prominent center button - shown during 'ready' phase */}
-            <div
-                className={clsx(
-                    "fixed inset-0 z-[306] flex items-center justify-center transition-all duration-500",
-                    animationPhase === 'ready'
-                        ? "opacity-100 pointer-events-auto"
-                        : "opacity-0 pointer-events-none scale-95"
-                )}
-            >
-                <div className="flex flex-col items-center gap-6">
-                    {/* Mode indicator */}
-                    <div className={clsx(
-                        "flex items-center gap-3 px-6 py-2 rounded-full bg-black/40 backdrop-blur-sm border border-cyan-400/30 transition-all duration-500 delay-100",
-                        animationPhase === 'ready' ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4"
-                    )}>
-                        <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"
-                             style={{ boxShadow: '0 0 10px rgba(34, 211, 238, 0.8)' }} />
-                        <span className="text-cyan-400 text-xs font-bold tracking-widest">DRAWING MODE ACTIVE</span>
-                    </div>
-
-                    {/* Main action button */}
-                    <button
-                        onClick={handleStartDrawing}
-                        className={clsx(
-                            "group relative px-12 py-6 rounded-2xl text-white font-bold text-xl",
-                            "bg-gradient-to-br from-cyan-500 via-blue-600 to-purple-600",
-                            "shadow-2xl shadow-cyan-500/30",
-                            "hover:shadow-cyan-500/50 hover:scale-105",
-                            "active:scale-95",
-                            "transition-all duration-300 ease-out",
-                            "flex items-center gap-4"
-                        )}
-                    >
-                        <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center">
-                            <Play size={24} fill="currentColor" />
-                        </div>
-                        <span>Start Drawing</span>
-
-                        {/* Animated ring */}
-                        <div className="absolute inset-0 rounded-2xl border-2 border-white/30 animate-pulse" />
-
-                        {/* Outer glow ring */}
-                        <div
-                            className="absolute -inset-1 rounded-2xl border border-cyan-400/50 animate-ping"
-                            style={{ animationDuration: '2s' }}
-                        />
-                    </button>
-
-                    {/* Instructions */}
-                    <div className="text-center max-w-md">
-                        <p className="text-white/90 text-sm font-medium mb-2">
-                            Draw annotations on the captured 3D view
-                        </p>
-                        <p className="text-white/60 text-xs">
-                            Navigation is locked while drawing. Press ESC to cancel.
-                        </p>
-                    </div>
-
-                    {/* Cancel link */}
-                    <button
-                        onClick={handleCancel}
-                        className="text-white/50 hover:text-white/80 text-sm transition-colors flex items-center gap-2"
-                    >
-                        <X size={14} />
-                        Cancel
-                    </button>
-                </div>
-            </div>
-
-            {/* Toolbar - slides in from top during 'drawing' phase */}
-            <div
-                className={clsx(
-                    "fixed top-4 left-1/2 -translate-x-1/2 z-[307] bg-white/95 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-200 p-3 flex items-center gap-3 transition-all duration-500 ease-out",
-                    animationPhase === 'drawing'
+                    "fixed top-3 left-1/2 -translate-x-1/2 z-[307] bg-neutral-900 rounded-lg px-2 py-1.5 flex items-center gap-1 transition-all duration-150",
+                    isReady
                         ? "opacity-100 pointer-events-auto translate-y-0"
-                        : "opacity-0 pointer-events-none -translate-y-8"
+                        : "opacity-0 pointer-events-none -translate-y-2"
                 )}
             >
                 {/* Tools */}
-                <div className="flex gap-1">
+                <div className="flex">
                     <button
                         onClick={() => setTool('pen')}
                         className={clsx(
-                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
-                            tool === 'pen' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                            "w-8 h-8 rounded flex items-center justify-center transition-colors",
+                            tool === 'pen' ? "bg-white text-neutral-900" : "text-neutral-400 hover:text-white"
                         )}
                         title="Pen"
                     >
-                        <Pencil size={16} />
+                        <Pencil size={14} />
                     </button>
                     <button
                         onClick={() => setTool('line')}
                         className={clsx(
-                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
-                            tool === 'line' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                            "w-8 h-8 rounded flex items-center justify-center transition-colors",
+                            tool === 'line' ? "bg-white text-neutral-900" : "text-neutral-400 hover:text-white"
                         )}
                         title="Line"
                     >
-                        <Minus size={16} />
+                        <Minus size={14} />
                     </button>
                     <button
                         onClick={() => setTool('circle')}
                         className={clsx(
-                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
-                            tool === 'circle' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                            "w-8 h-8 rounded flex items-center justify-center transition-colors",
+                            tool === 'circle' ? "bg-white text-neutral-900" : "text-neutral-400 hover:text-white"
                         )}
                         title="Circle"
                     >
-                        <Circle size={16} />
+                        <Circle size={14} />
                     </button>
                     <button
                         onClick={() => setTool('rectangle')}
                         className={clsx(
-                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
-                            tool === 'rectangle' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                            "w-8 h-8 rounded flex items-center justify-center transition-colors",
+                            tool === 'rectangle' ? "bg-white text-neutral-900" : "text-neutral-400 hover:text-white"
                         )}
                         title="Rectangle"
                     >
-                        <Square size={16} />
+                        <Square size={14} />
                     </button>
                     <button
                         onClick={() => setTool('eraser')}
                         className={clsx(
-                            "w-9 h-9 rounded flex items-center justify-center transition-colors",
-                            tool === 'eraser' ? "bg-blue-500 text-white" : "hover:bg-gray-100 text-gray-600"
+                            "w-8 h-8 rounded flex items-center justify-center transition-colors",
+                            tool === 'eraser' ? "bg-white text-neutral-900" : "text-neutral-400 hover:text-white"
                         )}
                         title="Eraser"
                     >
-                        <Eraser size={16} />
+                        <Eraser size={14} />
                     </button>
                 </div>
 
-                <div className="w-px h-8 bg-gray-200" />
+                <div className="w-px h-6 bg-neutral-700 mx-1" />
 
-                {/* Colors */}
-                <div className="flex gap-1">
+                {/* Colors - compact */}
+                <div className="flex gap-0.5">
                     {colors.map(c => (
                         <button
                             key={c}
                             onClick={() => setColor(c)}
                             className={clsx(
-                                "w-6 h-6 rounded-full border-2 transition-transform",
-                                color === c ? "border-blue-500 scale-110" : "border-gray-200 hover:scale-105"
+                                "w-5 h-5 rounded-sm transition-all",
+                                color === c ? "ring-1 ring-white ring-offset-1 ring-offset-neutral-900" : "opacity-70 hover:opacity-100"
                             )}
                             style={{ backgroundColor: c }}
                         />
                     ))}
                 </div>
 
-                <div className="w-px h-8 bg-gray-200" />
+                <div className="w-px h-6 bg-neutral-700 mx-1" />
 
-                {/* Line widths */}
-                <div className="flex gap-1">
+                {/* Line widths - minimal */}
+                <div className="flex">
                     {lineWidths.map(w => (
                         <button
                             key={w}
                             onClick={() => setLineWidth(w)}
                             className={clsx(
-                                "w-8 h-8 rounded flex items-center justify-center transition-colors",
-                                lineWidth === w ? "bg-gray-200" : "hover:bg-gray-100"
+                                "w-7 h-8 rounded flex items-center justify-center transition-colors",
+                                lineWidth === w ? "bg-neutral-700" : "hover:bg-neutral-800"
                             )}
                         >
                             <div
-                                className="rounded-full bg-gray-800"
-                                style={{ width: w + 2, height: w + 2 }}
+                                className="rounded-full bg-white"
+                                style={{ width: w, height: w }}
                             />
                         </button>
                     ))}
                 </div>
 
-                <div className="w-px h-8 bg-gray-200" />
+                <div className="w-px h-6 bg-neutral-700 mx-1" />
 
                 {/* Undo/Redo */}
-                <div className="flex gap-1">
+                <div className="flex">
                     <button
                         onClick={handleUndo}
                         disabled={historyIndex === 0}
-                        className="w-9 h-9 rounded flex items-center justify-center hover:bg-gray-100 text-gray-600 disabled:opacity-30"
+                        className="w-8 h-8 rounded flex items-center justify-center text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400"
                         title="Undo"
                     >
-                        <Undo2 size={16} />
+                        <Undo2 size={14} />
                     </button>
                     <button
                         onClick={handleRedo}
                         disabled={historyIndex === history.length - 1}
-                        className="w-9 h-9 rounded flex items-center justify-center hover:bg-gray-100 text-gray-600 disabled:opacity-30"
+                        className="w-8 h-8 rounded flex items-center justify-center text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400"
                         title="Redo"
                     >
-                        <Redo2 size={16} />
+                        <Redo2 size={14} />
                     </button>
                 </div>
 
-                <div className="w-px h-8 bg-gray-200" />
+                <div className="w-px h-6 bg-neutral-700 mx-1" />
 
-                {/* Save/Cancel */}
-                <div className="flex gap-2">
-                    <button
-                        onClick={handleCancel}
-                        className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded text-xs font-bold flex items-center gap-1"
-                    >
-                        <X size={14} />
-                        Cancel
-                    </button>
-                    <button
-                        onClick={handleSave}
-                        className="px-3 py-1.5 bg-green-500 text-white rounded text-xs font-bold flex items-center gap-1 hover:bg-green-600"
-                    >
-                        <Check size={14} />
-                        OK
-                    </button>
-                </div>
+                {/* Actions */}
+                <button
+                    onClick={handleCancel}
+                    className="w-8 h-8 rounded flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
+                    title="Cancel (Esc)"
+                >
+                    <X size={14} />
+                </button>
+                <button
+                    onClick={handleSave}
+                    className="w-8 h-8 rounded flex items-center justify-center bg-white text-neutral-900 hover:bg-neutral-200 transition-colors"
+                    title="Save"
+                >
+                    <Check size={14} />
+                </button>
             </div>
 
-            {/* Instructions - shown only during drawing phase */}
+            {/* Minimal status bar */}
             <div
                 className={clsx(
-                    "fixed bottom-6 left-1/2 -translate-x-1/2 z-[307] bg-black/80 backdrop-blur-sm text-white px-6 py-3 rounded-xl text-xs transition-all duration-500",
-                    animationPhase === 'drawing'
-                        ? "opacity-100 translate-y-0"
-                        : "opacity-0 translate-y-4"
+                    "fixed bottom-3 left-1/2 -translate-x-1/2 z-[307] bg-neutral-900 text-neutral-500 px-3 py-1.5 rounded text-[10px] font-mono tracking-wide transition-opacity duration-150",
+                    isReady ? "opacity-100" : "opacity-0"
                 )}
             >
-                <span className="text-white/60">Draw on the screen.</span>{' '}
-                <span className="text-white/80">⌘/Ctrl+Z</span> <span className="text-white/60">undo</span> •{' '}
-                <span className="text-white/80">⇧⌘/Ctrl+Z</span> <span className="text-white/60">redo</span> •{' '}
-                <span className="text-white/80">Esc</span> <span className="text-white/60">cancel</span> •{' '}
-                <span className="text-white/80">OK</span> <span className="text-white/60">save</span>
+                ESC cancel · ⌘Z undo · ⇧⌘Z redo
             </div>
         </>
     );

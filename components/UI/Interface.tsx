@@ -485,12 +485,12 @@ const Interface: React.FC = () => {
       </div>
 
       {/* Comment Mode Indicator */}
-      {commentMode !== 'none' && (
+      {(commentMode === 'placing-comment' || commentMode === 'placing-drawing') && (
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[50] pointer-events-none">
-          <div className="bg-blue-500/90 text-white px-6 py-3 rounded-lg shadow-lg animate-pulse">
+          <div className={`px-6 py-3 rounded-lg shadow-lg animate-pulse ${commentMode === 'placing-drawing' ? 'bg-purple-500/90' : 'bg-blue-500/90'} text-white`}>
             <div className="text-sm font-bold text-center">
               {commentMode === 'placing-comment' && 'Click on the 3D model to place comment'}
-              {commentMode === 'drawing' && 'Drawing mode active'}
+              {commentMode === 'placing-drawing' && 'Click on the 3D model to anchor your drawing'}
             </div>
           </div>
         </div>
