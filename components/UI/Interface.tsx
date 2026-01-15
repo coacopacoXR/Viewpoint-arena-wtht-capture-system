@@ -5,7 +5,7 @@ import {
   SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
   ShieldOff, Shield, Radio, Glasses, MessageSquare, Mic,
-  ChevronDown, ChevronRight
+  ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight
 } from 'lucide-react';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
@@ -82,6 +82,7 @@ const Interface: React.FC = () => {
   const [isSceneTreeExpanded, setIsSceneTreeExpanded] = useState(true);
   const [isSessionSyncExpanded, setIsSessionSyncExpanded] = useState(true);
   const [isFollowersExpanded, setIsFollowersExpanded] = useState(true);
+  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
 
   const unresolvedComments = comments.filter(c => !c.resolved).length;
 
@@ -367,7 +368,10 @@ const Interface: React.FC = () => {
 
       {/* Participants Panel - Positioned to not overlap with right panel */}
       {showParticipants && (
-          <div className="absolute top-28 right-[356px] z-[45] pointer-events-auto w-56 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-lg animate-in fade-in slide-in-from-right-4 duration-200">
+          <div className={clsx(
+            "absolute top-28 z-[45] pointer-events-auto w-56 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-lg animate-in fade-in slide-in-from-right-4 duration-200 transition-all",
+            isRightPanelCollapsed ? "right-20" : "right-[356px]"
+          )}>
               <div className="p-2 border-b border-gray-100 flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider flex items-center gap-2">
                       <Users size={12} /> Participants
@@ -437,51 +441,104 @@ const Interface: React.FC = () => {
       )}
 
       {/* RIGHT PANEL: Mode Switcher + Content */}
-      <div className="absolute right-6 top-20 bottom-20 flex flex-col pointer-events-none z-[40]" style={{ width: '320px' }}>
-        {/* Panel Mode Toggle */}
-        <div className="flex mb-2 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm p-1">
-          <button
-            onClick={() => setRightPanelMode('meeting')}
-            className={clsx(
-              "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all",
-              rightPanelMode === 'meeting'
-                ? "bg-black text-white"
-                : "text-gray-500 hover:bg-gray-100"
-            )}
-          >
-            <Mic size={12} />
-            Meeting Capture
-          </button>
-          <button
-            onClick={() => setRightPanelMode('comments')}
-            className={clsx(
-              "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all relative",
-              rightPanelMode === 'comments'
-                ? "bg-black text-white"
-                : "text-gray-500 hover:bg-gray-100"
-            )}
-          >
-            <MessageSquare size={12} />
-            Comments
-            {unresolvedComments > 0 && (
-              <span className={clsx(
-                "absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold",
-                rightPanelMode === 'comments' ? "bg-white text-black" : "bg-blue-500 text-white"
-              )}>
-                {unresolvedComments}
-              </span>
-            )}
-          </button>
-        </div>
-
-        {/* Panel Content */}
-        <div className="flex-1 min-h-0 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-          {rightPanelMode === 'meeting' ? (
-            <ConversationPanel />
+      <div className={clsx(
+        "absolute right-6 top-20 bottom-20 flex flex-col pointer-events-none z-[40] transition-all duration-300",
+        isRightPanelCollapsed ? "w-12" : "w-[320px]"
+      )}>
+        {/* Collapse Toggle Button */}
+        <button
+          onClick={() => setIsRightPanelCollapsed(!isRightPanelCollapsed)}
+          className="pointer-events-auto mb-2 w-10 h-10 bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all self-end"
+          title={isRightPanelCollapsed ? "Expand panel" : "Collapse panel"}
+        >
+          {isRightPanelCollapsed ? (
+            <PanelRight size={16} className="text-gray-600" />
           ) : (
-            <CommentsPanel />
+            <PanelRightClose size={16} className="text-gray-600" />
           )}
-        </div>
+        </button>
+
+        {/* Panel Content - Hidden when collapsed */}
+        {!isRightPanelCollapsed && (
+          <>
+            {/* Panel Mode Toggle */}
+            <div className="flex mb-2 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm p-1">
+              <button
+                onClick={() => setRightPanelMode('meeting')}
+                className={clsx(
+                  "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all",
+                  rightPanelMode === 'meeting'
+                    ? "bg-black text-white"
+                    : "text-gray-500 hover:bg-gray-100"
+                )}
+              >
+                <Mic size={12} />
+                Meeting Capture
+              </button>
+              <button
+                onClick={() => setRightPanelMode('comments')}
+                className={clsx(
+                  "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all relative",
+                  rightPanelMode === 'comments'
+                    ? "bg-black text-white"
+                    : "text-gray-500 hover:bg-gray-100"
+                )}
+              >
+                <MessageSquare size={12} />
+                Comments
+                {unresolvedComments > 0 && (
+                  <span className={clsx(
+                    "absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold",
+                    rightPanelMode === 'comments' ? "bg-white text-black" : "bg-blue-500 text-white"
+                  )}>
+                    {unresolvedComments}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Panel Content */}
+            <div className="flex-1 min-h-0 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+              {rightPanelMode === 'meeting' ? (
+                <ConversationPanel />
+              ) : (
+                <CommentsPanel />
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Collapsed indicators */}
+        {isRightPanelCollapsed && (
+          <div className="flex flex-col gap-2 pointer-events-auto">
+            {/* Meeting/Comments quick access when collapsed */}
+            <button
+              onClick={() => { setIsRightPanelCollapsed(false); setRightPanelMode('meeting'); }}
+              className={clsx(
+                "w-10 h-10 bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all",
+                rightPanelMode === 'meeting' && "border-black bg-black text-white hover:bg-gray-800"
+              )}
+              title="Meeting Capture"
+            >
+              <Mic size={16} />
+            </button>
+            <button
+              onClick={() => { setIsRightPanelCollapsed(false); setRightPanelMode('comments'); }}
+              className={clsx(
+                "w-10 h-10 bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all relative",
+                rightPanelMode === 'comments' && "border-black bg-black text-white hover:bg-gray-800"
+              )}
+              title="Comments"
+            >
+              <MessageSquare size={16} />
+              {unresolvedComments > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold bg-blue-500 text-white">
+                  {unresolvedComments}
+                </span>
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Comment Mode Indicator */}
@@ -498,7 +555,10 @@ const Interface: React.FC = () => {
       
       {/* OVERLAY: AI View Sliders - Positioned to the left of right panel */}
       {showAIControls && (
-         <div className="absolute top-28 right-[356px] z-[40] pointer-events-auto w-48 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-sm p-2.5 animate-in slide-in-from-right-4">
+         <div className={clsx(
+           "absolute top-28 z-[40] pointer-events-auto w-48 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-sm p-2.5 animate-in slide-in-from-right-4 transition-all",
+           isRightPanelCollapsed ? "right-20" : "right-[356px]"
+         )}>
              <div className="flex items-center gap-2 mb-2 border-b border-gray-100 pb-2">
                  <Sparkles size={12} className="text-purple-600"/>
                  <span className="text-[10px] font-bold text-gray-700">AI Camera Weights</span>
