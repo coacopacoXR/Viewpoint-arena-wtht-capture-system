@@ -341,7 +341,6 @@ const CommentsPanel: React.FC = () => {
         setCapturedScreenshot(screenshot);
         setPendingComment({ x: 0, y: 0.5, z: 0 }, 'view', 'Current View');
         setCommentMode('drawing');
-        setDrawingInteractionActive(false);
         setShowDrawingCanvas(true);
     };
 
@@ -432,7 +431,6 @@ const CommentsPanel: React.FC = () => {
                         setDrawingCanvas(dataUrl);
                         setShowDrawingCanvas(false);
                         setCommentMode('none');
-                        setDrawingInteractionActive(false);
                         // Clear the captured screenshot after saving
                         setCapturedScreenshot(null);
                     }}

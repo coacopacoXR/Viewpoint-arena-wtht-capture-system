@@ -50,7 +50,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     // Background image ref for redraw
     const bgImageRef = useRef<HTMLImageElement | null>(null);
-    const isArmedRef = useRef(false);
 
     // Redraw canvas
     const redraw = useCallback(() => {
@@ -134,13 +133,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         resizeCanvas();
     }, [resizeCanvas]);
 
-    useEffect(() => {
-        isArmedRef.current = isArmed;
-        if (isArmed) {
-            setDrawingInteractionActive(true);
-        }
-    }, [isArmed, setDrawingInteractionActive]);
-
     // Load background image on mount and redraw when it is ready.
     useEffect(() => {
         if (backgroundImage) {
@@ -161,12 +153,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
     }, [resizeCanvas]);
-
-    useEffect(() => {
-        return () => {
-            setDrawingInteractionActive(false);
-        };
-    }, [setDrawingInteractionActive]);
 
     const getCanvasPoint = (e: React.MouseEvent) => {
         const canvas = canvasRef.current;
@@ -286,22 +272,13 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         const dataUrl = exportCanvas.toDataURL('image/png');
         setDrawingInteractionActive(false);
         onSave(dataUrl);
-    }, [history, historyIndex, onSave, setDrawingInteractionActive]);
-
-    const handleCancel = useCallback(() => {
-        setDrawingInteractionActive(false);
-        onCancel();
-    }, [onCancel, setDrawingInteractionActive]);
-
-    const handleStartDrawing = useCallback(() => {
-        setIsArmed(true);
-    }, []);
+    }, [history, historyIndex, onSave]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
                 e.preventDefault();
-                handleCancel();
+                onCancel();
                 return;
             }
 
@@ -328,7 +305,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [handleRedo, handleSave, handleUndo, handleCancel]);
+    }, [handleRedo, handleSave, handleUndo, onCancel]);
 
     return (
         <>
@@ -512,10 +489,8 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
             </div>
 
             {/* Instructions */}
-            <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[303] bg-black/80 text-white px-4 py-2 rounded-lg text-xs pointer-events-none">
-                {isArmed
-                    ? 'Draw on the screen. Use ⌘/Ctrl+Z to undo, ⇧⌘/Ctrl+Z to redo, and Esc to cancel. Press OK to save.'
-                    : 'Adjust your view if needed, then press Start Drawing to begin.'}
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/80 text-white px-4 py-2 rounded-lg text-xs">
+                Draw on the screen. Use ⌘/Ctrl+Z to undo, ⇧⌘/Ctrl+Z to redo, and Esc to cancel. Press OK to save.
             </div>
         </>
     );
