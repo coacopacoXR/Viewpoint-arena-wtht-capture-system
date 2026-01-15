@@ -45,49 +45,8 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     const lineWidths = [2, 4, 6, 8];
 
-    // Initialize canvas with screenshot/background
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        // Set canvas size to viewport
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-
-        if (backgroundImage) {
-            // Load and draw the captured 3D perspective
-            const img = new Image();
-            img.onload = () => {
-                // Draw the background image
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                // Add slight overlay to make drawings more visible
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-            };
-            img.src = backgroundImage;
-        } else {
-            // Fallback: Fill with semi-transparent overlay to show drawing area
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-        }
-    }, [backgroundImage]);
-
     // Background image ref for redraw
     const bgImageRef = useRef<HTMLImageElement | null>(null);
-
-    // Load background image on mount
-    useEffect(() => {
-        if (backgroundImage) {
-            const img = new Image();
-            img.onload = () => {
-                bgImageRef.current = img;
-            };
-            img.src = backgroundImage;
-        }
-    }, [backgroundImage]);
 
     // Redraw canvas
     const redraw = useCallback(() => {
@@ -104,7 +63,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         if (bgImageRef.current) {
             ctx.drawImage(bgImageRef.current, 0, 0, canvas.width, canvas.height);
             // Add slight overlay to make drawings more visible
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         } else {
             ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
@@ -157,11 +116,40 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         });
 
         ctx.globalCompositeOperation = 'source-over';
-    }, [history, historyIndex, currentPath, backgroundImage]);
+    }, [history, historyIndex, currentPath]);
 
-    useEffect(() => {
+    const resizeCanvas = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
         redraw();
     }, [redraw]);
+
+    useEffect(() => {
+        resizeCanvas();
+    }, [resizeCanvas]);
+
+    // Load background image on mount and redraw when it is ready.
+    useEffect(() => {
+        if (backgroundImage) {
+            const img = new Image();
+            img.onload = () => {
+                bgImageRef.current = img;
+                redraw();
+            };
+            img.src = backgroundImage;
+        } else {
+            bgImageRef.current = null;
+            redraw();
+        }
+    }, [backgroundImage, redraw]);
+
+    useEffect(() => {
+        const handleResize = () => resizeCanvas();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [resizeCanvas]);
 
     const getCanvasPoint = (e: React.MouseEvent) => {
         const canvas = canvasRef.current;
@@ -217,19 +205,19 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         setCurrentPath(null);
     };
 
-    const handleUndo = () => {
+    const handleUndo = useCallback(() => {
         if (historyIndex > 0) {
             setHistoryIndex(historyIndex - 1);
         }
-    };
+    }, [historyIndex]);
 
-    const handleRedo = () => {
+    const handleRedo = useCallback(() => {
         if (historyIndex < history.length - 1) {
             setHistoryIndex(historyIndex + 1);
         }
-    };
+    }, [history.length, historyIndex]);
 
-    const handleSave = () => {
+    const handleSave = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
@@ -279,7 +267,40 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
         const dataUrl = exportCanvas.toDataURL('image/png');
         onSave(dataUrl);
-    };
+    }, [history, historyIndex, onSave]);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                onCancel();
+                return;
+            }
+
+            const isModifier = e.metaKey || e.ctrlKey;
+            if (isModifier && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    handleRedo();
+                } else {
+                    handleUndo();
+                }
+            }
+
+            if (isModifier && e.key.toLowerCase() === 'y') {
+                e.preventDefault();
+                handleRedo();
+            }
+
+            if (isModifier && e.key === 'Enter') {
+                e.preventDefault();
+                handleSave();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleRedo, handleSave, handleUndo, onCancel]);
 
     return (
         <div className="fixed inset-0 z-[300] pointer-events-auto">
@@ -425,14 +446,14 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                         className="px-3 py-1.5 bg-green-500 text-white rounded text-xs font-bold flex items-center gap-1 hover:bg-green-600"
                     >
                         <Check size={14} />
-                        Save Drawing
+                        OK
                     </button>
                 </div>
             </div>
 
             {/* Instructions */}
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/80 text-white px-4 py-2 rounded-lg text-xs">
-                Draw on the screen to annotate. Your drawing will be attached to the selected component.
+                Draw on the screen. Use ⌘/Ctrl+Z to undo, ⇧⌘/Ctrl+Z to redo, and Esc to cancel. Press OK to save.
             </div>
         </div>
     );
