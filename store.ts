@@ -219,6 +219,7 @@ interface AppState {
   drawingCanvas: string | null; // Base64 of current drawing
   capturedScreenshot: string | null; // Base64 of captured 3D view for drawing overlay
   drawingInteractionActive: boolean;
+  showDrawingCanvas: boolean; // Whether the drawing canvas overlay is visible
 
   // --- NEW: Panel Mode ---
   rightPanelMode: RightPanelMode;
@@ -286,6 +287,7 @@ interface AppState {
   setDrawingCanvas: (data: string | null) => void;
   setCapturedScreenshot: (data: string | null) => void;
   setDrawingInteractionActive: (active: boolean) => void;
+  setShowDrawingCanvas: (show: boolean) => void;
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode: RightPanelMode) => void;
@@ -348,6 +350,7 @@ export const useStore = create<AppState>((set) => ({
   drawingCanvas: null,
   capturedScreenshot: null,
   drawingInteractionActive: false,
+  showDrawingCanvas: false,
 
   // --- NEW: Panel Mode ---
   rightPanelMode: 'meeting',
@@ -559,6 +562,7 @@ export const useStore = create<AppState>((set) => ({
   setDrawingCanvas: (data) => set({ drawingCanvas: data }),
   setCapturedScreenshot: (data) => set({ capturedScreenshot: data }),
   setDrawingInteractionActive: (active) => set({ drawingInteractionActive: active }),
+  setShowDrawingCanvas: (show) => set({ showDrawingCanvas: show }),
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode) => set({ rightPanelMode: mode }),

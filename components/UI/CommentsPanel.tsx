@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SpatialComment } from '../../types';
-import DrawingCanvas from './DrawingCanvas';
 
 // Comment Input Form
 const CommentInputForm: React.FC<{
@@ -321,11 +320,12 @@ const CommentsPanel: React.FC = () => {
         toggleCommentsExpandedInScene,
         capturedScreenshot,
         setCapturedScreenshot,
-        setDrawingInteractionActive
+        setDrawingInteractionActive,
+        showDrawingCanvas,
+        setShowDrawingCanvas
     } = useStore();
 
     const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all');
-    const [showDrawingCanvas, setShowDrawingCanvas] = useState(false);
 
     const filteredComments = comments.filter(c => {
         if (filter === 'open') return !c.resolved;
@@ -425,25 +425,6 @@ const CommentsPanel: React.FC = () => {
 
     return (
         <div className="h-full flex flex-col">
-            {/* Drawing Canvas Overlay */}
-            {showDrawingCanvas && (
-                <DrawingCanvas
-                    backgroundImage={capturedScreenshot}
-                    onSave={(dataUrl) => {
-                        setDrawingCanvas(dataUrl);
-                        setShowDrawingCanvas(false);
-                        setCommentMode('none');
-                        // Clear the captured screenshot after saving
-                        setCapturedScreenshot(null);
-                    }}
-                    onCancel={() => {
-                        setShowDrawingCanvas(false);
-                        handleCancelPlacement();
-                        setCapturedScreenshot(null);
-                    }}
-                />
-            )}
-
             {/* Header */}
             <div className="p-3 border-b border-gray-100 bg-gray-50/50">
                 <div className="flex items-center justify-between mb-2">

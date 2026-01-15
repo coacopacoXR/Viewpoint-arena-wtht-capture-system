@@ -16,6 +16,7 @@ import SceneTree from './SceneTree';
 import MeetingSummary from './MeetingSummary';
 import DataFlowDrawer from './DataFlowDrawer';
 import ViewConfigExplainer from './ViewConfigExplainer';
+import DrawingCanvas from './DrawingCanvas';
 
 const Button: React.FC<{ 
   active?: boolean; 
@@ -61,7 +62,16 @@ const Interface: React.FC = () => {
     comments,
     commentMode,
     temporarilyDisengagedFromAgentId,
-    resumeFollowingAgent
+    resumeFollowingAgent,
+    showDrawingCanvas,
+    setShowDrawingCanvas,
+    capturedScreenshot,
+    setCapturedScreenshot,
+    setDrawingCanvas,
+    setCommentMode,
+    pendingCommentNodeName,
+    setPendingComment,
+    setDrawingInteractionActive
   } = useStore();
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
@@ -116,6 +126,27 @@ const Interface: React.FC = () => {
   return (
     <div className="w-full h-full p-6 relative pointer-events-none">
       
+      {/* Drawing Canvas Overlay - Rendered at root level to avoid backdrop-filter containing block issues */}
+      {showDrawingCanvas && (
+        <DrawingCanvas
+          backgroundImage={capturedScreenshot}
+          onSave={(dataUrl) => {
+            setDrawingCanvas(dataUrl);
+            setShowDrawingCanvas(false);
+            setCommentMode('none');
+            setCapturedScreenshot(null);
+          }}
+          onCancel={() => {
+            setShowDrawingCanvas(false);
+            setCommentMode('none');
+            setPendingComment(null, null, null);
+            setDrawingCanvas(null);
+            setDrawingInteractionActive(false);
+            setCapturedScreenshot(null);
+          }}
+        />
+      )}
+
       {/* High Z-Index Overlays - Pointer Events Auto handled inside components */}
       <div className="relative z-[200]">
           <MeetingSummary />
