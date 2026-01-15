@@ -331,7 +331,12 @@ const ViewpointCanvas: React.FC = () => {
     <Canvas 
       shadows 
       dpr={[1, 2]} 
-      gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, autoClear: false }}
+      gl={{
+        antialias: true,
+        toneMapping: THREE.ACESFilmicToneMapping,
+        autoClear: false,
+        preserveDrawingBuffer: true
+      }}
     >
       <PerspectiveCamera makeDefault position={[5, 4, 5]} fov={40} />
       
