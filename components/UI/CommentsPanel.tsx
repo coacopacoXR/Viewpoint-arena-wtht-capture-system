@@ -1,9 +1,9 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store';
 import {
-    MessageSquare, Pencil, Plus, X, Check, Send, AtSign,
-    CheckCircle2, Trash2, MoreVertical, Link2, ChevronDown,
-    GripVertical, Maximize2, Minimize2, Eye, EyeOff
+    MessageSquare, Pencil, Plus, X, Send, AtSign,
+    CheckCircle2, Trash2, MoreVertical, Link2,
+    Maximize2, Minimize2
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { SpatialComment } from '../../types';
@@ -14,7 +14,9 @@ const CommentInputForm: React.FC<{
     onSubmit: (content: string, assignees: string[]) => void;
     onCancel: () => void;
     attachedTo: string;
-}> = ({ onSubmit, onCancel, attachedTo }) => {
+    allowEmpty?: boolean;
+    placeholder?: string;
+}> = ({ onSubmit, onCancel, attachedTo, allowEmpty = false, placeholder }) => {
     const [content, setContent] = useState('');
     const [showMentions, setShowMentions] = useState(false);
     const [mentionSearch, setMentionSearch] = useState('');
@@ -57,7 +59,7 @@ const CommentInputForm: React.FC<{
     };
 
     const handleSubmit = () => {
-        if (!content.trim()) return;
+        if (!allowEmpty && !content.trim()) return;
 
         // Extract @mentions
         const mentionRegex = /@(\w+(?:\s\w+)?)/g;
@@ -67,7 +69,8 @@ const CommentInputForm: React.FC<{
             assignees.push(match[1]);
         }
 
-        onSubmit(content, assignees);
+        const finalContent = content.trim() ? content : '';
+        onSubmit(finalContent, assignees);
     };
 
     const filteredParticipants = participants.filter(p =>
@@ -86,7 +89,7 @@ const CommentInputForm: React.FC<{
                     ref={inputRef}
                     value={content}
                     onChange={handleInput}
-                    placeholder="Add a comment... Use @ to mention"
+                    placeholder={placeholder ?? "Add a comment... Use @ to mention"}
                     className="w-full h-20 p-2 border border-gray-200 rounded text-xs resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
                     onKeyDown={(e) => {
                         if (e.key === 'Enter' && e.metaKey) {
@@ -124,7 +127,7 @@ const CommentInputForm: React.FC<{
                 </button>
                 <button
                     onClick={handleSubmit}
-                    disabled={!content.trim()}
+                    disabled={!allowEmpty && !content.trim()}
                     className="px-3 py-1.5 bg-blue-500 text-white rounded text-[10px] font-bold flex items-center gap-1 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     <Send size={10} />
@@ -314,14 +317,13 @@ const CommentsPanel: React.FC = () => {
         drawingCanvas,
         commentsExpandedInScene,
         toggleCommentsExpandedInScene,
-        objectStates,
         capturedScreenshot,
-        setCapturedScreenshot
+        setCapturedScreenshot,
+        setDrawingInteractionActive
     } = useStore();
 
     const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all');
     const [showDrawingCanvas, setShowDrawingCanvas] = useState(false);
-    const [directDrawingMode, setDirectDrawingMode] = useState(false); // Drawing directly on screen
 
     const filteredComments = comments.filter(c => {
         if (filter === 'open') return !c.resolved;
@@ -334,45 +336,13 @@ const CommentsPanel: React.FC = () => {
     };
 
     const handleNewDrawing = () => {
-        // Capture the current 3D view when entering drawing mode
-        const screenshot = captureCanvas();
-        setCapturedScreenshot(screenshot);
-        setCommentMode('placing-drawing');
-    };
-
-    // Direct screen drawing - doesn't require clicking on model first
-    const handleDirectScreenDrawing = () => {
         // Capture the current 3D view before opening drawing canvas
         const screenshot = captureCanvas();
         setCapturedScreenshot(screenshot);
-        setDirectDrawingMode(true);
+        setPendingComment({ x: 0, y: 0.5, z: 0 }, 'view', 'Current View');
+        setCommentMode('drawing');
+        setDrawingInteractionActive(false);
         setShowDrawingCanvas(true);
-    };
-
-    const handleDirectDrawingSave = (dataUrl: string) => {
-        // Get currently selected component, or use a default
-        const selectedNodeId = Object.keys(objectStates).find(key => objectStates[key].selected);
-
-        // Create comment with drawing attached to view (or selected component)
-        const newComment: SpatialComment = {
-            id: Math.random().toString(36).substr(2, 9),
-            type: 'drawing',
-            content: 'Screen annotation',
-            drawingData: dataUrl,
-            author: currentUser,
-            authorColor: currentUserColor,
-            timestamp: Date.now(),
-            position: { x: 0, y: 0.5, z: 0 }, // Default position
-            attachedToNodeId: selectedNodeId || 'view',
-            attachedToNodeName: selectedNodeId ? (objectStates[selectedNodeId] as any)?.name || 'Current View' : 'Current View',
-            assignees: [],
-            resolved: false,
-            linkedToMeeting: false
-        };
-
-        addComment(newComment);
-        setDirectDrawingMode(false);
-        setShowDrawingCanvas(false);
     };
 
     const handleCancelPlacement = () => {
@@ -380,6 +350,7 @@ const CommentsPanel: React.FC = () => {
         setPendingComment(null, null, null);
         setShowDrawingCanvas(false);
         setDrawingCanvas(null);
+        setDrawingInteractionActive(false);
     };
 
     const handleSubmitComment = (content: string, assignees: string[]) => {
@@ -407,11 +378,12 @@ const CommentsPanel: React.FC = () => {
 
     const handleSubmitDrawing = (content: string, assignees: string[]) => {
         if (!pendingCommentPosition || !pendingCommentNodeId || !pendingCommentNodeName || !drawingCanvas) return;
+        const safeContent = content.trim() ? content : 'Drawing annotation';
 
         const newComment: SpatialComment = {
             id: Math.random().toString(36).substr(2, 9),
             type: 'drawing',
-            content,
+            content: safeContent,
             drawingData: drawingCanvas,
             author: currentUser,
             authorColor: currentUserColor,
@@ -450,13 +422,6 @@ const CommentsPanel: React.FC = () => {
         updateComment(comment.id, { linkedToMeeting: true });
     };
 
-    // Effect: When position is set in placing-drawing mode, show drawing canvas
-    useEffect(() => {
-        if (commentMode === 'placing-drawing' && pendingCommentPosition) {
-            setShowDrawingCanvas(true);
-        }
-    }, [commentMode, pendingCommentPosition]);
-
     return (
         <div className="h-full flex flex-col">
             {/* Drawing Canvas Overlay */}
@@ -464,18 +429,15 @@ const CommentsPanel: React.FC = () => {
                 <DrawingCanvas
                     backgroundImage={capturedScreenshot}
                     onSave={(dataUrl) => {
-                        if (directDrawingMode) {
-                            handleDirectDrawingSave(dataUrl);
-                        } else {
-                            setDrawingCanvas(dataUrl);
-                            setShowDrawingCanvas(false);
-                        }
+                        setDrawingCanvas(dataUrl);
+                        setShowDrawingCanvas(false);
+                        setCommentMode('none');
+                        setDrawingInteractionActive(false);
                         // Clear the captured screenshot after saving
                         setCapturedScreenshot(null);
                     }}
                     onCancel={() => {
                         setShowDrawingCanvas(false);
-                        setDirectDrawingMode(false);
                         handleCancelPlacement();
                         setCapturedScreenshot(null);
                     }}
@@ -533,7 +495,7 @@ const CommentsPanel: React.FC = () => {
 
             {/* Action buttons */}
             <div className="p-2 border-b border-gray-100 flex flex-col gap-2">
-                {commentMode === 'none' && !directDrawingMode ? (
+                {commentMode === 'none' ? (
                     <>
                         <div className="flex gap-2">
                             <button
@@ -541,31 +503,24 @@ const CommentsPanel: React.FC = () => {
                                 className="flex-1 px-3 py-2 bg-blue-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 hover:bg-blue-600"
                             >
                                 <Plus size={12} />
-                                New Comment
+                                Comment
                             </button>
                             <button
                                 onClick={handleNewDrawing}
                                 className="flex-1 px-3 py-2 bg-purple-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-1 hover:bg-purple-600"
                             >
                                 <Pencil size={12} />
-                                Attach Drawing
+                                Drawing
                             </button>
                         </div>
-                        {/* Direct Screen Drawing Button */}
-                        <button
-                            onClick={handleDirectScreenDrawing}
-                            className="w-full px-3 py-2 bg-gradient-to-r from-orange-500 to-pink-500 text-white rounded text-[10px] font-bold flex items-center justify-center gap-2 hover:from-orange-600 hover:to-pink-600 shadow-sm"
-                        >
-                            <Pencil size={12} />
-                            Draw on Screen
-                            <span className="text-[8px] bg-white/20 px-1.5 py-0.5 rounded">New</span>
-                        </button>
+                        <div className="text-[10px] text-gray-400 text-center">
+                            Adjust the view to the desired perspective, then press Drawing to annotate the screen.
+                        </div>
                     </>
                 ) : (
                     <div className="flex-1 bg-blue-50 border border-blue-200 rounded p-2 text-center">
                         <div className="text-[10px] text-blue-600 font-bold mb-1">
                             {commentMode === 'placing-comment' ? 'Click on the 3D model to place comment' :
-                             commentMode === 'placing-drawing' ? 'Click on the 3D model to attach drawing' :
                              'Drawing mode active - draw on the screen'}
                         </div>
                         <button
@@ -600,6 +555,8 @@ const CommentsPanel: React.FC = () => {
                             onSubmit={handleSubmitDrawing}
                             onCancel={handleCancelPlacement}
                             attachedTo={pendingCommentNodeName}
+                            allowEmpty
+                            placeholder="Add a note (optional)... Use @ to mention"
                         />
                     </div>
                 </div>

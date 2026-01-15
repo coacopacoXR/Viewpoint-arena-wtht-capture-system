@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Pencil, Eraser, Undo2, Redo2, Check, X, Circle, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
+import { useStore } from '../../store';
 
 interface DrawingCanvasProps {
     onSave: (dataUrl: string) => void;
@@ -24,7 +25,9 @@ interface Path {
 
 const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgroundImage }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const setDrawingInteractionActive = useStore(state => state.setDrawingInteractionActive);
     const [isDrawing, setIsDrawing] = useState(false);
+    const [isArmed, setIsArmed] = useState(false);
     const [tool, setTool] = useState<Tool>('pen');
     const [color, setColor] = useState('#ef4444'); // Red default
     const [lineWidth, setLineWidth] = useState(3);
@@ -45,49 +48,9 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     const lineWidths = [2, 4, 6, 8];
 
-    // Initialize canvas with screenshot/background
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        // Set canvas size to viewport
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-
-        if (backgroundImage) {
-            // Load and draw the captured 3D perspective
-            const img = new Image();
-            img.onload = () => {
-                // Draw the background image
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                // Add slight overlay to make drawings more visible
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-            };
-            img.src = backgroundImage;
-        } else {
-            // Fallback: Fill with semi-transparent overlay to show drawing area
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-        }
-    }, [backgroundImage]);
-
     // Background image ref for redraw
     const bgImageRef = useRef<HTMLImageElement | null>(null);
-
-    // Load background image on mount
-    useEffect(() => {
-        if (backgroundImage) {
-            const img = new Image();
-            img.onload = () => {
-                bgImageRef.current = img;
-            };
-            img.src = backgroundImage;
-        }
-    }, [backgroundImage]);
+    const isArmedRef = useRef(false);
 
     // Redraw canvas
     const redraw = useCallback(() => {
@@ -104,7 +67,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         if (bgImageRef.current) {
             ctx.drawImage(bgImageRef.current, 0, 0, canvas.width, canvas.height);
             // Add slight overlay to make drawings more visible
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         } else {
             ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
@@ -157,11 +120,53 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         });
 
         ctx.globalCompositeOperation = 'source-over';
-    }, [history, historyIndex, currentPath, backgroundImage]);
+    }, [history, historyIndex, currentPath]);
 
-    useEffect(() => {
+    const resizeCanvas = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
         redraw();
     }, [redraw]);
+
+    useEffect(() => {
+        resizeCanvas();
+    }, [resizeCanvas]);
+
+    useEffect(() => {
+        isArmedRef.current = isArmed;
+        if (isArmed) {
+            setDrawingInteractionActive(true);
+        }
+    }, [isArmed, setDrawingInteractionActive]);
+
+    // Load background image on mount and redraw when it is ready.
+    useEffect(() => {
+        if (backgroundImage) {
+            const img = new Image();
+            img.onload = () => {
+                bgImageRef.current = img;
+                redraw();
+            };
+            img.src = backgroundImage;
+        } else {
+            bgImageRef.current = null;
+            redraw();
+        }
+    }, [backgroundImage, redraw]);
+
+    useEffect(() => {
+        const handleResize = () => resizeCanvas();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [resizeCanvas]);
+
+    useEffect(() => {
+        return () => {
+            setDrawingInteractionActive(false);
+        };
+    }, [setDrawingInteractionActive]);
 
     const getCanvasPoint = (e: React.MouseEvent) => {
         const canvas = canvasRef.current;
@@ -176,6 +181,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     const handleMouseDown = (e: React.MouseEvent) => {
         if (e.button !== 0) return;
+        if (!isArmedRef.current) return;
 
         const point = getCanvasPoint(e);
         setIsDrawing(true);
@@ -217,19 +223,19 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         setCurrentPath(null);
     };
 
-    const handleUndo = () => {
+    const handleUndo = useCallback(() => {
         if (historyIndex > 0) {
             setHistoryIndex(historyIndex - 1);
         }
-    };
+    }, [historyIndex]);
 
-    const handleRedo = () => {
+    const handleRedo = useCallback(() => {
         if (historyIndex < history.length - 1) {
             setHistoryIndex(historyIndex + 1);
         }
-    };
+    }, [history.length, historyIndex]);
 
-    const handleSave = () => {
+    const handleSave = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
@@ -278,23 +284,98 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         });
 
         const dataUrl = exportCanvas.toDataURL('image/png');
+        setDrawingInteractionActive(false);
         onSave(dataUrl);
-    };
+    }, [history, historyIndex, onSave, setDrawingInteractionActive]);
+
+    const handleCancel = useCallback(() => {
+        setDrawingInteractionActive(false);
+        onCancel();
+    }, [onCancel, setDrawingInteractionActive]);
+
+    const handleStartDrawing = useCallback(() => {
+        setIsArmed(true);
+    }, []);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                handleCancel();
+                return;
+            }
+
+            const isModifier = e.metaKey || e.ctrlKey;
+            if (isModifier && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    handleRedo();
+                } else {
+                    handleUndo();
+                }
+            }
+
+            if (isModifier && e.key.toLowerCase() === 'y') {
+                e.preventDefault();
+                handleRedo();
+            }
+
+            if (isModifier && e.key === 'Enter') {
+                e.preventDefault();
+                handleSave();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleRedo, handleSave, handleUndo, handleCancel]);
 
     return (
-        <div className="fixed inset-0 z-[300] pointer-events-auto">
+        <>
+            <div className="fixed inset-0 z-[300] bg-black/30 backdrop-blur-sm animate-in fade-in pointer-events-none" />
             {/* Canvas */}
             <canvas
                 ref={canvasRef}
-                className="absolute inset-0 cursor-crosshair"
+                className={clsx(
+                    "fixed inset-0 z-[301] transition-opacity",
+                    isArmed ? "cursor-crosshair pointer-events-auto opacity-100" : "pointer-events-none opacity-90"
+                )}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
             />
 
+            {!isArmed && (
+                <div className="fixed inset-0 z-[302] flex items-center justify-center pointer-events-auto">
+                    <div className="bg-white/90 border border-white/60 rounded-2xl shadow-2xl px-6 py-5 text-center max-w-sm animate-in fade-in zoom-in-95">
+                        <div className="text-sm font-bold text-gray-800 mb-2">Drawing Mode Ready</div>
+                        <div className="text-xs text-gray-600 mb-4">
+                            The current perspective is captured. Click below to start drawing on the full-screen overlay.
+                        </div>
+                        <button
+                            onClick={handleStartDrawing}
+                            className="px-4 py-2 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700"
+                        >
+                            Start Drawing
+                        </button>
+                        <button
+                            onClick={handleCancel}
+                            className="ml-2 px-4 py-2 text-gray-600 rounded text-xs font-bold hover:bg-gray-100"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* Toolbar */}
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white rounded-lg shadow-xl border border-gray-200 p-2 flex items-center gap-3">
+            <div
+                className={clsx(
+                    "fixed top-4 left-1/2 -translate-x-1/2 z-[303] bg-white rounded-lg shadow-xl border border-gray-200 p-2 flex items-center gap-3 transition-opacity",
+                    isArmed ? "opacity-100 pointer-events-auto" : "opacity-50 pointer-events-none"
+                )}
+            >
                 {/* Tools */}
                 <div className="flex gap-1">
                     <button
@@ -414,7 +495,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                 {/* Save/Cancel */}
                 <div className="flex gap-2">
                     <button
-                        onClick={onCancel}
+                        onClick={handleCancel}
                         className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded text-xs font-bold flex items-center gap-1"
                     >
                         <X size={14} />
@@ -425,16 +506,18 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                         className="px-3 py-1.5 bg-green-500 text-white rounded text-xs font-bold flex items-center gap-1 hover:bg-green-600"
                     >
                         <Check size={14} />
-                        Save Drawing
+                        OK
                     </button>
                 </div>
             </div>
 
             {/* Instructions */}
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/80 text-white px-4 py-2 rounded-lg text-xs">
-                Draw on the screen to annotate. Your drawing will be attached to the selected component.
+            <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[303] bg-black/80 text-white px-4 py-2 rounded-lg text-xs pointer-events-none">
+                {isArmed
+                    ? 'Draw on the screen. Use ⌘/Ctrl+Z to undo, ⇧⌘/Ctrl+Z to redo, and Esc to cancel. Press OK to save.'
+                    : 'Adjust your view if needed, then press Start Drawing to begin.'}
             </div>
-        </div>
+        </>
     );
 };
 

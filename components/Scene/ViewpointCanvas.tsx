@@ -79,6 +79,7 @@ const SceneRenderer = () => {
   const agents = useStore(state => state.agents);
   const agentWeights = useStore(state => state.agentWeights);
   const isLaserActive = useStore(state => state.isLaserActive);
+  const drawingInteractionActive = useStore(state => state.drawingInteractionActive);
   const temporarilyDisengagedFromAgentId = useStore(state => state.temporarilyDisengagedFromAgentId);
   const temporarilyDisengageFromAgent = useStore(state => state.temporarilyDisengageFromAgent);
   const resumeFollowingAgent = useStore(state => state.resumeFollowingAgent);
@@ -316,7 +317,7 @@ const SceneRenderer = () => {
       dampingFactor={0.1}
       // Disable controls if User Laser is active (so mouse moves pointer, not camera)
       // Allow controls when temporarily disengaged from POV mode
-      enabled={(viewMode !== ViewMode.POV_AGENT || temporarilyDisengagedFromAgentId !== null) && !isLaserActive}
+      enabled={(viewMode !== ViewMode.POV_AGENT || temporarilyDisengagedFromAgentId !== null) && !isLaserActive && !drawingInteractionActive}
       minDistance={1}
       maxDistance={20}
       onStart={handleCanvasInteractionStart}

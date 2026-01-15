@@ -218,6 +218,7 @@ interface AppState {
   // --- NEW: Drawing State ---
   drawingCanvas: string | null; // Base64 of current drawing
   capturedScreenshot: string | null; // Base64 of captured 3D view for drawing overlay
+  drawingInteractionActive: boolean;
 
   // --- NEW: Panel Mode ---
   rightPanelMode: RightPanelMode;
@@ -284,6 +285,7 @@ interface AppState {
   resolveComment: (id: string) => void;
   setDrawingCanvas: (data: string | null) => void;
   setCapturedScreenshot: (data: string | null) => void;
+  setDrawingInteractionActive: (active: boolean) => void;
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode: RightPanelMode) => void;
@@ -345,6 +347,7 @@ export const useStore = create<AppState>((set) => ({
   // --- NEW: Drawing State ---
   drawingCanvas: null,
   capturedScreenshot: null,
+  drawingInteractionActive: false,
 
   // --- NEW: Panel Mode ---
   rightPanelMode: 'meeting',
@@ -468,7 +471,8 @@ export const useStore = create<AppState>((set) => ({
           comments: [], // Clear comments for new model
           chatHistory: [], // Clear chat for fresh start
           insightCards: [], // Clear insights
-          heatmapValues: {}
+          heatmapValues: {},
+          drawingInteractionActive: false
       };
   }),
 
@@ -482,6 +486,7 @@ export const useStore = create<AppState>((set) => ({
           chatHistory: [],
           insightCards: [],
           heatmapValues: {},
+          drawingInteractionActive: false,
           isImporting: false,
           importedMeshes: null,
           importedSceneTree: null,
@@ -521,7 +526,8 @@ export const useStore = create<AppState>((set) => ({
           pendingCommentNodeId: null,
           pendingCommentNodeName: null,
           drawingCanvas: null,
-          capturedScreenshot: null
+          capturedScreenshot: null,
+          drawingInteractionActive: false
       };
   }),
 
@@ -552,6 +558,7 @@ export const useStore = create<AppState>((set) => ({
 
   setDrawingCanvas: (data) => set({ drawingCanvas: data }),
   setCapturedScreenshot: (data) => set({ capturedScreenshot: data }),
+  setDrawingInteractionActive: (active) => set({ drawingInteractionActive: active }),
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode) => set({ rightPanelMode: mode }),
