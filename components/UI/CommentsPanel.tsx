@@ -318,7 +318,8 @@ const CommentsPanel: React.FC = () => {
         commentsExpandedInScene,
         toggleCommentsExpandedInScene,
         capturedScreenshot,
-        setCapturedScreenshot
+        setCapturedScreenshot,
+        setDrawingInteractionActive
     } = useStore();
 
     const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all');
@@ -348,6 +349,7 @@ const CommentsPanel: React.FC = () => {
         setPendingComment(null, null, null);
         setShowDrawingCanvas(false);
         setDrawingCanvas(null);
+        setDrawingInteractionActive(false);
     };
 
     const handleSubmitComment = (content: string, assignees: string[]) => {

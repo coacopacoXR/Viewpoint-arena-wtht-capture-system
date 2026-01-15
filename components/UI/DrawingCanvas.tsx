@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Pencil, Eraser, Undo2, Redo2, Check, X, Circle, Minus, Square } from 'lucide-react';
 import { clsx } from 'clsx';
+import { useStore } from '../../store';
 
 interface DrawingCanvasProps {
     onSave: (dataUrl: string) => void;
@@ -24,7 +25,9 @@ interface Path {
 
 const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgroundImage }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const setDrawingInteractionActive = useStore(state => state.setDrawingInteractionActive);
     const [isDrawing, setIsDrawing] = useState(false);
+    const [isArmed, setIsArmed] = useState(false);
     const [tool, setTool] = useState<Tool>('pen');
     const [color, setColor] = useState('#ef4444'); // Red default
     const [lineWidth, setLineWidth] = useState(3);
@@ -164,6 +167,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     const handleMouseDown = (e: React.MouseEvent) => {
         if (e.button !== 0) return;
+        if (!isArmedRef.current) return;
 
         const point = getCanvasPoint(e);
         setIsDrawing(true);
@@ -266,6 +270,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         });
 
         const dataUrl = exportCanvas.toDataURL('image/png');
+        setDrawingInteractionActive(false);
         onSave(dataUrl);
     }, [history, historyIndex, onSave]);
 
@@ -303,19 +308,51 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
     }, [handleRedo, handleSave, handleUndo, onCancel]);
 
     return (
-        <div className="fixed inset-0 z-[300] pointer-events-auto">
+        <>
+            <div className="fixed inset-0 z-[300] bg-black/30 backdrop-blur-sm animate-in fade-in pointer-events-none" />
             {/* Canvas */}
             <canvas
                 ref={canvasRef}
-                className="absolute inset-0 cursor-crosshair"
+                className={clsx(
+                    "fixed inset-0 z-[301] transition-opacity",
+                    isArmed ? "cursor-crosshair pointer-events-auto opacity-100" : "pointer-events-none opacity-90"
+                )}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
             />
 
+            {!isArmed && (
+                <div className="fixed inset-0 z-[302] flex items-center justify-center pointer-events-auto">
+                    <div className="bg-white/90 border border-white/60 rounded-2xl shadow-2xl px-6 py-5 text-center max-w-sm animate-in fade-in zoom-in-95">
+                        <div className="text-sm font-bold text-gray-800 mb-2">Drawing Mode Ready</div>
+                        <div className="text-xs text-gray-600 mb-4">
+                            The current perspective is captured. Click below to start drawing on the full-screen overlay.
+                        </div>
+                        <button
+                            onClick={handleStartDrawing}
+                            className="px-4 py-2 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700"
+                        >
+                            Start Drawing
+                        </button>
+                        <button
+                            onClick={handleCancel}
+                            className="ml-2 px-4 py-2 text-gray-600 rounded text-xs font-bold hover:bg-gray-100"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* Toolbar */}
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white rounded-lg shadow-xl border border-gray-200 p-2 flex items-center gap-3">
+            <div
+                className={clsx(
+                    "fixed top-4 left-1/2 -translate-x-1/2 z-[303] bg-white rounded-lg shadow-xl border border-gray-200 p-2 flex items-center gap-3 transition-opacity",
+                    isArmed ? "opacity-100 pointer-events-auto" : "opacity-50 pointer-events-none"
+                )}
+            >
                 {/* Tools */}
                 <div className="flex gap-1">
                     <button
@@ -435,7 +472,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                 {/* Save/Cancel */}
                 <div className="flex gap-2">
                     <button
-                        onClick={onCancel}
+                        onClick={handleCancel}
                         className="px-3 py-1.5 text-gray-600 hover:bg-gray-100 rounded text-xs font-bold flex items-center gap-1"
                     >
                         <X size={14} />
@@ -455,7 +492,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/80 text-white px-4 py-2 rounded-lg text-xs">
                 Draw on the screen. Use ⌘/Ctrl+Z to undo, ⇧⌘/Ctrl+Z to redo, and Esc to cancel. Press OK to save.
             </div>
-        </div>
+        </>
     );
 };
 
