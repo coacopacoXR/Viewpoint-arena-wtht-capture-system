@@ -338,12 +338,8 @@ const CommentsPanel: React.FC = () => {
     };
 
     const handleNewDrawing = () => {
-        // Capture the current 3D view before opening drawing canvas
-        const screenshot = captureCanvas();
-        setCapturedScreenshot(screenshot);
-        setPendingComment({ x: 0, y: 0.5, z: 0 }, 'view', 'Current View');
-        setCommentMode('drawing');
-        setShowDrawingCanvas(true);
+        // First, user selects anchor point on 3D model, then drawing canvas opens
+        setCommentMode('placing-drawing');
     };
 
     const handleCancelPlacement = () => {
@@ -499,14 +495,15 @@ const CommentsPanel: React.FC = () => {
                         </div>
                     </>
                 ) : (
-                    <div className="flex-1 bg-blue-50 border border-blue-200 rounded p-2 text-center">
-                        <div className="text-[10px] text-blue-600 font-bold mb-1">
-                            {commentMode === 'placing-comment' ? 'Click on the 3D model to place comment' :
-                             'Drawing mode active - draw on the screen'}
+                    <div className={`flex-1 border rounded p-2 text-center ${commentMode === 'placing-drawing' ? 'bg-purple-50 border-purple-200' : 'bg-blue-50 border-blue-200'}`}>
+                        <div className={`text-[10px] font-bold mb-1 ${commentMode === 'placing-drawing' ? 'text-purple-600' : 'text-blue-600'}`}>
+                            {commentMode === 'placing-comment' && 'Click on the 3D model to place comment'}
+                            {commentMode === 'placing-drawing' && 'Click on the 3D model to anchor your drawing'}
+                            {commentMode === 'drawing' && 'Drawing mode active - draw on the screen'}
                         </div>
                         <button
                             onClick={handleCancelPlacement}
-                            className="text-[10px] text-blue-500 hover:text-blue-700 flex items-center gap-1 mx-auto"
+                            className={`text-[10px] flex items-center gap-1 mx-auto ${commentMode === 'placing-drawing' ? 'text-purple-500 hover:text-purple-700' : 'text-blue-500 hover:text-blue-700'}`}
                         >
                             <X size={10} />
                             Cancel
