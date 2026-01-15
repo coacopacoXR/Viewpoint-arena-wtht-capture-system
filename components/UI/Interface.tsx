@@ -459,7 +459,6 @@ const Interface: React.FC = () => {
           <div className="bg-blue-500/90 text-white px-6 py-3 rounded-lg shadow-lg animate-pulse">
             <div className="text-sm font-bold text-center">
               {commentMode === 'placing-comment' && 'Click on the 3D model to place comment'}
-              {commentMode === 'placing-drawing' && 'Click on the 3D model to attach drawing'}
               {commentMode === 'drawing' && 'Drawing mode active'}
             </div>
           </div>

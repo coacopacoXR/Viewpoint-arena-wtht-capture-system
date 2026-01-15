@@ -3,7 +3,7 @@ import { Html } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Vector3, Vector2, Raycaster, Group } from 'three';
 import { useStore, getCurrentSceneTree } from '../../store';
-import { MessageSquare, Pencil, Check, X, GripVertical, Link2, ChevronDown, ChevronUp, Maximize2, Minimize2 } from 'lucide-react';
+import { MessageSquare, Check, X, GripVertical, Link2, ChevronDown, ChevronUp, Maximize2, Minimize2 } from 'lucide-react';
 import { SceneNode, SpatialComment } from '../../types';
 
 // Helper to find node name
@@ -238,7 +238,7 @@ const CommentPlacementPreview: React.FC = () => {
     const currentTree = getCurrentSceneTree(activeModelType);
 
     useFrame((state) => {
-        if (commentMode !== 'placing-comment' && commentMode !== 'placing-drawing') return;
+        if (commentMode !== 'placing-comment') return;
 
         // Update raycaster
         raycaster.current.setFromCamera(state.pointer, camera);
@@ -279,7 +279,7 @@ const CommentPlacementPreview: React.FC = () => {
 
     // Handle click to place comment
     React.useEffect(() => {
-        if (commentMode !== 'placing-comment' && commentMode !== 'placing-drawing') return;
+        if (commentMode !== 'placing-comment') return;
 
         const handleClick = (e: MouseEvent) => {
             if (e.button !== 0) return; // Only left click
@@ -322,17 +322,13 @@ const CommentPlacementPreview: React.FC = () => {
         return () => window.removeEventListener('click', handleClick);
     }, [commentMode, camera, scene, setPendingComment, currentTree]);
 
-    if (commentMode !== 'placing-comment' && commentMode !== 'placing-drawing') return null;
+    if (commentMode !== 'placing-comment') return null;
 
     return (
         <group ref={previewRef}>
             <Html center distanceFactor={3}>
                 <div className="w-10 h-10 rounded-full border-4 border-dashed border-blue-400 flex items-center justify-center animate-pulse bg-blue-500/20">
-                    {commentMode === 'placing-drawing' ? (
-                        <Pencil size={16} className="text-blue-400" />
-                    ) : (
-                        <MessageSquare size={16} className="text-blue-400" />
-                    )}
+                    <MessageSquare size={16} className="text-blue-400" />
                 </div>
             </Html>
         </group>
