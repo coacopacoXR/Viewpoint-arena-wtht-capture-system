@@ -225,11 +225,28 @@ const CommentMarker: React.FC<{
     );
 };
 
-// Comment placement preview (shown when placing a new comment)
+// Utility to capture WebGL canvas
+const captureCanvas = (): string | null => {
+    const canvas = Array.from(document.querySelectorAll('canvas')).find(
+        (el) => el.width > 0 && el.height > 0
+    );
+    if (!canvas) return null;
+    try {
+        return canvas.toDataURL('image/png');
+    } catch (e) {
+        console.warn('Failed to capture canvas:', e);
+        return null;
+    }
+};
+
+// Comment placement preview (shown when placing a new comment or drawing)
 const CommentPlacementPreview: React.FC = () => {
     const { camera, scene } = useThree();
     const commentMode = useStore(state => state.commentMode);
     const setPendingComment = useStore(state => state.setPendingComment);
+    const setCommentMode = useStore(state => state.setCommentMode);
+    const setCapturedScreenshot = useStore(state => state.setCapturedScreenshot);
+    const setShowDrawingCanvas = useStore(state => state.setShowDrawingCanvas);
     const activeModelType = useStore(state => state.activeModelType);
     const pendingCommentPosition = useStore(state => state.pendingCommentPosition);
 
@@ -237,8 +254,10 @@ const CommentPlacementPreview: React.FC = () => {
     const previewRef = useRef<Group>(null);
     const currentTree = getCurrentSceneTree(activeModelType);
 
+    const isPlacingMode = commentMode === 'placing-comment' || commentMode === 'placing-drawing';
+
     useFrame((state) => {
-        if (commentMode !== 'placing-comment') return;
+        if (!isPlacingMode) return;
 
         // Update raycaster
         raycaster.current.setFromCamera(state.pointer, camera);
@@ -277,9 +296,9 @@ const CommentPlacementPreview: React.FC = () => {
         }
     });
 
-    // Handle click to place comment
+    // Handle click to place comment or drawing anchor
     React.useEffect(() => {
-        if (commentMode !== 'placing-comment') return;
+        if (!isPlacingMode) return;
 
         const handleClick = (e: MouseEvent) => {
             if (e.button !== 0) return; // Only left click
@@ -313,6 +332,14 @@ const CommentPlacementPreview: React.FC = () => {
                         foundId,
                         foundName
                     );
+
+                    // For drawing mode, capture screenshot and open drawing canvas
+                    if (commentMode === 'placing-drawing') {
+                        const screenshot = captureCanvas();
+                        setCapturedScreenshot(screenshot);
+                        setCommentMode('drawing');
+                        setShowDrawingCanvas(true);
+                    }
                     break;
                 }
             }
@@ -320,15 +347,21 @@ const CommentPlacementPreview: React.FC = () => {
 
         window.addEventListener('click', handleClick);
         return () => window.removeEventListener('click', handleClick);
-    }, [commentMode, camera, scene, setPendingComment, currentTree]);
+    }, [commentMode, isPlacingMode, camera, scene, setPendingComment, setCommentMode, setCapturedScreenshot, setShowDrawingCanvas, currentTree]);
 
-    if (commentMode !== 'placing-comment') return null;
+    if (!isPlacingMode) return null;
+
+    const isDrawingMode = commentMode === 'placing-drawing';
 
     return (
         <group ref={previewRef}>
             <Html center distanceFactor={3}>
-                <div className="w-10 h-10 rounded-full border-4 border-dashed border-blue-400 flex items-center justify-center animate-pulse bg-blue-500/20">
-                    <MessageSquare size={16} className="text-blue-400" />
+                <div className={`w-10 h-10 rounded-full border-4 border-dashed flex items-center justify-center animate-pulse ${isDrawingMode ? 'border-purple-400 bg-purple-500/20' : 'border-blue-400 bg-blue-500/20'}`}>
+                    {isDrawingMode ? (
+                        <Pencil size={16} className="text-purple-400" />
+                    ) : (
+                        <MessageSquare size={16} className="text-blue-400" />
+                    )}
                 </div>
             </Html>
         </group>
