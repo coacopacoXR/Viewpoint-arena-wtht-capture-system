@@ -248,11 +248,12 @@ const CommentPlacementPreview: React.FC = () => {
     const setCapturedScreenshot = useStore(state => state.setCapturedScreenshot);
     const setShowDrawingCanvas = useStore(state => state.setShowDrawingCanvas);
     const activeModelType = useStore(state => state.activeModelType);
+    const importedSceneTree = useStore(state => state.importedSceneTree);
     const pendingCommentPosition = useStore(state => state.pendingCommentPosition);
 
     const raycaster = useRef(new Raycaster());
     const previewRef = useRef<Group>(null);
-    const currentTree = getCurrentSceneTree(activeModelType);
+    const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
 
     const isPlacingMode = commentMode === 'placing-comment' || commentMode === 'placing-drawing';
 

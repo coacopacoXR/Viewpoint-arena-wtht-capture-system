@@ -181,17 +181,18 @@ const SceneRenderer = () => {
        mainCam.position.lerp(posVec.current, 0.02);
        if (controls) controls.target.lerp(targetVec.current, 0.05);
     } 
-    else if (viewMode === ViewMode.POV_AGENT && activeAgentId) {
+    else if (viewMode === ViewMode.POV_AGENT && activeAgentId && !temporarilyDisengagedFromAgentId) {
+        // Only follow agent camera when not temporarily disengaged
         const agentObj = scene.getObjectByName(`Agent-${activeAgentId}`);
         if (agentObj) {
              posVec.current.setFromMatrixPosition(agentObj.matrixWorld);
              posVec.current.y += 0.6; // Align with screen/eye height
-             
+
              mainCam.position.lerp(posVec.current, 0.2);
-             
+
              const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(agentObj.quaternion);
              targetVec.current.copy(posVec.current).add(forward);
-             
+
              if (controls) controls.target.lerp(targetVec.current, 0.2);
         }
     }
@@ -315,9 +316,9 @@ const SceneRenderer = () => {
       ref={controlsRef}
       enableDamping
       dampingFactor={0.1}
-      // Disable controls if User Laser is active (so mouse moves pointer, not camera)
-      // Allow controls when temporarily disengaged from POV mode
-      enabled={(viewMode !== ViewMode.POV_AGENT || temporarilyDisengagedFromAgentId !== null) && !isLaserActive && !drawingInteractionActive}
+      // Always enable controls except for laser/drawing modes
+      // User interaction in POV mode will trigger disengage, then auto-resume after idle
+      enabled={!isLaserActive && !drawingInteractionActive}
       minDistance={1}
       maxDistance={20}
       onStart={handleCanvasInteractionStart}

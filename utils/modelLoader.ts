@@ -15,6 +15,45 @@ export interface ModelImportResult {
 
 const SUPPORTED_EXTENSIONS = ['.glb', '.gltf', '.obj', '.fbx', '.stl'];
 
+const convertToStandardMaterial = (material: THREE.Material): THREE.MeshStandardMaterial => {
+    // If already a MeshStandardMaterial or MeshPhysicalMaterial, just ensure proper settings
+    if (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshPhysicalMaterial) {
+        material.side = THREE.DoubleSide;
+        material.needsUpdate = true;
+        return material as THREE.MeshStandardMaterial;
+    }
+
+    // Create a new MeshStandardMaterial with properties from the original
+    const newMaterial = new THREE.MeshStandardMaterial({
+        side: THREE.DoubleSide,
+        metalness: 0.2,
+        roughness: 0.6
+    });
+
+    // Copy common properties from original material
+    if ('color' in material && material.color instanceof THREE.Color) {
+        newMaterial.color.copy(material.color);
+    }
+    if ('map' in material && material.map) {
+        newMaterial.map = material.map as THREE.Texture;
+    }
+    if ('normalMap' in material && material.normalMap) {
+        newMaterial.normalMap = material.normalMap as THREE.Texture;
+    }
+    if ('opacity' in material) {
+        newMaterial.opacity = material.opacity as number;
+    }
+    if ('transparent' in material) {
+        newMaterial.transparent = material.transparent as boolean;
+    }
+    if ('alphaMap' in material && material.alphaMap) {
+        newMaterial.alphaMap = material.alphaMap as THREE.Texture;
+    }
+
+    newMaterial.needsUpdate = true;
+    return newMaterial;
+};
+
 const ensureMeshMaterial = (mesh: THREE.Mesh) => {
     if (!mesh.material) {
         mesh.material = new THREE.MeshStandardMaterial({
@@ -26,12 +65,27 @@ const ensureMeshMaterial = (mesh: THREE.Mesh) => {
         return;
     }
 
+    // Convert materials to MeshStandardMaterial if they don't respond to lights
     if (Array.isArray(mesh.material)) {
-        mesh.material.forEach(material => {
-            material.side = THREE.DoubleSide;
+        mesh.material = mesh.material.map(mat => {
+            // MeshBasicMaterial and similar don't respond to lights
+            if (mat instanceof THREE.MeshBasicMaterial ||
+                mat instanceof THREE.MeshLambertMaterial ||
+                mat instanceof THREE.MeshPhongMaterial) {
+                return convertToStandardMaterial(mat);
+            }
+            mat.side = THREE.DoubleSide;
+            return mat;
         });
     } else {
-        mesh.material.side = THREE.DoubleSide;
+        // Single material
+        if (mesh.material instanceof THREE.MeshBasicMaterial ||
+            mesh.material instanceof THREE.MeshLambertMaterial ||
+            mesh.material instanceof THREE.MeshPhongMaterial) {
+            mesh.material = convertToStandardMaterial(mesh.material);
+        } else {
+            mesh.material.side = THREE.DoubleSide;
+        }
     }
 };
 
