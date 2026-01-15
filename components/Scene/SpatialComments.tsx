@@ -3,7 +3,7 @@ import { Html } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Vector3, Vector2, Raycaster, Group } from 'three';
 import { useStore, getCurrentSceneTree } from '../../store';
-import { MessageSquare, Check, X, GripVertical, Link2, ChevronDown, ChevronUp, Maximize2, Minimize2 } from 'lucide-react';
+import { MessageSquare, Check, X, GripVertical, Link2, ChevronDown, ChevronUp, Maximize2, Minimize2, Pencil } from 'lucide-react';
 import { SceneNode, SpatialComment } from '../../types';
 
 // Helper to find node name
