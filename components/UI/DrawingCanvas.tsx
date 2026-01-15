@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Pencil, Eraser, Undo2, Redo2, Check, X, Circle, Minus, Square } from 'lucide-react';
+import { Pencil, Eraser, Undo2, Redo2, Check, X, Circle, Minus, Square, Play } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../store';
 
@@ -10,6 +10,7 @@ interface DrawingCanvasProps {
 }
 
 type Tool = 'pen' | 'eraser' | 'line' | 'circle' | 'rectangle';
+type AnimationPhase = 'entering' | 'ready' | 'drawing';
 
 interface DrawingState {
     paths: Path[];
@@ -27,13 +28,19 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const setDrawingInteractionActive = useStore(state => state.setDrawingInteractionActive);
     const [isDrawing, setIsDrawing] = useState(false);
-    const [isArmed, setIsArmed] = useState(false);
+    const [animationPhase, setAnimationPhase] = useState<AnimationPhase>('entering');
     const [tool, setTool] = useState<Tool>('pen');
     const [color, setColor] = useState('#ef4444'); // Red default
     const [lineWidth, setLineWidth] = useState(3);
     const [history, setHistory] = useState<DrawingState[]>([{ paths: [], currentPath: null }]);
     const [historyIndex, setHistoryIndex] = useState(0);
     const [currentPath, setCurrentPath] = useState<Path | null>(null);
+
+    // Ref for isArmed check in mouse handlers
+    const isArmedRef = useRef(false);
+
+    // Derived state for backward compatibility
+    const isArmed = animationPhase === 'drawing';
 
     const colors = [
         '#ef4444', // red
@@ -50,6 +57,33 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     // Background image ref for redraw
     const bgImageRef = useRef<HTMLImageElement | null>(null);
+
+    // Animation sequence: entering -> ready -> drawing
+    useEffect(() => {
+        // Start the entering animation
+        const enterTimer = setTimeout(() => {
+            setAnimationPhase('ready');
+        }, 600); // Wait for initial animation
+
+        return () => clearTimeout(enterTimer);
+    }, []);
+
+    // Keep isArmedRef in sync
+    useEffect(() => {
+        isArmedRef.current = isArmed;
+    }, [isArmed]);
+
+    // Start drawing mode - lock navigation
+    const handleStartDrawing = useCallback(() => {
+        setAnimationPhase('drawing');
+        setDrawingInteractionActive(true);
+    }, [setDrawingInteractionActive]);
+
+    // Cancel drawing mode
+    const handleCancel = useCallback(() => {
+        setDrawingInteractionActive(false);
+        onCancel();
+    }, [setDrawingInteractionActive, onCancel]);
 
     // Redraw canvas
     const redraw = useCallback(() => {
@@ -309,13 +343,29 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     return (
         <>
-            <div className="fixed inset-0 z-[300] bg-black/30 backdrop-blur-sm animate-in fade-in pointer-events-none" />
-            {/* Canvas */}
+            {/* Full-screen takeover backdrop - animates in */}
+            <div
+                className={clsx(
+                    "fixed inset-0 z-[300] transition-all duration-700 ease-out",
+                    animationPhase === 'entering'
+                        ? "bg-black/0"
+                        : animationPhase === 'ready'
+                            ? "bg-black/60 backdrop-blur-md"
+                            : "bg-black/40 backdrop-blur-sm"
+                )}
+                style={{ pointerEvents: 'none' }}
+            />
+
+            {/* Canvas - shows captured screenshot with semi-transparency */}
             <canvas
                 ref={canvasRef}
                 className={clsx(
-                    "fixed inset-0 z-[301] transition-opacity",
-                    isArmed ? "cursor-crosshair pointer-events-auto opacity-100" : "pointer-events-none opacity-90"
+                    "fixed inset-0 z-[301] transition-all duration-500",
+                    animationPhase === 'entering'
+                        ? "opacity-0 scale-95"
+                        : animationPhase === 'ready'
+                            ? "opacity-70 scale-100 pointer-events-none"
+                            : "opacity-100 scale-100 cursor-crosshair pointer-events-auto"
                 )}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
@@ -323,34 +373,66 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                 onMouseLeave={handleMouseUp}
             />
 
-            {!isArmed && (
-                <div className="fixed inset-0 z-[302] flex items-center justify-center pointer-events-auto">
-                    <div className="bg-white/90 border border-white/60 rounded-2xl shadow-2xl px-6 py-5 text-center max-w-sm animate-in fade-in zoom-in-95">
-                        <div className="text-sm font-bold text-gray-800 mb-2">Drawing Mode Ready</div>
-                        <div className="text-xs text-gray-600 mb-4">
-                            The current perspective is captured. Click below to start drawing on the full-screen overlay.
-                        </div>
-                        <button
-                            onClick={handleStartDrawing}
-                            className="px-4 py-2 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700"
-                        >
-                            Start Drawing
-                        </button>
-                        <button
-                            onClick={handleCancel}
-                            className="ml-2 px-4 py-2 text-gray-600 rounded text-xs font-bold hover:bg-gray-100"
-                        >
-                            Cancel
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Toolbar */}
+            {/* "Start Drawing" prominent center button - shown during 'ready' phase */}
             <div
                 className={clsx(
-                    "fixed top-4 left-1/2 -translate-x-1/2 z-[303] bg-white rounded-lg shadow-xl border border-gray-200 p-2 flex items-center gap-3 transition-opacity",
-                    isArmed ? "opacity-100 pointer-events-auto" : "opacity-50 pointer-events-none"
+                    "fixed inset-0 z-[302] flex items-center justify-center transition-all duration-500",
+                    animationPhase === 'ready'
+                        ? "opacity-100 pointer-events-auto"
+                        : "opacity-0 pointer-events-none scale-95"
+                )}
+            >
+                <div className="flex flex-col items-center gap-6">
+                    {/* Main action button */}
+                    <button
+                        onClick={handleStartDrawing}
+                        className={clsx(
+                            "group relative px-12 py-6 rounded-2xl text-white font-bold text-xl",
+                            "bg-gradient-to-br from-blue-500 via-blue-600 to-purple-600",
+                            "shadow-2xl shadow-blue-500/30",
+                            "hover:shadow-blue-500/50 hover:scale-105",
+                            "active:scale-95",
+                            "transition-all duration-300 ease-out",
+                            "flex items-center gap-4"
+                        )}
+                    >
+                        <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center">
+                            <Play size={24} fill="currentColor" />
+                        </div>
+                        <span>Start Drawing</span>
+
+                        {/* Animated ring */}
+                        <div className="absolute inset-0 rounded-2xl border-2 border-white/30 animate-pulse" />
+                    </button>
+
+                    {/* Instructions */}
+                    <div className="text-center max-w-md">
+                        <p className="text-white/90 text-sm font-medium mb-2">
+                            Draw annotations on the captured 3D view
+                        </p>
+                        <p className="text-white/60 text-xs">
+                            Navigation is locked while drawing. Press ESC to cancel.
+                        </p>
+                    </div>
+
+                    {/* Cancel link */}
+                    <button
+                        onClick={handleCancel}
+                        className="text-white/50 hover:text-white/80 text-sm transition-colors flex items-center gap-2"
+                    >
+                        <X size={14} />
+                        Cancel
+                    </button>
+                </div>
+            </div>
+
+            {/* Toolbar - slides in from top during 'drawing' phase */}
+            <div
+                className={clsx(
+                    "fixed top-4 left-1/2 -translate-x-1/2 z-[303] bg-white/95 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-200 p-3 flex items-center gap-3 transition-all duration-500 ease-out",
+                    animationPhase === 'drawing'
+                        ? "opacity-100 pointer-events-auto translate-y-0"
+                        : "opacity-0 pointer-events-none -translate-y-8"
                 )}
             >
                 {/* Tools */}
@@ -488,9 +570,20 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
                 </div>
             </div>
 
-            {/* Instructions */}
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/80 text-white px-4 py-2 rounded-lg text-xs">
-                Draw on the screen. Use ⌘/Ctrl+Z to undo, ⇧⌘/Ctrl+Z to redo, and Esc to cancel. Press OK to save.
+            {/* Instructions - shown only during drawing phase */}
+            <div
+                className={clsx(
+                    "fixed bottom-6 left-1/2 -translate-x-1/2 z-[303] bg-black/80 backdrop-blur-sm text-white px-6 py-3 rounded-xl text-xs transition-all duration-500",
+                    animationPhase === 'drawing'
+                        ? "opacity-100 translate-y-0"
+                        : "opacity-0 translate-y-4"
+                )}
+            >
+                <span className="text-white/60">Draw on the screen.</span>{' '}
+                <span className="text-white/80">⌘/Ctrl+Z</span> <span className="text-white/60">undo</span> •{' '}
+                <span className="text-white/80">⇧⌘/Ctrl+Z</span> <span className="text-white/60">redo</span> •{' '}
+                <span className="text-white/80">Esc</span> <span className="text-white/60">cancel</span> •{' '}
+                <span className="text-white/80">OK</span> <span className="text-white/60">save</span>
             </div>
         </>
     );
