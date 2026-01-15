@@ -1,6 +1,6 @@
 import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { useStore, SYNTH_SCENE_TREE, BICYCLE_SCENE_TREE } from '../../store';
+import { useStore, SYNTH_SCENE_TREE, BICYCLE_SCENE_TREE, getCurrentSceneTree } from '../../store';
 import { InsightType, InsightDetails, SceneNode, DecisionRole, ChatMessage } from '../../types';
 
 // Helper to collect all node names from scene tree
@@ -845,12 +845,15 @@ const DialogueEngine: React.FC = () => {
     const agents = useStore(state => state.agents);
     const pois = useStore(state => state.pois);
     const isPlaying = useStore(state => state.isPlaying);
+    const isPrivacyMode = useStore(state => state.isPrivacyMode);
     const addChatMessage = useStore(state => state.addChatMessage);
     const addInsightCard = useStore(state => state.addInsightCard);
     const requirements = useStore(state => state.requirements);
     const chatHistory = useStore(state => state.chatHistory);
     const activeModelType = useStore(state => state.activeModelType);
     const objectStates = useStore(state => state.objectStates);
+
+    const importedSceneTree = useStore(state => state.importedSceneTree);
 
     const lastSpeakTime = useRef<Record<string, number>>({});
     const messageBuffer = useRef<string[]>([]);
@@ -860,8 +863,8 @@ const DialogueEngine: React.FC = () => {
     // Decision state per component
     const poiDecisionState = useRef<Record<string, "NONE" | "INTERMEDIATE" | "FINAL">>({});
 
-    // Get current scene tree and available component names
-    const currentTree = activeModelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+    // Get current scene tree and available component names (properly handles imported models)
+    const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
     const allComponentNames = useMemo(() => collectNodeNames(currentTree), [currentTree]);
 
     // Get next component in round-robin fashion for structured discussion
@@ -923,7 +926,8 @@ const DialogueEngine: React.FC = () => {
     };
 
     useFrame(() => {
-        if (!isPlaying) return;
+        // Don't generate dialogue when paused or in privacy mode
+        if (!isPlaying || isPrivacyMode) return;
 
         agents.forEach(agent => {
             const now = Date.now();
