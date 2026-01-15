@@ -271,7 +271,7 @@ export interface SpatialComment {
 
 export type CommentMode = 'none' | 'placing-comment' | 'placing-drawing' | 'positioning-drawing' | 'drawing';
 
-// --- STEP IMPORT TYPES ---
+// --- MODEL IMPORT TYPES ---
 
 export interface ImportedModel {
     id: string;

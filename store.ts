@@ -57,7 +57,7 @@ export const SYNTH_SCENE_TREE: SceneNode = {
   ]
 };
 
-// --- BICYCLE SCENE TREE (STEP Import Demo) ---
+// --- BICYCLE SCENE TREE (Import Demo) ---
 export const BICYCLE_SCENE_TREE: SceneNode = {
   id: 'bicycle_assembly', name: 'Urban Commuter Bicycle', type: 'GROUP', children: [
     { id: 'frame_grp', name: 'Frame Assembly', type: 'GROUP', children: [
@@ -205,6 +205,9 @@ interface AppState {
   importedMeshes: Group | null;
   importedSceneTree: SceneNode | null;
   importedFileName: string | null;
+  importedScale: number;
+  importedBaseScale: number;
+  importedBasePosition: Vector3 | null;
 
   // --- NEW: Comments System ---
   comments: SpatialComment[];
@@ -273,9 +276,9 @@ interface AppState {
 
   // --- NEW: Model Import Actions ---
   setActiveModelType: (type: ModelType) => void;
-  importSTEPFile: (fileName: string, fileSize?: number) => void;
   setIsImporting: (importing: boolean) => void;
-  setImportedModel: (meshes: Group, sceneTree: SceneNode, fileName: string) => void;
+  setImportedModel: (meshes: Group, sceneTree: SceneNode, fileName: string, baseScale: number, basePosition: Vector3) => void;
+  setImportedScale: (scale: number) => void;
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode: CommentMode) => void;
@@ -336,6 +339,9 @@ export const useStore = create<AppState>((set) => ({
   importedMeshes: null,
   importedSceneTree: null,
   importedFileName: null,
+  importedScale: 1,
+  importedBaseScale: 1,
+  importedBasePosition: null,
 
   // --- NEW: Comments System ---
   comments: [],
@@ -475,39 +481,27 @@ export const useStore = create<AppState>((set) => ({
           chatHistory: [], // Clear chat for fresh start
           insightCards: [], // Clear insights
           heatmapValues: {},
-          drawingInteractionActive: false
-      };
-  }),
-
-  // Legacy demo import - kept for fallback
-  importSTEPFile: (fileName) => set((state) => {
-      return {
-          activeModelType: 'bicycle' as ModelType,
-          objectStates: initObjectStates(BICYCLE_SCENE_TREE),
-          pois: [],
-          comments: [],
-          chatHistory: [],
-          insightCards: [],
-          heatmapValues: {},
           drawingInteractionActive: false,
-          isImporting: false,
-          importedMeshes: null,
-          importedSceneTree: null,
-          importedFileName: null
+          importedScale: 1,
+          importedBaseScale: 1,
+          importedBasePosition: null
       };
   }),
 
   setIsImporting: (importing) => set({ isImporting: importing }),
 
-  // Real STEP import - sets the parsed meshes and scene tree
-  setImportedModel: (meshes, sceneTree, fileName) => set((state) => {
+  // Real model import - sets the parsed meshes and scene tree
+  setImportedModel: (meshes, sceneTree, fileName, baseScale, basePosition) => set((state) => {
       const partCount = countParts(sceneTree);
-      const modelName = fileName.replace(/\.(step|stp)$/i, '');
+      const modelName = fileName.replace(/\.[^/.]+$/, '');
       return {
           activeModelType: 'imported' as ModelType,
           importedMeshes: meshes,
           importedSceneTree: sceneTree,
           importedFileName: fileName,
+          importedScale: 1,
+          importedBaseScale: baseScale,
+          importedBasePosition: basePosition,
           objectStates: initObjectStates(sceneTree),
           pois: [],
           comments: [],
@@ -533,6 +527,8 @@ export const useStore = create<AppState>((set) => ({
           drawingInteractionActive: false
       };
   }),
+
+  setImportedScale: (scale) => set({ importedScale: scale }),
 
   // --- NEW: Comment Actions ---
   setCommentMode: (mode) => set({ commentMode: mode }),

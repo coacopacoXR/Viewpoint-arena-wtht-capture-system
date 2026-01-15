@@ -3,7 +3,7 @@ import { useStore, getCurrentSceneTree } from '../../store';
 import { SceneNode } from '../../types';
 import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { clsx } from 'clsx';
-import { parseSTEPFile } from '../../utils/stepLoader';
+import { parseModelFile, validateModelFile } from '../../utils/modelLoader';
 
 const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth }) => {
     const objectState = useStore(state => state.objectStates[node.id]);
@@ -92,21 +92,6 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
     );
 };
 
-// Validate STEP file
-const validateFile = (file: File): string | null => {
-    const maxSize = 50 * 1024 * 1024; // 50MB
-    const validExtensions = ['.step', '.stp'];
-    const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
-
-    if (!validExtensions.includes(extension)) {
-        return 'Invalid file type. Please select a .step or .stp file.';
-    }
-    if (file.size > maxSize) {
-        return `File too large. Maximum size is ${maxSize / (1024 * 1024)}MB.`;
-    }
-    return null;
-};
-
 const SceneTree: React.FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const activeModelType = useStore(state => state.activeModelType);
@@ -115,6 +100,8 @@ const SceneTree: React.FC = () => {
     const setImportedModel = useStore(state => state.setImportedModel);
     const importedSceneTree = useStore(state => state.importedSceneTree);
     const importedFileName = useStore(state => state.importedFileName);
+    const importedScale = useStore(state => state.importedScale);
+    const setImportedScale = useStore(state => state.setImportedScale);
     const importSuccess = useStore(state => state.importSuccess);
     const clearImportStatus = useStore(state => state.clearImportStatus);
 
@@ -141,7 +128,7 @@ const SceneTree: React.FC = () => {
         if (!file) return;
 
         // Validate file
-        const error = validateFile(file);
+        const error = validateModelFile(file);
         if (error) {
             setImportError(error);
             if (fileInputRef.current) {
@@ -154,14 +141,14 @@ const SceneTree: React.FC = () => {
         setImportError(null);
 
         try {
-            // Parse the actual STEP file
-            const result = await parseSTEPFile(file);
+            // Parse the uploaded model file
+            const result = await parseModelFile(file);
 
             // Set the imported model in the store
-            setImportedModel(result.meshes, result.sceneTree, result.fileName);
+            setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition);
         } catch (error) {
-            console.error('STEP import error:', error);
-            setImportError(error instanceof Error ? error.message : 'Failed to import STEP file');
+            console.error('Model import error:', error);
+            setImportError(error instanceof Error ? error.message : 'Failed to import model file');
             setIsImporting(false);
         }
 
@@ -191,14 +178,14 @@ const SceneTree: React.FC = () => {
                     <div className="flex items-center gap-1">
                         {(activeModelType === 'bicycle' || activeModelType === 'imported') && (
                             <span className="text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold">
-                                STEP
+                                3D
                             </span>
                         )}
                         <Layers size={12} className="text-gray-400" />
                     </div>
                 </div>
 
-                {/* Import STEP Button */}
+                {/* Import Model Button */}
                 <button
                     onClick={handleImportClick}
                     disabled={isImporting}
@@ -212,12 +199,12 @@ const SceneTree: React.FC = () => {
                     {isImporting ? (
                         <>
                             <Loader2 size={12} className="animate-spin" />
-                            Importing STEP File...
+                            Importing Model...
                         </>
                     ) : (
                         <>
                             <Upload size={12} />
-                            Import STEP File
+                            Import 3D Model
                         </>
                     )}
                 </button>
@@ -225,7 +212,7 @@ const SceneTree: React.FC = () => {
                 <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".step,.stp,.STEP,.STP"
+                    accept=".glb,.gltf,.obj,.fbx,.stl,.GLB,.GLTF,.OBJ,.FBX,.STL"
                     onChange={handleFileChange}
                     className="hidden"
                 />
@@ -235,6 +222,24 @@ const SceneTree: React.FC = () => {
                     <FileBox size={10} />
                     <span className="truncate">{getModelFileName()}</span>
                 </div>
+
+                {activeModelType === 'imported' && (
+                    <div className="mt-2 text-[9px] text-gray-500">
+                        <div className="flex items-center justify-between">
+                            <span className="font-semibold uppercase tracking-wide text-[8px] text-gray-400">Scale</span>
+                            <span className="text-[9px] text-gray-600 font-mono">{importedScale.toFixed(2)}x</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="0.1"
+                            max="10"
+                            step="0.05"
+                            value={importedScale}
+                            onChange={e => setImportedScale(parseFloat(e.target.value))}
+                            className="w-full accent-blue-500"
+                        />
+                    </div>
+                )}
 
                 {/* Import Status Messages */}
                 {importSuccess && (
