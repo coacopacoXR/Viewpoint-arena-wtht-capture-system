@@ -5,6 +5,7 @@ import { Html, Line, Trail } from '@react-three/drei';
 import { AgentState, PointOfInterest, ViewMode, AgentBehaviorState, AgentStyle } from '../../types';
 import { useStore } from '../../store';
 import * as THREE from 'three';
+import { agentOrientations, agentPositions } from '../../lib/vrOrientationBridge';
 
 interface AgentProps {
   initialState: AgentState;
@@ -291,6 +292,16 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
     const finalLerp = isVRAgent ? 0.08 : 0.12;
     groupRef.current.position.lerp(position.current, finalLerp);
     groupRef.current.lookAt(lookAtRef.current);
+
+    // Write orientation to bridge for VRHeadsetTile (separate canvas)
+    const q = groupRef.current.quaternion;
+    let stored = agentOrientations.get(initialState.id);
+    if (!stored) { stored = new THREE.Quaternion(); agentOrientations.set(initialState.id, stored); }
+    stored.copy(q);
+
+    let storedPos = agentPositions.get(initialState.id);
+    if (!storedPos) { storedPos = new THREE.Vector3(); agentPositions.set(initialState.id, storedPos); }
+    storedPos.copy(groupRef.current.position);
   });
 
   const agentColor = initialState.role === 'PRESENTER' ? '#ff4400' : (initialState.role === 'REVIEWER' ? '#0066ff' : '#888');

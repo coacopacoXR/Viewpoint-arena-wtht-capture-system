@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode } from './types';
+import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, BoardroomLayout } from './types';
 import { Vector3, Group } from 'three';
 
 const INITIAL_AGENTS: AgentState[] = [
@@ -302,6 +302,21 @@ interface AppState {
 
   // --- NEW: Import Status Actions ---
   clearImportStatus: () => void;
+
+  // --- BOARDROOM MODE ---
+  isBoardroomMode: boolean;
+  boardroomLayout: BoardroomLayout;
+  boardroomInteractionEnabled: boolean;
+  boardroomLayoutLocked: boolean;
+  boardroomPresenterAgentId: string | 'USER' | null;
+  boardroomTranscriptPermission: boolean;
+
+  toggleBoardroomMode: () => void;
+  setBoardroomLayout: (layout: BoardroomLayout) => void;
+  toggleBoardroomInteraction: () => void;
+  toggleBoardroomLayoutLocked: () => void;
+  setBoardroomPresenter: (id: string | 'USER' | null) => void;
+  toggleBoardroomTranscriptPermission: () => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -577,7 +592,47 @@ export const useStore = create<AppState>((set) => ({
   })),
 
   // --- NEW: Import Status Actions ---
-  clearImportStatus: () => set({ importError: null, importSuccess: null })
+  clearImportStatus: () => set({ importError: null, importSuccess: null }),
+
+  // --- BOARDROOM MODE ---
+  isBoardroomMode: false,
+  boardroomLayout: 'focus' as BoardroomLayout,
+  boardroomInteractionEnabled: false,
+  boardroomLayoutLocked: false,
+  boardroomPresenterAgentId: null,
+  boardroomTranscriptPermission: true,
+
+  toggleBoardroomMode: () => set((state) => {
+    if (!state.isBoardroomMode) {
+      const presenter = state.agents.find(a => a.role === 'PRESENTER');
+      const presId = presenter?.id ?? state.agents[0]?.id ?? null;
+      return {
+        isBoardroomMode: true,
+        boardroomPresenterAgentId: presId,
+        viewMode: presId ? ViewMode.POV_AGENT : state.viewMode,
+        activeAgentId: presId ?? state.activeAgentId,
+        // Clear any stale detach from a previous session
+        temporarilyDisengagedFromAgentId: null,
+      };
+    }
+    return {
+      isBoardroomMode: false,
+      viewMode: ViewMode.FREE,
+      activeAgentId: null,
+      temporarilyDisengagedFromAgentId: null,
+    };
+  }),
+  setBoardroomLayout: (layout) => set({ boardroomLayout: layout }),
+  toggleBoardroomInteraction: () => set((state) => ({ boardroomInteractionEnabled: !state.boardroomInteractionEnabled })),
+  toggleBoardroomLayoutLocked: () => set((state) => ({ boardroomLayoutLocked: !state.boardroomLayoutLocked })),
+  setBoardroomPresenter: (id) => set({
+    boardroomPresenterAgentId: id,
+    activeAgentId: (id && id !== 'USER') ? id : null,
+    viewMode: (id && id !== 'USER') ? ViewMode.POV_AGENT : ViewMode.FREE,
+    // Always clear detach state — prevents stale resume timer overwriting the new pin
+    temporarilyDisengagedFromAgentId: null,
+  }),
+  toggleBoardroomTranscriptPermission: () => set((state) => ({ boardroomTranscriptPermission: !state.boardroomTranscriptPermission })),
 
 }));
 
