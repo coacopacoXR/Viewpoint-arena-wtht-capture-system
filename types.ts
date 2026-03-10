@@ -215,6 +215,9 @@ export interface InsightCard {
   kbRecommendations?: string[];
 }
 
+// --- BOARDROOM TYPES ---
+export type BoardroomLayout = 'focus' | 'gallery';
+
 // --- SCENE GRAPH TYPES ---
 
 export interface SceneNode {

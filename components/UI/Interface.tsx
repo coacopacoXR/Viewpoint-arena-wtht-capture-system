@@ -5,7 +5,8 @@ import {
   SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
   ShieldOff, Shield, Radio, Glasses, MessageSquare, Mic,
-  ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight
+  ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight,
+  MonitorPlay
 } from 'lucide-react';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
@@ -17,6 +18,7 @@ import MeetingSummary from './MeetingSummary';
 import DataFlowDrawer from './DataFlowDrawer';
 import ViewConfigExplainer from './ViewConfigExplainer';
 import DrawingCanvas from './DrawingCanvas';
+import BoardroomShell from './Boardroom/BoardroomShell';
 
 const Button: React.FC<{ 
   active?: boolean; 
@@ -71,7 +73,9 @@ const Interface: React.FC = () => {
     setCommentMode,
     pendingCommentNodeName,
     setPendingComment,
-    setDrawingInteractionActive
+    setDrawingInteractionActive,
+    isBoardroomMode,
+    toggleBoardroomMode
   } = useStore();
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
@@ -158,6 +162,9 @@ const Interface: React.FC = () => {
       <div className="relative z-[100]">
           <DataFlowDrawer isOpen={isDataFlowOpen} onClose={() => setIsDataFlowOpen(false)} />
       </div>
+
+      {/* ── 3D Arena UI — hidden when Boardroom mode is active ── */}
+      {!isBoardroomMode && <>
 
       {/* Header / Meta / Tree */}
       <div className="flex flex-col items-start pointer-events-none z-[30] absolute top-6 left-6 max-h-[90vh]">
@@ -312,6 +319,19 @@ const Interface: React.FC = () => {
                 >
                     {isPrivacyMode ? <ShieldOff size={12} /> : <Shield size={12} />}
                     {isPrivacyMode ? "Privacy On" : "Privacy"}
+                </button>
+
+                {/* Boardroom Mode Toggle */}
+                <button
+                    onClick={toggleBoardroomMode}
+                    className={clsx(
+                        "px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2",
+                        isBoardroomMode
+                            ? "bg-black text-white border-black"
+                            : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400"
+                    )}
+                >
+                    <MonitorPlay size={12} /> Boardroom
                 </button>
 
                 {/* Participants Toggle */}
@@ -705,6 +725,16 @@ const Interface: React.FC = () => {
         </div>
 
       </div>
+
+      </> /* end !isBoardroomMode */}
+
+      {/* Boardroom Mode Overlay — pointer-events-none so transparent area passes events to canvas */}
+      {isBoardroomMode && (
+        <div className="absolute inset-0 z-[150] pointer-events-none">
+          <BoardroomShell />
+        </div>
+      )}
+
     </div>
   );
 };
