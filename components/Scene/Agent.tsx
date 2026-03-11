@@ -304,9 +304,13 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
     storedPos.copy(groupRef.current.position);
   });
 
+  const isBoardroomMode = useStore(state => state.isBoardroomMode);
+
   const agentColor = initialState.role === 'PRESENTER' ? '#ff4400' : (initialState.role === 'REVIEWER' ? '#0066ff' : '#888');
-  
+
   const isPossessed = (viewMode === ViewMode.POV_AGENT && activeAgentId === initialState.id);
+  // In boardroom mode, hide all agents except VR.USER (id=4) — they're represented by boardroom tiles
+  if (isBoardroomMode && !isVRAgent) return null;
   const isVisible = !isPossessed; 
   const isActive = activeAgentId === initialState.id;
   const isSplitTarget = splitScreenTargetId === initialState.id;

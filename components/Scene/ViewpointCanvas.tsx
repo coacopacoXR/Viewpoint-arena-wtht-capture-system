@@ -2,10 +2,12 @@ import React, { Suspense, useRef, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import World from './World';
+import RemoteParticipants from './RemoteParticipant';
 import DialogueEngine from '../System/DialogueEngine';
 import UserLaser from './UserLaser';
 import SpatialComments from './SpatialComments';
 import { useStore } from '../../store';
+import { usePresence } from '../../lib/PresenceContext';
 import { ViewMode } from '../../types';
 import * as THREE from 'three';
 
@@ -70,10 +72,36 @@ const calculateWeightedCameraTarget = (scene: THREE.Scene, agents: any[], weight
   };
 };
 
+// Broadcasts local camera position to PartyKit at ~10fps
+const PresenceBroadcaster: React.FC = () => {
+  const { broadcastPresence } = usePresence();
+  const { camera } = useThree();
+  const lastBroadcast = useRef(0);
+
+  useFrame(() => {
+    const now = Date.now();
+    if (now - lastBroadcast.current < 100) return; // 10fps
+    lastBroadcast.current = now;
+
+    const pos = camera.position;
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    const lookAt = pos.clone().add(forward);
+
+    broadcastPresence(
+      [pos.x, pos.y, pos.z],
+      [lookAt.x, lookAt.y, lookAt.z],
+    );
+  });
+
+  return null;
+};
+
 // Helper component to handle rendering logic (Standard vs Split)
 const SceneRenderer = () => {
   // Use selectors to avoid re-rendering on every store update (like time)
   const viewMode = useStore(state => state.viewMode);
+  const followingRemoteUserId = useStore(state => state.followingRemoteUserId);
+  const { remoteParticipants } = usePresence();
   const activeAgentId = useStore(state => state.activeAgentId);
   const splitScreenTargetId = useStore(state => state.splitScreenTargetId);
   const agents = useStore(state => state.agents);
@@ -173,14 +201,23 @@ const SceneRenderer = () => {
     
     // --- 1. CAMERA MOVEMENT LOGIC (Main View) ---
 
-    if (viewMode === ViewMode.FOLLOW_PRESENTER) {
-       const angle = (elapsedTime * 0.2); 
+    if (followingRemoteUserId) {
+      // Highest priority: follow a remote participant's camera
+      const remote = remoteParticipants.current.get(followingRemoteUserId);
+      if (remote) {
+        posVec.current.set(...remote.position);
+        targetVec.current.set(...remote.lookAt);
+        mainCam.position.lerp(posVec.current, 0.15);
+        if (controls) controls.target.lerp(targetVec.current, 0.15);
+      }
+    } else if (viewMode === ViewMode.FOLLOW_PRESENTER) {
+       const angle = (elapsedTime * 0.2);
        posVec.current.set(Math.sin(angle) * 3.5 * 1.5, 3, Math.cos(angle) * 3.5 * 1.5);
        targetVec.current.set(0, 0, 0);
-       
+
        mainCam.position.lerp(posVec.current, 0.02);
        if (controls) controls.target.lerp(targetVec.current, 0.05);
-    } 
+    }
     else if (viewMode === ViewMode.POV_AGENT && activeAgentId && !temporarilyDisengagedFromAgentId) {
         // Only follow agent camera when not temporarily disengaged
         const agentObj = scene.getObjectByName(`Agent-${activeAgentId}`);
@@ -327,6 +364,51 @@ const SceneRenderer = () => {
   );
 };
 
+// Must be inside Canvas so it has R3F context; reads PresenceContext via hook
+const RemoteParticipantsWrapper: React.FC = () => {
+  const { remoteParticipants } = usePresence();
+  return <RemoteParticipants participantsRef={remoteParticipants} />;
+};
+
+// Renders a glowing dot for each remote user's laser pointer
+const RemoteLasers: React.FC = () => {
+  const { remoteLasers } = usePresence();
+  const groupRef = useRef<THREE.Group>(null);
+
+  useFrame(() => {
+    if (!groupRef.current) return;
+    let i = 0;
+    remoteLasers.current.forEach((pos) => {
+      const child = groupRef.current!.children[i] as THREE.Mesh | undefined;
+      if (child) {
+        if (pos) {
+          child.visible = true;
+          child.position.set(pos[0], pos[1], pos[2]);
+        } else {
+          child.visible = false;
+        }
+      }
+      i++;
+    });
+    // hide extras
+    for (; i < groupRef.current.children.length; i++) {
+      (groupRef.current.children[i] as THREE.Mesh).visible = false;
+    }
+  });
+
+  // Pre-allocate slots (max 8 remote lasers)
+  return (
+    <group ref={groupRef}>
+      {Array.from({ length: 8 }).map((_, idx) => (
+        <mesh key={idx} visible={false}>
+          <sphereGeometry args={[0.035, 8, 8]} />
+          <meshBasicMaterial color="#ff3300" toneMapped={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+};
+
 const ViewpointCanvas: React.FC = () => {
   return (
     <Canvas 
@@ -339,16 +421,19 @@ const ViewpointCanvas: React.FC = () => {
         preserveDrawingBuffer: true
       }}
     >
-      <PerspectiveCamera makeDefault position={[5, 4, 5]} fov={40} />
+      <PerspectiveCamera makeDefault position={[8, 6, 8]} fov={60} />
       
       {/* Systems */}
       <DialogueEngine />
       <UserLaser />
       <SpatialComments />
+      <RemoteLasers />
       <SceneRenderer />
+      <PresenceBroadcaster />
 
       <Suspense fallback={null}>
         <World />
+        <RemoteParticipantsWrapper />
       </Suspense>
     </Canvas>
   );

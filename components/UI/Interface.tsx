@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
+import { usePresence } from '../../lib/PresenceContext';
 import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
 import CommentsPanel from './CommentsPanel';
@@ -19,6 +20,7 @@ import DataFlowDrawer from './DataFlowDrawer';
 import ViewConfigExplainer from './ViewConfigExplainer';
 import DrawingCanvas from './DrawingCanvas';
 import BoardroomShell from './Boardroom/BoardroomShell';
+import BoardroomCountdown from './BoardroomCountdown';
 
 const Button: React.FC<{ 
   active?: boolean; 
@@ -44,7 +46,7 @@ const Button: React.FC<{
 
 const Interface: React.FC = () => {
   const {
-    viewMode, setViewMode,
+    viewMode, setViewMode, followingRemoteUserId, setFollowingRemoteUser,
     showFrustums, toggleFrustums,
     showGaze, toggleGaze,
     showTrails, toggleTrails,
@@ -75,8 +77,12 @@ const Interface: React.FC = () => {
     setPendingComment,
     setDrawingInteractionActive,
     isBoardroomMode,
-    toggleBoardroomMode
+    toggleBoardroomMode,
+    triggerBoardroomEntry,
   } = useStore();
+
+  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, broadcastBoardroomCountdown, broadcastPrivacyMode } = usePresence();
+  const [shareCopied, setShareCopied] = useState(false);
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
@@ -105,10 +111,13 @@ const Interface: React.FC = () => {
   };
 
   const handleLeaderToggle = () => {
-      if (leaderId) {
+      if (leaderId || followingRemoteUserId) {
           setLeader(null);
+          setFollowingRemoteUser(null);
+          broadcastLeaderChange(null);
       } else {
-          setLeader('USER'); 
+          setLeader('USER');
+          broadcastLeaderChange(localUserId);
       }
   };
   
@@ -205,7 +214,7 @@ const Interface: React.FC = () => {
               {isSessionSyncExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
               <Users size={10} />
               Session Sync
-              {leaderId && <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>}
+              {(leaderId || followingRemoteUserId) && <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>}
             </button>
             <div className={clsx(
               "transition-all duration-300 overflow-hidden",
@@ -215,23 +224,32 @@ const Interface: React.FC = () => {
                   onClick={handleLeaderToggle}
                   className={clsx(
                       "w-64 px-3 py-2 rounded text-xs font-mono flex items-center justify-between shadow-sm border transition-all duration-300 group",
-                      leaderId
+                      (leaderId || followingRemoteUserId)
                           ? "bg-indigo-600 text-white border-indigo-600 shadow-indigo-200"
                           : "bg-white/90 backdrop-blur text-gray-600 border-gray-200 hover:border-gray-400"
                   )}
               >
                   <div className="flex items-center gap-2">
-                      <Users size={14} className={leaderId ? "text-white" : "text-gray-400 group-hover:text-gray-600"} />
-                      <span className="font-bold">{leaderId ? "SYNC ACTIVE: LEADING" : "SYNC INACTIVE"}</span>
+                      <Users size={14} className={(leaderId || followingRemoteUserId) ? "text-white" : "text-gray-400 group-hover:text-gray-600"} />
+                      <span className="font-bold">
+                        {followingRemoteUserId
+                          ? `FOLLOWING: ${remoteParticipantList.find(p => p.userId === followingRemoteUserId)?.name ?? '...'}`
+                          : leaderId ? "SYNC ACTIVE: LEADING" : "SYNC INACTIVE"}
+                      </span>
                   </div>
                   <div className={clsx(
                       "w-2 h-2 rounded-full",
-                      leaderId ? "bg-white animate-pulse" : "bg-gray-300"
+                      (leaderId || followingRemoteUserId) ? "bg-white animate-pulse" : "bg-gray-300"
                   )}></div>
               </button>
-              {leaderId && (
+              {leaderId && !followingRemoteUserId && (
                   <div className="w-64 mt-1 px-2 py-1.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] text-indigo-800 leading-tight">
                       You are the session leader. All agents are currently following your viewport formation.
+                  </div>
+              )}
+              {followingRemoteUserId && (
+                  <div className="w-64 mt-1 px-2 py-1.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] text-indigo-800 leading-tight">
+                      Following {remoteParticipantList.find(p => p.userId === followingRemoteUserId)?.name ?? 'remote user'}. Click again to detach.
                   </div>
               )}
             </div>
@@ -309,7 +327,7 @@ const Interface: React.FC = () => {
            <div className="flex items-center gap-2 mb-2">
                 {/* Privacy Mode Toggle */}
                 <button
-                    onClick={togglePrivacyMode}
+                    onClick={() => { togglePrivacyMode(); broadcastPrivacyMode(!isPrivacyMode); }}
                     className={clsx(
                         "px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2",
                         isPrivacyMode
@@ -321,9 +339,28 @@ const Interface: React.FC = () => {
                     {isPrivacyMode ? "Privacy On" : "Privacy"}
                 </button>
 
+                {/* Share link */}
+                <button
+                    onClick={() => {
+                        navigator.clipboard.writeText(window.location.href);
+                        setShareCopied(true);
+                        setTimeout(() => setShareCopied(false), 2000);
+                    }}
+                    className="px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2 bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400"
+                >
+                    <Link size={12} /> {shareCopied ? 'Copied!' : 'Share'}
+                </button>
+
                 {/* Boardroom Mode Toggle */}
                 <button
-                    onClick={toggleBoardroomMode}
+                    onClick={() => {
+                        if (isBoardroomMode) {
+                            toggleBoardroomMode();
+                        } else {
+                            triggerBoardroomEntry();
+                            broadcastBoardroomCountdown();
+                        }
+                    }}
                     className={clsx(
                         "px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2",
                         isBoardroomMode
@@ -396,7 +433,7 @@ const Interface: React.FC = () => {
                   <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider flex items-center gap-2">
                       <Users size={12} /> Participants
                   </span>
-                  <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full font-mono">{agents.length}</span>
+                  <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full font-mono">{agents.length + remoteParticipantList.length}</span>
               </div>
               <div className="p-2 flex flex-col gap-1 max-h-64 overflow-y-auto custom-scrollbar">
                   {agents.map(agent => {
@@ -410,10 +447,12 @@ const Interface: React.FC = () => {
                                       setFollowedAgent(null);
                                       setActiveAgent(null);
                                       setViewMode(ViewMode.FREE);
+                                      broadcastPresenterChange(null);
                                   } else {
                                       setFollowedAgent(agent.id);
                                       setActiveAgent(agent.id);
                                       setViewMode(ViewMode.POV_AGENT);
+                                      broadcastPresenterChange(agent.id);
                                   }
                               }}
                               className={clsx(
@@ -456,6 +495,52 @@ const Interface: React.FC = () => {
                           </button>
                       );
                   })}
+
+                  {/* Remote (real) participants */}
+                  {remoteParticipantList.length > 0 && (
+                      <div className="mt-1 pt-1 border-t border-gray-100">
+                          <div className="text-[8px] uppercase text-gray-400 tracking-wider px-1 mb-1">Live</div>
+                          {remoteParticipantList.map(p => {
+                              const isFollowing = followingRemoteUserId === p.userId;
+                              return (
+                                  <button
+                                      key={p.userId}
+                                      onClick={() => {
+                                          if (isFollowing) {
+                                              setFollowingRemoteUser(null);
+                                              broadcastLeaderChange(null);
+                                          } else {
+                                              // Anti-circular: cannot follow someone who is already following you
+                                              if (leaderId === 'USER' && !followingRemoteUserId) return;
+                                              setFollowingRemoteUser(p.userId);
+                                          }
+                                      }}
+                                      className={clsx(
+                                          "w-full p-2 rounded-lg text-left flex items-center gap-2 transition-all",
+                                          isFollowing
+                                              ? "bg-black text-white shadow-md"
+                                              : "bg-gray-50 hover:bg-gray-100 text-gray-700"
+                                      )}
+                                  >
+                                      <div
+                                          className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[9px] font-bold shadow-sm shrink-0"
+                                          style={{ backgroundColor: p.color }}
+                                      >
+                                          {p.name[0]?.toUpperCase() || '?'}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                          <div className="font-mono text-[10px] font-bold truncate">{p.name}</div>
+                                          <div className={clsx("text-[8px]", isFollowing ? "text-gray-300" : "text-gray-400")}>human</div>
+                                      </div>
+                                      {isFollowing
+                                          ? <div className="text-[8px] bg-white/20 px-1.5 py-0.5 rounded font-bold shrink-0">POV</div>
+                                          : <div className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title="Online" />
+                                      }
+                                  </button>
+                              );
+                          })}
+                      </div>
+                  )}
               </div>
           </div>
       )}
@@ -734,6 +819,9 @@ const Interface: React.FC = () => {
           <BoardroomShell />
         </div>
       )}
+
+      {/* Boardroom countdown — shown to all clients */}
+      <BoardroomCountdown />
 
     </div>
   );

@@ -2,6 +2,7 @@ import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useStore, SYNTH_SCENE_TREE, BICYCLE_SCENE_TREE, getCurrentSceneTree } from '../../store';
 import { InsightType, InsightDetails, SceneNode, DecisionRole, ChatMessage } from '../../types';
+import { usePresence } from '../../lib/PresenceContext';
 
 // Helper to collect all node names from scene tree
 const collectNodeNames = (node: SceneNode, names: string[] = []): string[] => {
@@ -848,6 +849,7 @@ const DialogueEngine: React.FC = () => {
     const isPrivacyMode = useStore(state => state.isPrivacyMode);
     const addChatMessage = useStore(state => state.addChatMessage);
     const addInsightCard = useStore(state => state.addInsightCard);
+    const { broadcastInsightCard } = usePresence();
     const requirements = useStore(state => state.requirements);
     const chatHistory = useStore(state => state.chatHistory);
     const activeModelType = useStore(state => state.activeModelType);
@@ -1078,7 +1080,7 @@ const DialogueEngine: React.FC = () => {
                         affectedReqs.push(requirements[Math.floor(Math.random() * requirements.length)].id);
                     }
 
-                    addInsightCard({
+                    const newCard = {
                         id: Math.random().toString(36).substr(2, 9),
                         agentId,
                         type,
@@ -1089,7 +1091,9 @@ const DialogueEngine: React.FC = () => {
                         sourceMessageIds: sourceIds,
                         details,
                         affectedRequirementIds: affectedReqs
-                    });
+                    };
+                    addInsightCard(newCard);
+                    broadcastInsightCard(newCard);
                 }, 500);
             }
         }

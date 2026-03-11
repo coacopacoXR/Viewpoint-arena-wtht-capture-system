@@ -1,6 +1,12 @@
 import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Grid, Environment, ContactShadows } from '@react-three/drei';
+
+class EnvErrorBoundary extends React.Component<{ children: React.ReactNode }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() { return this.state.failed ? null : this.props.children; }
+}
 import Product from './Product';
 import Bicycle from './Bicycle';
 import ImportedModel from './ImportedModel';
@@ -49,7 +55,9 @@ const World: React.FC = () => {
       <ambientLight intensity={isHeatmap ? 0.2 : 0.7} />
       <pointLight position={[10, 10, 10]} intensity={0.5} castShadow />
       
-      <Environment preset="studio" blur={1} environmentIntensity={isHeatmap ? 0.2 : 1} />
+      <EnvErrorBoundary>
+        <Environment preset="studio" blur={1} environmentIntensity={isHeatmap ? 0.2 : 1} />
+      </EnvErrorBoundary>
 
       {/* Interaction Plane for Mouse Tracking */}
       <mesh visible={false} rotation={[-Math.PI/2, 0, 0]} position={[0, 0.5, 0]} onPointerMove={handlePointerMove}>

@@ -2,12 +2,15 @@ import React, { useRef, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Vector3, Raycaster, Mesh, Group } from 'three';
 import { useStore } from '../../store';
+import { usePresence } from '../../lib/PresenceContext';
 
 const UserLaser: React.FC = () => {
     const { camera, scene } = useThree();
     const isLaserActive = useStore(state => state.isLaserActive);
     const setLaserActive = useStore(state => state.setLaserActive);
     const selectNode = useStore(state => state.selectNode);
+    const { broadcastLaserMove } = usePresence();
+    const lastLaserBroadcast = useRef(0);
 
     const raycaster = useRef(new Raycaster());
     
@@ -33,8 +36,9 @@ const UserLaser: React.FC = () => {
         const handleMouseUp = (e: MouseEvent) => {
             if (e.buttons !== 3) {
                 setLaserActive(false);
+                broadcastLaserMove(null); // tell others laser is off
                 // Clear selection on release
-                selectNode(null); 
+                selectNode(null);
                 lastHitId.current = null;
             }
         };
@@ -134,6 +138,13 @@ const UserLaser: React.FC = () => {
         if (foundId !== lastHitId.current) {
              selectNode(foundId);
              lastHitId.current = foundId;
+        }
+
+        // 6. Broadcast laser position at ~10fps
+        const now = Date.now();
+        if (now - lastLaserBroadcast.current > 100) {
+            lastLaserBroadcast.current = now;
+            broadcastLaserMove([hitPoint.x, hitPoint.y, hitPoint.z]);
         }
     });
 
