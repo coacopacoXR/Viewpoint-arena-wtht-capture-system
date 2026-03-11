@@ -1,10 +1,11 @@
 import React from 'react';
 import {
   Lock, Unlock, MousePointerClick, LayoutGrid,
-  Focus, MessageSquare
+  Focus, MessageSquare, Zap, User
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../../store';
+import { usePresence } from '../../../lib/PresenceContext';
 import { BoardroomLayout } from '../../../types';
 
 const LAYOUTS: { id: BoardroomLayout; label: string; icon: React.ReactNode; desc: string }[] = [
@@ -23,8 +24,18 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
     boardroomLayoutLocked, toggleBoardroomLayoutLocked,
     boardroomPresenterAgentId, setBoardroomPresenter,
     boardroomTranscriptPermission, toggleBoardroomTranscriptPermission,
+    takeoverModeEnabled, setTakeoverModeEnabled,
+    takeoverApprovedUserIds, toggleTakeoverApproval,
+    boardroomLeaderId,
     agents,
   } = useStore();
+
+  const { localUserId, remoteParticipantList } = usePresence();
+  // All participants: local user + remote
+  const allParticipants = [
+    { userId: localUserId, name: 'You' },
+    ...remoteParticipantList,
+  ];
 
   return (
     <div className="fixed top-14 right-4 z-[9999] w-72 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
@@ -153,6 +164,62 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
           </div>
           <Toggle active={boardroomLayoutLocked} color="orange" />
         </button>
+      </div>
+
+      {/* Takeover Mode */}
+      <div className="px-4 py-3 border-t border-white/10">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-1.5">
+            <Zap size={10} className="text-yellow-400" />
+            <span className="text-white/60 text-[10px] uppercase tracking-wider font-bold">Takeover Mode</span>
+          </div>
+          <button
+            onClick={() => setTakeoverModeEnabled(!takeoverModeEnabled)}
+            className={clsx(
+              'flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold border transition-all',
+              takeoverModeEnabled
+                ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
+                : 'bg-white/5 border-white/10 text-white/40 hover:text-white'
+            )}
+          >
+            <Toggle active={takeoverModeEnabled} color="orange" />
+          </button>
+        </div>
+        <p className="text-white/30 text-[9px] mb-2 leading-tight">
+          When on, approved participants auto-claim leadership by moving their camera.
+        </p>
+        {takeoverModeEnabled && (
+          <div className="flex flex-col gap-1">
+            {allParticipants.map(p => {
+              const isApproved = takeoverApprovedUserIds.includes(p.userId);
+              const isLeader = boardroomLeaderId === p.userId;
+              return (
+                <button
+                  key={p.userId}
+                  onClick={() => toggleTakeoverApproval(p.userId)}
+                  className={clsx(
+                    'flex items-center gap-2 px-2 py-1.5 rounded-lg border text-xs transition-all text-left',
+                    isApproved
+                      ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-200'
+                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                  )}
+                >
+                  <User size={10} />
+                  <span className="flex-1 truncate">{p.name}</span>
+                  {isLeader && (
+                    <span className="text-[8px] font-mono text-yellow-400 bg-yellow-500/20 px-1 rounded">LEADER</span>
+                  )}
+                  <div className={clsx(
+                    'w-3 h-3 rounded border shrink-0 flex items-center justify-center',
+                    isApproved ? 'bg-yellow-500 border-yellow-400' : 'bg-transparent border-white/20'
+                  )}>
+                    {isApproved && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

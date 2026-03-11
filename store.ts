@@ -171,6 +171,7 @@ interface AppState {
 
   // Advanced Collaboration Features
   leaderId: string | 'USER' | null;
+  followingRemoteUserId: string | null; // camera + agents locked to a remote participant
   splitScreenTargetId: string | null;
   userInteractionPoint: Vector3;
   isLaserActive: boolean;
@@ -248,6 +249,7 @@ interface AppState {
   registerPOI: (poi: PointOfInterest) => void;
   setActiveAgent: (id: string | null) => void;
   setLeader: (id: string | 'USER' | null) => void;
+  setFollowingRemoteUser: (userId: string | null) => void;
   setSplitScreenTarget: (id: string | null) => void;
   setUserInteractionPoint: (pos: Vector3) => void;
   setLaserActive: (active: boolean) => void;
@@ -304,26 +306,36 @@ interface AppState {
   clearImportStatus: () => void;
 
   // --- BOARDROOM MODE ---
+  boardroomPendingEntry: boolean; // countdown is running, waiting to enter
   isBoardroomMode: boolean;
   boardroomLayout: BoardroomLayout;
   boardroomInteractionEnabled: boolean;
   boardroomLayoutLocked: boolean;
   boardroomPresenterAgentId: string | 'USER' | null;
   boardroomTranscriptPermission: boolean;
+  boardroomLeaderId: string | null; // real person leading (userId)
+  takeoverModeEnabled: boolean;
+  takeoverApprovedUserIds: string[];
 
+  triggerBoardroomEntry: () => void;
+  cancelBoardroomEntry: () => void;
   toggleBoardroomMode: () => void;
   setBoardroomLayout: (layout: BoardroomLayout) => void;
   toggleBoardroomInteraction: () => void;
   toggleBoardroomLayoutLocked: () => void;
   setBoardroomPresenter: (id: string | 'USER' | null) => void;
   toggleBoardroomTranscriptPermission: () => void;
+  setBoardroomLeaderId: (userId: string | null) => void;
+  setTakeoverModeEnabled: (v: boolean) => void;
+  toggleTakeoverApproval: (userId: string) => void;
+  setPrivacyMode: (enabled: boolean) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
   viewMode: ViewMode.FREE,
   representationMode: RepresentationMode.FULL,
-  showFrustums: true,
-  showGaze: true,
+  showFrustums: false,
+  showGaze: false,
   showTrails: false,
   isPlaying: true,
   isMeetingEnded: false,
@@ -334,6 +346,7 @@ export const useStore = create<AppState>((set) => ({
   pois: [],
   activeAgentId: null,
   leaderId: null,
+  followingRemoteUserId: null,
   splitScreenTargetId: null,
   userInteractionPoint: new Vector3(),
   isLaserActive: false,
@@ -398,7 +411,13 @@ export const useStore = create<AppState>((set) => ({
     return { pois: [...state.pois, poi] };
   }),
   setActiveAgent: (id) => set({ activeAgentId: id }),
-  setLeader: (id) => set({ leaderId: id }),
+  setLeader: (id) => set({ leaderId: id, followingRemoteUserId: null }),
+  // Follow a remote user: locks camera and makes agents follow too
+  setFollowingRemoteUser: (userId) => set(
+    userId
+      ? { followingRemoteUserId: userId, leaderId: 'USER', viewMode: ViewMode.FREE, activeAgentId: null }
+      : { followingRemoteUserId: null, leaderId: null }
+  ),
   setSplitScreenTarget: (id) => set({ splitScreenTargetId: id }),
   setUserInteractionPoint: (pos) => set({ userInteractionPoint: pos }),
   setLaserActive: (active) => set({ isLaserActive: active }),
@@ -446,12 +465,13 @@ export const useStore = create<AppState>((set) => ({
   })),
 
   addChatMessage: (msg) => set((state) => ({
-    chatHistory: [...state.chatHistory, msg].slice(-150)
+    chatHistory: [...state.chatHistory, msg].slice(-50)
   })),
-  
-  addInsightCard: (card) => set((state) => ({
-    insightCards: [card, ...state.insightCards]
-  })),
+
+  addInsightCard: (card) => set((state) => {
+    if (state.insightCards.some(c => c.id === card.id)) return state; // deduplicate
+    return { insightCards: [card, ...state.insightCards].slice(0, 15) };
+  }),
 
   updateInsightType: (id, newType) => set((state) => ({
     insightCards: state.insightCards.map(c => c.id === id ? { ...c, type: newType } : c)
@@ -595,28 +615,35 @@ export const useStore = create<AppState>((set) => ({
   clearImportStatus: () => set({ importError: null, importSuccess: null }),
 
   // --- BOARDROOM MODE ---
+  boardroomPendingEntry: false,
   isBoardroomMode: false,
   boardroomLayout: 'focus' as BoardroomLayout,
   boardroomInteractionEnabled: false,
   boardroomLayoutLocked: false,
   boardroomPresenterAgentId: null,
   boardroomTranscriptPermission: true,
+  boardroomLeaderId: null,
+  takeoverModeEnabled: false,
+  takeoverApprovedUserIds: [],
+
+  triggerBoardroomEntry: () => set({ boardroomPendingEntry: true }),
+  cancelBoardroomEntry: () => set({ boardroomPendingEntry: false }),
 
   toggleBoardroomMode: () => set((state) => {
     if (!state.isBoardroomMode) {
-      const presenter = state.agents.find(a => a.role === 'PRESENTER');
-      const presId = presenter?.id ?? state.agents[0]?.id ?? null;
       return {
         isBoardroomMode: true,
-        boardroomPresenterAgentId: presId,
-        viewMode: presId ? ViewMode.POV_AGENT : state.viewMode,
-        activeAgentId: presId ?? state.activeAgentId,
-        // Clear any stale detach from a previous session
+        boardroomPendingEntry: false,
+        viewMode: ViewMode.FREE,
+        activeAgentId: null,
         temporarilyDisengagedFromAgentId: null,
       };
     }
     return {
       isBoardroomMode: false,
+      boardroomPendingEntry: false,
+      boardroomLeaderId: null,
+      followingRemoteUserId: null,
       viewMode: ViewMode.FREE,
       activeAgentId: null,
       temporarilyDisengagedFromAgentId: null,
@@ -633,6 +660,17 @@ export const useStore = create<AppState>((set) => ({
     temporarilyDisengagedFromAgentId: null,
   }),
   toggleBoardroomTranscriptPermission: () => set((state) => ({ boardroomTranscriptPermission: !state.boardroomTranscriptPermission })),
+  setBoardroomLeaderId: (userId) => set({ boardroomLeaderId: userId }),
+  setTakeoverModeEnabled: (v) => set({ takeoverModeEnabled: v }),
+  toggleTakeoverApproval: (userId) => set((state) => {
+    const ids = state.takeoverApprovedUserIds;
+    return {
+      takeoverApprovedUserIds: ids.includes(userId)
+        ? ids.filter(id => id !== userId)
+        : [...ids, userId],
+    };
+  }),
+  setPrivacyMode: (enabled) => set({ isPrivacyMode: enabled }),
 
 }));
 
