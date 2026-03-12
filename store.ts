@@ -283,6 +283,7 @@ interface AppState {
   setImportedScale: (scale: number) => void;
 
   // --- NEW: Comment Actions ---
+  setAllComments: (comments: SpatialComment[]) => void;
   setCommentMode: (mode: CommentMode) => void;
   setPendingComment: (position: { x: number; y: number; z: number } | null, nodeId: string | null, nodeName: string | null) => void;
   addComment: (comment: SpatialComment) => void;
@@ -391,8 +392,8 @@ export const useStore = create<AppState>((set) => ({
   pendingCommentPosition: null,
   pendingCommentNodeId: null,
   pendingCommentNodeName: null,
-  currentUser: 'You',
-  currentUserColor: '#10b981',
+  currentUser: (() => { try { const s = localStorage.getItem('vp_user'); return s ? (JSON.parse(s).name || 'Guest') : 'Guest'; } catch { return 'Guest'; } })(),
+  currentUserColor: (() => { try { const s = localStorage.getItem('vp_user'); return s ? (JSON.parse(s).color || '#10b981') : '#10b981'; } catch { return '#10b981'; } })(),
 
   // --- NEW: Drawing State ---
   drawingCanvas: null,
@@ -580,6 +581,7 @@ export const useStore = create<AppState>((set) => ({
   setImportedScale: (scale) => set({ importedScale: scale }),
 
   // --- NEW: Comment Actions ---
+  setAllComments: (comments) => set({ comments }),
   setCommentMode: (mode) => set({ commentMode: mode }),
 
   setPendingComment: (position, nodeId, nodeName) => set({

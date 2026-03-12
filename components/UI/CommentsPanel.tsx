@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store';
+import { usePresence } from '../../lib/PresenceContext';
 import {
     MessageSquare, Pencil, Plus, X, Send, AtSign,
     CheckCircle2, Trash2, MoreVertical, Link2,
@@ -325,6 +326,8 @@ const CommentsPanel: React.FC = () => {
         setShowDrawingCanvas
     } = useStore();
 
+    const { broadcastCommentAdd, broadcastCommentUpdate, broadcastCommentDelete, broadcastCommentResolve } = usePresence();
+
     const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all');
 
     const filteredComments = comments.filter(c => {
@@ -369,6 +372,7 @@ const CommentsPanel: React.FC = () => {
         };
 
         addComment(newComment);
+        broadcastCommentAdd(newComment);
         setCommentMode('none');
         setPendingComment(null, null, null);
     };
@@ -394,6 +398,7 @@ const CommentsPanel: React.FC = () => {
         };
 
         addComment(newComment);
+        broadcastCommentAdd(newComment);
         setCommentMode('none');
         setPendingComment(null, null, null);
         setShowDrawingCanvas(false);
@@ -402,10 +407,12 @@ const CommentsPanel: React.FC = () => {
 
     const handleResolve = (id: string) => {
         resolveComment(id);
+        broadcastCommentResolve(id);
     };
 
     const handleDelete = (id: string) => {
         deleteComment(id);
+        broadcastCommentDelete(id);
     };
 
     const handleLinkToMeeting = (comment: SpatialComment) => {
@@ -417,6 +424,7 @@ const CommentsPanel: React.FC = () => {
             timestamp: Date.now()
         });
         updateComment(comment.id, { linkedToMeeting: true });
+        broadcastCommentUpdate(comment.id, { linkedToMeeting: true });
     };
 
     return (

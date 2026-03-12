@@ -27,7 +27,12 @@ type RoomMessage =
   | { type: 'TAKEOVER_SYNC'; payload: { enabled: boolean; approvedUserIds: string[] } }
   | { type: 'PRESENTER_REQUEST'; payload: { fromUserId: string; fromName: string } }
   | { type: 'TAKEOVER_ATTEMPT'; payload: { userId: string } }
-  | { type: 'PRESENTER_CHANGED'; payload: { userId: string } };
+  | { type: 'PRESENTER_CHANGED'; payload: { userId: string } }
+  | { type: 'COMMENT_ADD'; payload: { comment: any } }
+  | { type: 'COMMENT_UPDATE'; payload: { id: string; updates: Record<string, any> } }
+  | { type: 'COMMENT_DELETE'; payload: { id: string } }
+  | { type: 'COMMENT_RESOLVE'; payload: { id: string } }
+  | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } };
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
 
@@ -38,6 +43,10 @@ export default class RoomServer implements Party.Server {
   // Server-authoritative presenter tracking for takeover mode
   currentPresenter: string | null = null;
   lastPresenterChange = 0;
+  // Persisted model state for late joiners
+  currentModel: { modelType: string; fileBase64?: string; fileName?: string } | null = null;
+  // Persisted spatial comments for late joiners
+  comments: any[] = [];
 
   constructor(readonly room: Party.Room) {}
 
@@ -55,6 +64,10 @@ export default class RoomServer implements Party.Server {
       type: 'HOST_CHANGE',
       payload: { hostId: this.computeHost() },
     } as RoomMessage));
+    if (this.currentModel) {
+      conn.send(JSON.stringify({ type: 'MODEL_CHANGE', payload: this.currentModel } as RoomMessage));
+    }
+    conn.send(JSON.stringify({ type: 'COMMENT_ROSTER', payload: { comments: this.comments } } as RoomMessage));
   }
 
   onMessage(message: string, sender: Party.Connection) {
@@ -107,6 +120,33 @@ export default class RoomServer implements Party.Server {
       }
       // If cooldown active or already presenter, silently ignore
 
+    } else if (msg.type === 'MODEL_CHANGE') {
+      this.currentModel = msg.payload;
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
+    } else if (msg.type === 'COMMENT_ADD') {
+      this.comments.push(msg.payload.comment);
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
+    } else if (msg.type === 'COMMENT_UPDATE') {
+      const { id, updates } = msg.payload;
+      const idx = this.comments.findIndex((c: any) => c.id === id);
+      if (idx !== -1) {
+        this.comments[idx] = { ...this.comments[idx], ...updates };
+      }
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
+    } else if (msg.type === 'COMMENT_DELETE') {
+      this.comments = this.comments.filter((c: any) => c.id !== msg.payload.id);
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
+    } else if (msg.type === 'COMMENT_RESOLVE') {
+      const idx = this.comments.findIndex((c: any) => c.id === msg.payload.id);
+      if (idx !== -1) {
+        this.comments[idx] = { ...this.comments[idx], resolved: true };
+      }
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
     } else if (
       msg.type === 'PRESENTER_CHANGE' ||
       msg.type === 'INSIGHT_CARD' ||
@@ -116,7 +156,6 @@ export default class RoomServer implements Party.Server {
       msg.type === 'LASER_MOVE' ||
       msg.type === 'PRIVACY_MODE' ||
       msg.type === 'LEADER_TAKEOVER' ||
-      msg.type === 'MODEL_CHANGE' ||
       msg.type === 'MEETING_END' ||
       msg.type === 'TAKEOVER_SYNC' ||
       msg.type === 'PRESENTER_REQUEST'

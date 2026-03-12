@@ -23,6 +23,10 @@ export const PresenceContext = createContext<UsePartyPresenceReturn>({
   broadcastHostTransfer: noop,
   broadcastPresenterRequest: noop,
   broadcastTakeoverAttempt: noop,
+  broadcastCommentAdd: noop,
+  broadcastCommentUpdate: noop,
+  broadcastCommentDelete: noop,
+  broadcastCommentResolve: noop,
 });
 
 export const usePresence = () => useContext(PresenceContext);
