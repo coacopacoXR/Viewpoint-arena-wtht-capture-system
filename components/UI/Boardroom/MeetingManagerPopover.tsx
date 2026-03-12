@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Lock, Unlock, MousePointerClick, LayoutGrid,
-  Focus, MessageSquare, Zap, User
+  Focus, MessageSquare, Zap, User, Crown, Mic2
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../../store';
@@ -28,21 +28,48 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
     takeoverApprovedUserIds, toggleTakeoverApproval,
     boardroomLeaderId,
     agents,
+    sessionHostId,
   } = useStore();
 
-  const { localUserId, remoteParticipantList } = usePresence();
+  const { localUserId, remoteParticipantList, broadcastTakeoverSync, broadcastHostTransfer, broadcastLeaderTakeover } = usePresence();
+
+  const isHost = sessionHostId === localUserId || sessionHostId === null;
+
   // All participants: local user + remote
   const allParticipants = [
     { userId: localUserId, name: 'You' },
     ...remoteParticipantList,
   ];
 
+  // Helper: toggle takeover enabled and broadcast
+  const handleTakeoverToggle = () => {
+    if (!isHost) return;
+    const newEnabled = !takeoverModeEnabled;
+    setTakeoverModeEnabled(newEnabled);
+    broadcastTakeoverSync(newEnabled, takeoverApprovedUserIds);
+  };
+
+  // Helper: toggle approval and broadcast
+  const handleApprovalToggle = (userId: string) => {
+    if (!isHost) return;
+    toggleTakeoverApproval(userId);
+    const newApproved = takeoverApprovedUserIds.includes(userId)
+      ? takeoverApprovedUserIds.filter(id => id !== userId)
+      : [...takeoverApprovedUserIds, userId];
+    broadcastTakeoverSync(takeoverModeEnabled, newApproved);
+  };
+
   return (
     <div className="fixed top-14 right-4 z-[9999] w-72 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
       {/* Header */}
       <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
         <span className="text-white text-xs font-bold uppercase tracking-wider">Meeting Settings</span>
-        <button onClick={onClose} className="text-white/40 hover:text-white transition-colors text-lg leading-none">×</button>
+        <div className="flex items-center gap-2">
+          {!isHost && (
+            <span className="text-[8px] text-white/30 font-mono uppercase bg-white/5 px-1.5 py-0.5 rounded">View only</span>
+          )}
+          <button onClick={onClose} className="text-white/40 hover:text-white transition-colors text-lg leading-none">×</button>
+        </div>
       </div>
 
       {/* Layout selector */}
@@ -57,14 +84,14 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
           {LAYOUTS.map(l => (
             <button
               key={l.id}
-              onClick={() => !boardroomLayoutLocked && setBoardroomLayout(l.id)}
-              disabled={boardroomLayoutLocked}
+              onClick={() => isHost && !boardroomLayoutLocked && setBoardroomLayout(l.id)}
+              disabled={!isHost || boardroomLayoutLocked}
               className={clsx(
                 'flex flex-col items-start gap-1 p-2 rounded-lg border text-left transition-all',
                 boardroomLayout === l.id
                   ? 'bg-white text-black border-white'
                   : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10 hover:text-white',
-                boardroomLayoutLocked && boardroomLayout !== l.id && 'opacity-40 cursor-not-allowed'
+                (!isHost || boardroomLayoutLocked) && boardroomLayout !== l.id && 'opacity-40 cursor-not-allowed'
               )}
             >
               <div className="flex items-center gap-1.5">
@@ -77,51 +104,50 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
         </div>
       </div>
 
-      {/* Presenter selector */}
+      {/* Camera Presenter — host appoints a real participant */}
+      {isHost && (
       <div className="px-4 py-3 border-b border-white/10">
-        <span className="text-white/60 text-[10px] uppercase tracking-wider font-bold block mb-2">Presenter (drives camera)</span>
+        <div className="flex items-center gap-1.5 mb-2">
+          <Mic2 size={10} className="text-yellow-400" />
+          <span className="text-white/60 text-[10px] uppercase tracking-wider font-bold">Camera Presenter</span>
+        </div>
         <div className="flex flex-col gap-1">
-          <button
-            onClick={() => setBoardroomPresenter(null)}
-            className={clsx(
-              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all border',
-              boardroomPresenterAgentId === null
-                ? 'bg-white text-black border-white'
-                : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
-            )}
-          >
-            <LayoutGrid size={12} />
-            AI-Guided (auto)
-          </button>
-          {agents.map(agent => (
-            <button
-              key={agent.id}
-              onClick={() => setBoardroomPresenter(agent.id)}
-              className={clsx(
-                'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all border',
-                boardroomPresenterAgentId === agent.id
-                  ? 'bg-white text-black border-white'
-                  : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10'
-              )}
-            >
-              <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
-              {agent.name}
-              <span className="ml-auto text-[8px] opacity-60">{agent.role}</span>
-            </button>
-          ))}
+          {allParticipants.map(p => {
+            const isCurrentPresenter = boardroomLeaderId === p.userId;
+            return (
+              <button
+                key={p.userId}
+                onClick={() => broadcastLeaderTakeover(p.userId)}
+                className={clsx(
+                  'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all border',
+                  isCurrentPresenter
+                    ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-200'
+                    : 'bg-white/5 text-white/60 border-white/10 hover:bg-white/10 hover:text-white'
+                )}
+              >
+                <User size={10} />
+                <span className="flex-1 truncate">{p.name}</span>
+                {isCurrentPresenter && (
+                  <span className="text-[8px] font-mono text-yellow-400 bg-yellow-500/20 px-1 rounded">PRESENTING</span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
+      )}
 
       {/* Toggles */}
       <div className="px-4 py-3 flex flex-col gap-2">
-        {/* Interaction toggle */}
         <button
-          onClick={toggleBoardroomInteraction}
+          onClick={() => isHost && toggleBoardroomInteraction()}
+          disabled={!isHost}
           className={clsx(
             'flex items-center justify-between w-full px-3 py-2 rounded-lg border text-xs transition-all',
             boardroomInteractionEnabled
               ? 'bg-green-500/20 border-green-500/40 text-green-300'
-              : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10'
+              : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
+            !isHost && 'cursor-not-allowed opacity-60'
           )}
         >
           <div className="flex items-center gap-2">
@@ -131,31 +157,33 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
           <Toggle active={boardroomInteractionEnabled} />
         </button>
 
-        {/* Transcript permission */}
         <button
-          onClick={toggleBoardroomTranscriptPermission}
+          onClick={() => isHost && toggleBoardroomTranscriptPermission()}
+          disabled={!isHost}
           className={clsx(
             'flex items-center justify-between w-full px-3 py-2 rounded-lg border text-xs transition-all',
             boardroomTranscriptPermission
               ? 'bg-blue-500/20 border-blue-500/40 text-blue-300'
-              : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10'
+              : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
+            !isHost && 'cursor-not-allowed opacity-60'
           )}
         >
           <div className="flex items-center gap-2">
             <MessageSquare size={12} />
             Show transcript to attendees
           </div>
-          <Toggle active={boardroomTranscriptPermission} />
+          <Toggle active={boardroomTranscriptPermission} color="blue" />
         </button>
 
-        {/* Layout lock */}
         <button
-          onClick={toggleBoardroomLayoutLocked}
+          onClick={() => isHost && toggleBoardroomLayoutLocked()}
+          disabled={!isHost}
           className={clsx(
             'flex items-center justify-between w-full px-3 py-2 rounded-lg border text-xs transition-all',
             boardroomLayoutLocked
               ? 'bg-orange-500/20 border-orange-500/40 text-orange-300'
-              : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10'
+              : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/10',
+            !isHost && 'cursor-not-allowed opacity-60'
           )}
         >
           <div className="flex items-center gap-2">
@@ -174,40 +202,44 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
             <span className="text-white/60 text-[10px] uppercase tracking-wider font-bold">Takeover Mode</span>
           </div>
           <button
-            onClick={() => setTakeoverModeEnabled(!takeoverModeEnabled)}
+            onClick={handleTakeoverToggle}
+            disabled={!isHost}
             className={clsx(
               'flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold border transition-all',
               takeoverModeEnabled
                 ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
-                : 'bg-white/5 border-white/10 text-white/40 hover:text-white'
+                : 'bg-white/5 border-white/10 text-white/40 hover:text-white',
+              !isHost && 'cursor-not-allowed opacity-50'
             )}
           >
             <Toggle active={takeoverModeEnabled} color="orange" />
           </button>
         </div>
         <p className="text-white/30 text-[9px] mb-2 leading-tight">
-          When on, approved participants auto-claim leadership by moving their camera.
+          When on, approved participants auto-claim camera control by moving.
         </p>
         {takeoverModeEnabled && (
           <div className="flex flex-col gap-1">
             {allParticipants.map(p => {
               const isApproved = takeoverApprovedUserIds.includes(p.userId);
-              const isLeader = boardroomLeaderId === p.userId;
+              const isCameraLeader = boardroomLeaderId === p.userId;
               return (
                 <button
                   key={p.userId}
-                  onClick={() => toggleTakeoverApproval(p.userId)}
+                  onClick={() => handleApprovalToggle(p.userId)}
+                  disabled={!isHost}
                   className={clsx(
                     'flex items-center gap-2 px-2 py-1.5 rounded-lg border text-xs transition-all text-left',
                     isApproved
                       ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-200'
-                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                      : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10',
+                    !isHost && 'cursor-not-allowed'
                   )}
                 >
                   <User size={10} />
                   <span className="flex-1 truncate">{p.name}</span>
-                  {isLeader && (
-                    <span className="text-[8px] font-mono text-yellow-400 bg-yellow-500/20 px-1 rounded">LEADER</span>
+                  {isCameraLeader && (
+                    <span className="text-[8px] font-mono text-yellow-400 bg-yellow-500/20 px-1 rounded">CAMERA</span>
                   )}
                   <div className={clsx(
                     'w-3 h-3 rounded border shrink-0 flex items-center justify-center',
@@ -221,6 +253,32 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
           </div>
         )}
       </div>
+
+      {/* Host Transfer — host only */}
+      {isHost && allParticipants.length > 1 && (
+        <div className="px-4 py-3 border-t border-white/10">
+          <div className="flex items-center gap-1.5 mb-2">
+            <Crown size={10} className="text-amber-400" />
+            <span className="text-white/60 text-[10px] uppercase tracking-wider font-bold">Transfer Host</span>
+          </div>
+          <p className="text-white/30 text-[9px] mb-2 leading-tight">
+            Pass session control to another participant.
+          </p>
+          <div className="flex flex-col gap-1">
+            {allParticipants.filter(p => p.userId !== localUserId).map(p => (
+              <button
+                key={p.userId}
+                onClick={() => { broadcastHostTransfer(p.userId); onClose(); }}
+                className="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-white/10 bg-white/5 text-white/50 hover:bg-amber-500/15 hover:border-amber-500/30 hover:text-amber-200 text-xs transition-all text-left"
+              >
+                <User size={10} />
+                <span className="flex-1 truncate">{p.name}</span>
+                <span className="text-[8px] text-white/25">Make host</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -13,9 +13,16 @@ export const PresenceContext = createContext<UsePartyPresenceReturn>({
   broadcastInsightCard: noop,
   broadcastLeaderChange: noop,
   broadcastBoardroomCountdown: noop,
+  broadcastArenaEntry: noop,
   broadcastLaserMove: noop,
   broadcastPrivacyMode: noop,
   broadcastLeaderTakeover: noop,
+  broadcastModelChange: noop,
+  broadcastMeetingEnd: noop,
+  broadcastTakeoverSync: noop,
+  broadcastHostTransfer: noop,
+  broadcastPresenterRequest: noop,
+  broadcastTakeoverAttempt: noop,
 });
 
 export const usePresence = () => useContext(PresenceContext);

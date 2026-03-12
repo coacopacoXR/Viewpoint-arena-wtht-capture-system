@@ -11,6 +11,30 @@ import { usePresence } from '../../lib/PresenceContext';
 import { ViewMode } from '../../types';
 import * as THREE from 'three';
 
+// Syncs followingRemoteUserId with boardroomLeaderId when in boardroom mode.
+// Lives outside the Canvas so it can use both useStore and usePresence.
+const BoardroomPresenterSync: React.FC = () => {
+  const { localUserId } = usePresence();
+  const isBoardroomMode = useStore(state => state.isBoardroomMode);
+  const boardroomLeaderId = useStore(state => state.boardroomLeaderId);
+  const boardroomPresenterDetachedId = useStore(state => state.boardroomPresenterDetachedId);
+  const setFollowingRemoteUser = useStore(state => state.setFollowingRemoteUser);
+
+  useEffect(() => {
+    if (!isBoardroomMode) return;
+    if (boardroomPresenterDetachedId) return; // user manually detached — idle timer will resume
+
+    if (boardroomLeaderId && boardroomLeaderId !== localUserId) {
+      setFollowingRemoteUser(boardroomLeaderId);
+    } else {
+      // I am the presenter, or no presenter set — don't follow anyone
+      setFollowingRemoteUser(null);
+    }
+  }, [isBoardroomMode, boardroomLeaderId, boardroomPresenterDetachedId, localUserId]);
+
+  return null;
+};
+
 // Helper to calculate AI Camera target based on Weights and Gaze
 const calculateWeightedCameraTarget = (scene: THREE.Scene, agents: any[], weights: Record<string, number>, time: number) => {
   const focusPoints: THREE.Vector3[] = [];
@@ -112,6 +136,12 @@ const SceneRenderer = () => {
   const temporarilyDisengageFromAgent = useStore(state => state.temporarilyDisengageFromAgent);
   const resumeFollowingAgent = useStore(state => state.resumeFollowingAgent);
   const clearTemporaryDisengage = useStore(state => state.clearTemporaryDisengage);
+  const isBoardroomMode = useStore(state => state.isBoardroomMode);
+  const boardroomPresenterDetachedId = useStore(state => state.boardroomPresenterDetachedId);
+  const detachBoardroomPresenter = useStore(state => state.detachBoardroomPresenter);
+  const resumeBoardroomPresenter = useStore(state => state.resumeBoardroomPresenter);
+
+  const { broadcastTakeoverAttempt, localUserId } = usePresence();
 
   const { gl, scene, camera: defaultCamera, size } = useThree();
   
@@ -146,52 +176,72 @@ const SceneRenderer = () => {
     };
   }, []);
 
-  // Handle idle timeout for auto-resume when temporarily disengaged
+  // Handle idle timeout for auto-resume when temporarily disengaged from agent POV
   useEffect(() => {
     if (temporarilyDisengagedFromAgentId && !isInteracting.current) {
-      // Start idle timer when disengaged
-      idleTimeoutRef.current = setTimeout(() => {
-        resumeFollowingAgent();
-      }, IDLE_RESUME_DELAY);
-
-      return () => {
-        if (idleTimeoutRef.current) {
-          clearTimeout(idleTimeoutRef.current);
-        }
-      };
+      idleTimeoutRef.current = setTimeout(() => { resumeFollowingAgent(); }, IDLE_RESUME_DELAY);
+      return () => { if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current); };
     }
   }, [temporarilyDisengagedFromAgentId, resumeFollowingAgent]);
+
+  // Handle idle timeout for auto-resume when detached from boardroom presenter
+  useEffect(() => {
+    if (boardroomPresenterDetachedId && !isInteracting.current) {
+      idleTimeoutRef.current = setTimeout(() => { resumeBoardroomPresenter(); }, IDLE_RESUME_DELAY);
+      return () => { if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current); };
+    }
+  }, [boardroomPresenterDetachedId, resumeBoardroomPresenter]);
 
   // Handle canvas click to disengage from POV mode
   const handleCanvasInteractionStart = useCallback(() => {
     isInteracting.current = true;
 
-    // Clear any existing idle timeout
     if (idleTimeoutRef.current) {
       clearTimeout(idleTimeoutRef.current);
       idleTimeoutRef.current = null;
     }
 
-    // If following an agent, disengage on click
+    // If following an agent, disengage on drag
     if (viewMode === ViewMode.POV_AGENT && activeAgentId) {
       temporarilyDisengageFromAgent();
     }
-  }, [viewMode, activeAgentId, temporarilyDisengageFromAgent]);
+
+    if (isBoardroomMode) {
+      // Takeover mode: user interaction = intent to become presenter
+      const { takeoverModeEnabled, takeoverApprovedUserIds, boardroomLeaderId } = useStore.getState();
+      if (
+        takeoverModeEnabled &&
+        takeoverApprovedUserIds.includes(localUserId) &&
+        boardroomLeaderId !== localUserId
+      ) {
+        broadcastTakeoverAttempt(localUserId);
+        // Don't detach — PRESENTER_CHANGED from server will call resumeBoardroomPresenter
+        return;
+      }
+
+      // Non-takeover: detach locally so only this user's view is affected
+      if (followingRemoteUserId && !boardroomPresenterDetachedId) {
+        detachBoardroomPresenter(followingRemoteUserId);
+      }
+    }
+  }, [viewMode, activeAgentId, isBoardroomMode, followingRemoteUserId, boardroomPresenterDetachedId, localUserId, temporarilyDisengageFromAgent, detachBoardroomPresenter, broadcastTakeoverAttempt]);
 
   const handleCanvasInteractionEnd = useCallback(() => {
     isInteracting.current = false;
     lastInteractionEnd.current = Date.now();
 
-    // Start idle timer for auto-resume if temporarily disengaged
+    // Agent POV detach: auto-resume after idle
     if (temporarilyDisengagedFromAgentId) {
-      if (idleTimeoutRef.current) {
-        clearTimeout(idleTimeoutRef.current);
-      }
-      idleTimeoutRef.current = setTimeout(() => {
-        resumeFollowingAgent();
-      }, IDLE_RESUME_DELAY);
+      if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+      idleTimeoutRef.current = setTimeout(() => { resumeFollowingAgent(); }, IDLE_RESUME_DELAY);
     }
-  }, [temporarilyDisengagedFromAgentId, resumeFollowingAgent]);
+
+    // Boardroom presenter detach: auto-resume after idle
+    if (boardroomPresenterDetachedId) {
+      if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+      idleTimeoutRef.current = setTimeout(() => { resumeBoardroomPresenter(); }, IDLE_RESUME_DELAY);
+    }
+  }, [temporarilyDisengagedFromAgentId, boardroomPresenterDetachedId, resumeFollowingAgent, resumeBoardroomPresenter]);
 
   // We use render priority 1 to run after standard r3f loops.
   useFrame((state, delta) => {
@@ -207,8 +257,8 @@ const SceneRenderer = () => {
       if (remote) {
         posVec.current.set(...remote.position);
         targetVec.current.set(...remote.lookAt);
-        mainCam.position.lerp(posVec.current, 0.15);
-        if (controls) controls.target.lerp(targetVec.current, 0.15);
+        mainCam.position.lerp(posVec.current, 0.06);
+        if (controls) controls.target.lerp(targetVec.current, 0.06);
       }
     } else if (viewMode === ViewMode.FOLLOW_PRESENTER) {
        const angle = (elapsedTime * 0.2);
@@ -411,7 +461,9 @@ const RemoteLasers: React.FC = () => {
 
 const ViewpointCanvas: React.FC = () => {
   return (
-    <Canvas 
+    <>
+    <BoardroomPresenterSync />
+    <Canvas
       shadows 
       dpr={[1, 2]} 
       gl={{
@@ -436,6 +488,7 @@ const ViewpointCanvas: React.FC = () => {
         <RemoteParticipantsWrapper />
       </Suspense>
     </Canvas>
+    </>
   );
 };
 

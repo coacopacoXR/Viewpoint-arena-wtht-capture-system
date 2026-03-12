@@ -1,17 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MonitorPlay } from 'lucide-react';
 import { useStore } from '../../store';
-import { usePresence } from '../../lib/PresenceContext';
 
 const BoardroomCountdown: React.FC = () => {
   const boardroomPendingEntry = useStore(state => state.boardroomPendingEntry);
   const toggleBoardroomMode = useStore(state => state.toggleBoardroomMode);
-  const setBoardroomLeaderId = useStore(state => state.setBoardroomLeaderId);
   const cancelBoardroomEntry = useStore(state => state.cancelBoardroomEntry);
-  const { localUserId, broadcastLeaderTakeover } = usePresence();
 
   const [count, setCount] = useState(3);
-  // Track count in a ref so the interval callback is never stale
   const countRef = useRef(3);
 
   useEffect(() => {
@@ -28,13 +24,9 @@ const BoardroomCountdown: React.FC = () => {
       setCount(countRef.current);
       if (countRef.current <= 0) {
         clearInterval(interval);
-        // Side effect lives here, not inside a state updater — safe in StrictMode
-        setTimeout(() => {
-          toggleBoardroomMode();
-          // Whoever triggered the countdown becomes the initial leader
-          setBoardroomLeaderId(localUserId);
-          broadcastLeaderTakeover(localUserId);
-        }, 50);
+        // toggleBoardroomMode now sets boardroomLeaderId = sessionHostId internally.
+        // BoardroomPresenterSync then sets followingRemoteUserId for non-hosts.
+        setTimeout(() => { toggleBoardroomMode(); }, 50);
       }
     }, 1000);
 

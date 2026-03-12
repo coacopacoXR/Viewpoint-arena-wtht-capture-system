@@ -81,7 +81,9 @@ const Interface: React.FC = () => {
     triggerBoardroomEntry,
   } = useStore();
 
-  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, broadcastBoardroomCountdown, broadcastPrivacyMode } = usePresence();
+  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, broadcastBoardroomCountdown, broadcastPrivacyMode, broadcastArenaEntry, broadcastMeetingEnd } = usePresence();
+  const sessionHostId = useStore(state => state.sessionHostId);
+  const isHost = sessionHostId === localUserId || sessionHostId === null; // null = solo session, treat as host
   const [shareCopied, setShareCopied] = useState(false);
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
@@ -205,8 +207,8 @@ const Interface: React.FC = () => {
             </div>
           </div>
 
-          {/* SYNC / LEADER CONTROLS - Expandable */}
-          <div className="mt-4 pointer-events-auto animate-in slide-in-from-left-4 fade-in duration-500">
+          {/* SYNC / LEADER CONTROLS - Expandable — host only */}
+          {isHost && <div className="mt-4 pointer-events-auto animate-in slide-in-from-left-4 fade-in duration-500">
             <button
               onClick={() => setIsSessionSyncExpanded(!isSessionSyncExpanded)}
               className="flex items-center gap-2 text-[10px] font-mono uppercase text-gray-500 tracking-widest mb-1 bg-white/60 px-2 py-1 rounded backdrop-blur-sm shadow-sm hover:bg-white/80 transition-colors w-fit"
@@ -253,7 +255,7 @@ const Interface: React.FC = () => {
                   </div>
               )}
             </div>
-          </div>
+          </div>}
 
           {/* FOLLOWERS HUD - Expandable */}
           {myFollowers.length > 0 && !leaderId && (
@@ -351,11 +353,13 @@ const Interface: React.FC = () => {
                     <Link size={12} /> {shareCopied ? 'Copied!' : 'Share'}
                 </button>
 
-                {/* Boardroom Mode Toggle */}
+                {/* Boardroom Mode Toggle — host only */}
+                {isHost && (
                 <button
                     onClick={() => {
                         if (isBoardroomMode) {
                             toggleBoardroomMode();
+                            broadcastArenaEntry();
                         } else {
                             triggerBoardroomEntry();
                             broadcastBoardroomCountdown();
@@ -370,6 +374,7 @@ const Interface: React.FC = () => {
                 >
                     <MonitorPlay size={12} /> Boardroom
                 </button>
+                )}
 
                 {/* Participants Toggle */}
                 <button
@@ -384,12 +389,14 @@ const Interface: React.FC = () => {
                     <Users size={12} /> Participants
                 </button>
 
+                {isHost && (
                 <button
-                    onClick={() => endMeeting(true)}
+                    onClick={() => { endMeeting(true); broadcastMeetingEnd(); }}
                     className="px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide bg-black text-white border border-black shadow-md hover:bg-gray-800 transition-colors flex items-center gap-2"
                 >
                     <Power size={12} className="text-red-500" /> End Session
                 </button>
+                )}
            </div>
 
            {/* Recording indicator when privacy mode is OFF */}

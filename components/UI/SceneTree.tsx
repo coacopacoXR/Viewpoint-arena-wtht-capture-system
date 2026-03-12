@@ -4,6 +4,7 @@ import { SceneNode } from '../../types';
 import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { parseModelFile, validateModelFile } from '../../utils/modelLoader';
+import { usePresence } from '../../lib/PresenceContext';
 
 const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth }) => {
     const objectState = useStore(state => state.objectStates[node.id]);
@@ -105,6 +106,7 @@ const SceneTree: React.FC = () => {
     const importSuccess = useStore(state => state.importSuccess);
     const clearImportStatus = useStore(state => state.clearImportStatus);
 
+    const { broadcastModelChange } = usePresence();
     const [importError, setImportError] = useState<string | null>(null);
 
     const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
@@ -146,6 +148,20 @@ const SceneTree: React.FC = () => {
 
             // Set the imported model in the store
             setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition);
+
+            // Broadcast to remote participants (cap at 5MB to stay within WS limits)
+            if (file.size <= 5 * 1024 * 1024) {
+                const buffer = await file.arrayBuffer();
+                const bytes = new Uint8Array(buffer);
+                let binary = '';
+                const chunkSize = 8192;
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+                }
+                broadcastModelChange('imported', btoa(binary), file.name);
+            } else {
+                console.warn('[ModelSync] File >5MB — skipping multiplayer sync');
+            }
         } catch (error) {
             console.error('Model import error:', error);
             setImportError(error instanceof Error ? error.message : 'Failed to import model file');

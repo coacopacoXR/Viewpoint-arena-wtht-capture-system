@@ -2,12 +2,13 @@ import React, { useState, useMemo, useCallback } from 'react';
 import {
   Settings, LayoutGrid, Radio, Power, MonitorPlay,
   MessageSquare, X, Monitor, MonitorOff, Layers, ChevronRight, ChevronDown,
-  Video, VideoOff, User
+  Video, VideoOff, User, Mic2, CheckCircle, XCircle
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../../store';
 import { useShallow } from 'zustand/react/shallow';
 import { InsightCard } from '../../../types';
+import { usePresence } from '../../../lib/PresenceContext';
 import InsightExplainer from '../InsightExplainer';
 import MeetingManagerPopover from './MeetingManagerPopover';
 import FocusLayout from './layouts/FocusLayout';
@@ -64,12 +65,15 @@ const BoardroomShell: React.FC = () => {
     toggleBoardroomMode,
     boardroomLayout,
     boardroomInteractionEnabled,
-    boardroomPresenterAgentId,
     boardroomTranscriptPermission,
     endMeeting,
-    setBoardroomPresenter,
-    temporarilyDisengagedFromAgentId,
-    resumeFollowingAgent,
+    boardroomLeaderId,
+    takeoverModeEnabled,
+    boardroomPresenterDetachedId,
+    resumeBoardroomPresenter,
+    pendingPresenterRequest,
+    setPendingPresenterRequest,
+    sessionHostId,
   } = useStore(useShallow(state => ({
     agents: state.agents,
     pois: state.pois,
@@ -79,13 +83,25 @@ const BoardroomShell: React.FC = () => {
     toggleBoardroomMode: state.toggleBoardroomMode,
     boardroomLayout: state.boardroomLayout,
     boardroomInteractionEnabled: state.boardroomInteractionEnabled,
-    boardroomPresenterAgentId: state.boardroomPresenterAgentId,
     boardroomTranscriptPermission: state.boardroomTranscriptPermission,
     endMeeting: state.endMeeting,
-    setBoardroomPresenter: state.setBoardroomPresenter,
-    temporarilyDisengagedFromAgentId: state.temporarilyDisengagedFromAgentId,
-    resumeFollowingAgent: state.resumeFollowingAgent,
+    boardroomLeaderId: state.boardroomLeaderId,
+    takeoverModeEnabled: state.takeoverModeEnabled,
+    boardroomPresenterDetachedId: state.boardroomPresenterDetachedId,
+    resumeBoardroomPresenter: state.resumeBoardroomPresenter,
+    pendingPresenterRequest: state.pendingPresenterRequest,
+    setPendingPresenterRequest: state.setPendingPresenterRequest,
+    sessionHostId: state.sessionHostId,
   })));
+
+  const { localUserId, remoteParticipantList, broadcastArenaEntry, broadcastMeetingEnd, broadcastLeaderTakeover, broadcastPresenterRequest } = usePresence();
+  const isHost = sessionHostId === localUserId || sessionHostId === null;
+  const isPresenter = boardroomLeaderId === localUserId;
+
+  // Presenter label based on the real person driving the camera
+  const leaderName = boardroomLeaderId === localUserId
+    ? 'You'
+    : remoteParticipantList.find(p => p.userId === boardroomLeaderId)?.name ?? null;
 
   const [showManager, setShowManager] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
@@ -107,18 +123,11 @@ const BoardroomShell: React.FC = () => {
     return age < 3 ? last.agentId : null;
   }, [chatHistory]);
 
-  const pinnedAgentId = typeof boardroomPresenterAgentId === 'string' && boardroomPresenterAgentId !== 'USER'
-    ? boardroomPresenterAgentId : null;
+  const [pinnedAgentId, setPinnedAgentId] = useState<string | null>(null);
+  const handlePin = useCallback((agentId: string | null) => setPinnedAgentId(agentId), []);
 
-  const handlePin = useCallback((agentId: string | null) => {
-    setBoardroomPresenter(agentId);
-  }, [setBoardroomPresenter]);
-
-  const presenterLabel = useMemo(() => {
-    if (!boardroomPresenterAgentId) return 'AI-Guided';
-    if (boardroomPresenterAgentId === 'USER') return 'You';
-    return agents.find(a => a.id === boardroomPresenterAgentId)?.name || null;
-  }, [boardroomPresenterAgentId, agents]);
+  // Camera presenter = real person (host or appointed). No AI-driven camera in boardroom.
+  const presenterLabel = leaderName;
 
   const formatTime = (t: number) => {
     const m = Math.floor(t / 60);
@@ -185,7 +194,10 @@ const BoardroomShell: React.FC = () => {
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-white text-[10px] font-mono font-bold truncate">YOU</span>
         </div>
-        <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0 bg-emerald-500/30 text-emerald-300">HOST</span>
+        {boardroomLeaderId === localUserId
+          ? <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0 bg-yellow-500/30 text-yellow-300">LEADER</span>
+          : <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0 bg-emerald-500/30 text-emerald-300">HOST</span>
+        }
       </div>
     </div>
   );
@@ -318,14 +330,16 @@ const BoardroomShell: React.FC = () => {
 
           <div className="h-5 w-px bg-white/10 mx-0.5" />
 
-          {/* Back to 3D Arena */}
+          {/* Back to 3D Arena — host only */}
+          {isHost && (
           <button
-            onClick={toggleBoardroomMode}
+            onClick={() => { toggleBoardroomMode(); broadcastArenaEntry(); }}
             className="px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide bg-white/8 text-white/50 border border-white/10 hover:bg-white/15 hover:text-white transition-all flex items-center gap-1"
           >
             <LayoutGrid size={10} />
             3D Arena
           </button>
+          )}
 
           {/* Manage — popover uses fixed positioning so always on top */}
           <div className="relative">
@@ -346,19 +360,32 @@ const BoardroomShell: React.FC = () => {
             )}
           </div>
 
-          {/* End */}
+          {/* End — host only */}
+          {isHost && (
           <button
-            onClick={() => endMeeting(true)}
+            onClick={() => { endMeeting(true); broadcastMeetingEnd(); }}
             className="px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide bg-red-600/20 text-red-400 border border-red-500/30 hover:bg-red-600/40 transition-all flex items-center gap-1"
           >
             <Power size={10} />
             End
           </button>
+          )}
         </div>
       </div>
 
       {/* ── Main content area ── */}
       <div className="flex-1 min-h-0 relative">
+
+        {/* Leader presence badge — shown on the 3D shared screen area */}
+        {boardroomLeaderId && leaderName && !isWebcamOnly && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[25] pointer-events-none">
+            <div className="flex items-center gap-1.5 bg-[#0d0d0d]/80 border border-yellow-500/40 backdrop-blur-sm px-2.5 py-1 rounded-full text-[9px] font-mono">
+              <div className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse shrink-0" />
+              <span className="text-yellow-300 font-bold">{leaderName}</span>
+              <span className="text-white/40">presenting</span>
+            </div>
+          </div>
+        )}
 
         {/* Active layout */}
         {boardroomLayout === 'focus' && (
@@ -427,14 +454,55 @@ const BoardroomShell: React.FC = () => {
           </div>
         )}
 
-        {/* Detachment indicator — shown when user has dragged away from presenter cam */}
-        {!isWebcamOnly && !screenSharing && temporarilyDisengagedFromAgentId && (
+        {/* Host: incoming presenter request notification */}
+        {isHost && pendingPresenterRequest && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] pointer-events-auto animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-3 bg-[#1a1a1a]/95 border border-white/20 backdrop-blur-md px-3 py-2 rounded-lg shadow-xl text-[10px] font-mono">
+              <Mic2 size={11} className="text-yellow-400 shrink-0" />
+              <span className="text-white/80">
+                <span className="text-white font-bold">{pendingPresenterRequest.fromName}</span> wants to present
+              </span>
+              <button
+                onClick={() => { broadcastLeaderTakeover(pendingPresenterRequest.fromUserId); setPendingPresenterRequest(null); }}
+                className="flex items-center gap-1 bg-green-500/20 border border-green-500/40 text-green-300 px-2 py-0.5 rounded hover:bg-green-500/40 transition-colors"
+              >
+                <CheckCircle size={9} /> Allow
+              </button>
+              <button
+                onClick={() => setPendingPresenterRequest(null)}
+                className="flex items-center gap-1 bg-white/5 border border-white/15 text-white/40 px-2 py-0.5 rounded hover:bg-white/15 transition-colors"
+              >
+                <XCircle size={9} /> Deny
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Non-host: request to present button (only when not in takeover mode and not already presenter) */}
+        {!isHost && !isPresenter && !takeoverModeEnabled && (
+          <div className="absolute bottom-16 right-3 z-20 pointer-events-auto">
+            <button
+              onClick={() => {
+                const stored = localStorage.getItem('vp_user');
+                const name = stored ? JSON.parse(stored).name || 'Guest' : 'Guest';
+                broadcastPresenterRequest(localUserId, name);
+              }}
+              className="flex items-center gap-1.5 bg-[#1a1a1a]/80 border border-white/20 backdrop-blur-sm text-white/60 hover:text-white hover:border-white/40 text-[9px] font-mono px-2.5 py-1.5 rounded-full transition-all"
+            >
+              <Mic2 size={10} />
+              Request to Present
+            </button>
+          </div>
+        )}
+
+        {/* Detachment indicator — shown when user dragged away from presenter cam */}
+        {!isWebcamOnly && !screenSharing && boardroomPresenterDetachedId && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 pointer-events-auto animate-in fade-in duration-200">
             <div className="flex items-center gap-2 bg-orange-500/90 backdrop-blur-sm text-white text-[9px] font-mono px-3 py-1.5 rounded-full shadow-lg">
               <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
               <span>FREE LOOK · auto-resume in 3s</span>
               <button
-                onClick={resumeFollowingAgent}
+                onClick={resumeBoardroomPresenter}
                 className="ml-1 bg-white/20 hover:bg-white/40 px-2 py-0.5 rounded text-[8px] font-bold transition-colors"
               >
                 Resume
@@ -443,7 +511,7 @@ const BoardroomShell: React.FC = () => {
           </div>
         )}
         {/* Static hint when following presenter and not detached */}
-        {!isWebcamOnly && boardroomPresenterAgentId && !screenSharing && !temporarilyDisengagedFromAgentId && (
+        {!isWebcamOnly && boardroomLeaderId && !screenSharing && !boardroomPresenterDetachedId && !isPresenter && (
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
             <div className="bg-black/35 backdrop-blur-sm text-white/20 text-[8px] font-mono px-3 py-1 rounded-full whitespace-nowrap">
               drag to look around · auto-resumes after 3s
