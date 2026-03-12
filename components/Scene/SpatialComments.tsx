@@ -241,7 +241,7 @@ const captureCanvas = (): string | null => {
 
 // Comment placement preview (shown when placing a new comment or drawing)
 const CommentPlacementPreview: React.FC = () => {
-    const { camera, scene } = useThree();
+    const { camera, scene, gl } = useThree();
     const commentMode = useStore(state => state.commentMode);
     const setPendingComment = useStore(state => state.setPendingComment);
     const setCommentMode = useStore(state => state.setCommentMode);
@@ -304,9 +304,10 @@ const CommentPlacementPreview: React.FC = () => {
         const handleClick = (e: MouseEvent) => {
             if (e.button !== 0) return; // Only left click
 
+            const rect = gl.domElement.getBoundingClientRect();
             const pointer = new Vector2(
-                (e.clientX / window.innerWidth) * 2 - 1,
-                -(e.clientY / window.innerHeight) * 2 + 1
+                ((e.clientX - rect.left) / rect.width) * 2 - 1,
+                -((e.clientY - rect.top) / rect.height) * 2 + 1
             );
 
             raycaster.current.setFromCamera(pointer, camera);
@@ -348,7 +349,7 @@ const CommentPlacementPreview: React.FC = () => {
 
         window.addEventListener('click', handleClick);
         return () => window.removeEventListener('click', handleClick);
-    }, [commentMode, isPlacingMode, camera, scene, setPendingComment, setCommentMode, setCapturedScreenshot, setShowDrawingCanvas, currentTree]);
+    }, [commentMode, isPlacingMode, camera, scene, gl, setPendingComment, setCommentMode, setCapturedScreenshot, setShowDrawingCanvas, currentTree]);
 
     if (!isPlacingMode) return null;
 

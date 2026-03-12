@@ -27,7 +27,12 @@ type RoomMessage =
   | { type: 'TAKEOVER_SYNC'; payload: { enabled: boolean; approvedUserIds: string[] } }
   | { type: 'PRESENTER_REQUEST'; payload: { fromUserId: string; fromName: string } }
   | { type: 'TAKEOVER_ATTEMPT'; payload: { userId: string } }
-  | { type: 'PRESENTER_CHANGED'; payload: { userId: string } };
+  | { type: 'PRESENTER_CHANGED'; payload: { userId: string } }
+  | { type: 'COMMENT_ADD'; payload: { comment: any } }
+  | { type: 'COMMENT_UPDATE'; payload: { id: string; updates: Record<string, any> } }
+  | { type: 'COMMENT_DELETE'; payload: { id: string } }
+  | { type: 'COMMENT_RESOLVE'; payload: { id: string } }
+  | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } };
 
 const PARTYKIT_HOST: string =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
@@ -69,6 +74,10 @@ export interface UsePartyPresenceReturn {
   broadcastHostTransfer: (toUserId: string) => void;
   broadcastPresenterRequest: (fromUserId: string, fromName: string) => void;
   broadcastTakeoverAttempt: (userId: string) => void;
+  broadcastCommentAdd: (comment: any) => void;
+  broadcastCommentUpdate: (id: string, updates: Record<string, any>) => void;
+  broadcastCommentDelete: (id: string) => void;
+  broadcastCommentResolve: (id: string) => void;
 }
 
 export function usePartyPresence(roomId: string | undefined): UsePartyPresenceReturn {
@@ -193,6 +202,21 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         const { setBoardroomLeaderId, resumeBoardroomPresenter } = useStore.getState();
         setBoardroomLeaderId(newUserId);
         resumeBoardroomPresenter(); // clear local detach state; BoardroomPresenterSync will update followingRemoteUserId
+      } else if (msg.type === 'COMMENT_ROSTER') {
+        const { setAllComments } = useStore.getState();
+        setAllComments(msg.payload.comments);
+      } else if (msg.type === 'COMMENT_ADD') {
+        const { addComment } = useStore.getState();
+        addComment(msg.payload.comment);
+      } else if (msg.type === 'COMMENT_UPDATE') {
+        const { updateComment } = useStore.getState();
+        updateComment(msg.payload.id, msg.payload.updates);
+      } else if (msg.type === 'COMMENT_DELETE') {
+        const { deleteComment } = useStore.getState();
+        deleteComment(msg.payload.id);
+      } else if (msg.type === 'COMMENT_RESOLVE') {
+        const { resolveComment } = useStore.getState();
+        resolveComment(msg.payload.id);
       }
     });
 
@@ -299,6 +323,30 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'TAKEOVER_ATTEMPT', payload: { userId } }));
   }
 
+  function broadcastCommentAdd(comment: any) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'COMMENT_ADD', payload: { comment } }));
+  }
+
+  function broadcastCommentUpdate(id: string, updates: Record<string, any>) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'COMMENT_UPDATE', payload: { id, updates } }));
+  }
+
+  function broadcastCommentDelete(id: string) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'COMMENT_DELETE', payload: { id } }));
+  }
+
+  function broadcastCommentResolve(id: string) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'COMMENT_RESOLVE', payload: { id } }));
+  }
+
   return {
     localUserId: userRef.current.userId,
     remoteParticipants,
@@ -319,5 +367,9 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastHostTransfer,
     broadcastPresenterRequest,
     broadcastTakeoverAttempt,
+    broadcastCommentAdd,
+    broadcastCommentUpdate,
+    broadcastCommentDelete,
+    broadcastCommentResolve,
   };
 }
