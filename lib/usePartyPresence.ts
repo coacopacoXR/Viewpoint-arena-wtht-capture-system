@@ -4,6 +4,7 @@ import type { ParticipantPresence } from '../party/room.server';
 import type { InsightCard } from '../types';
 import { useStore } from '../store';
 import { ViewMode } from '../types';
+import { parseModelFile } from '../utils/modelLoader';
 
 export type { ParticipantPresence };
 
@@ -15,19 +16,25 @@ type RoomMessage =
   | { type: 'INSIGHT_CARD'; payload: InsightCard }
   | { type: 'LEADER_CHANGE'; payload: { userId: string | null } }
   | { type: 'BOARDROOM_COUNTDOWN'; payload: Record<string, never> }
+  | { type: 'ARENA_ENTRY'; payload: Record<string, never> }
   | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
-  | { type: 'LEADER_TAKEOVER'; payload: { userId: string } };
+  | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
+  | { type: 'MODEL_CHANGE'; payload: { modelType: 'synth' | 'bicycle' | 'imported'; fileBase64?: string; fileName?: string } }
+  | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
+  | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
+  | { type: 'MEETING_END'; payload: Record<string, never> }
+  | { type: 'TAKEOVER_SYNC'; payload: { enabled: boolean; approvedUserIds: string[] } }
+  | { type: 'PRESENTER_REQUEST'; payload: { fromUserId: string; fromName: string } }
+  | { type: 'TAKEOVER_ATTEMPT'; payload: { userId: string } }
+  | { type: 'PRESENTER_CHANGED'; payload: { userId: string } };
 
-// The host to connect to. In dev, PartyKit runs on localhost:1999.
-// In production, replace with your deployed PartyKit URL.
 const PARTYKIT_HOST: string =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
 
 function getUserInfo(): { userId: string; name: string; color: string } {
   const stored = localStorage.getItem('vp_user');
   const user = stored ? JSON.parse(stored) : { name: 'Guest', color: '#4F8EF7' };
-  // Use a stable userId per browser session
   let userId = sessionStorage.getItem('vp_userId');
   if (!userId) {
     userId = crypto.randomUUID();
@@ -52,9 +59,16 @@ export interface UsePartyPresenceReturn {
   broadcastInsightCard: (card: InsightCard) => void;
   broadcastLeaderChange: (userId: string | null) => void;
   broadcastBoardroomCountdown: () => void;
+  broadcastArenaEntry: () => void;
   broadcastLaserMove: (position: [number, number, number] | null) => void;
   broadcastPrivacyMode: (enabled: boolean) => void;
   broadcastLeaderTakeover: (userId: string) => void;
+  broadcastModelChange: (modelType: 'synth' | 'bicycle' | 'imported', fileBase64?: string, fileName?: string) => void;
+  broadcastMeetingEnd: () => void;
+  broadcastTakeoverSync: (enabled: boolean, approvedUserIds: string[]) => void;
+  broadcastHostTransfer: (toUserId: string) => void;
+  broadcastPresenterRequest: (fromUserId: string, fromName: string) => void;
+  broadcastTakeoverAttempt: (userId: string) => void;
 }
 
 export function usePartyPresence(roomId: string | undefined): UsePartyPresenceReturn {
@@ -63,11 +77,12 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   const [remoteParticipantList, setRemoteParticipantList] = React.useState<RemoteParticipantInfo[]>([]);
   const socketRef = useRef<PartySocket | null>(null);
   const userRef = useRef(getUserInfo());
-  // Track last broadcast position for takeover detection
-  const lastBroadcastPos = useRef<[number, number, number]>([0, 0, 0]);
 
-  // Use getState() so we never re-subscribe inside the effect
-  const { addInsightCard, setActiveAgent, setViewMode, setFollowingRemoteUser, triggerBoardroomEntry, setPrivacyMode, setBoardroomLeaderId } = useStore.getState();
+  const {
+    addInsightCard, setActiveAgent, setViewMode, setFollowingRemoteUser,
+    triggerBoardroomEntry, setPrivacyMode, setBoardroomLeaderId, setSessionHostId,
+    setPendingPresenterRequest,
+  } = useStore.getState();
 
   function syncList() {
     setRemoteParticipantList(
@@ -78,10 +93,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   useEffect(() => {
     if (!roomId) return;
 
-    const socket = new PartySocket({
-      host: PARTYKIT_HOST,
-      room: roomId,
-    });
+    const socket = new PartySocket({ host: PARTYKIT_HOST, room: roomId });
     socketRef.current = socket;
 
     socket.addEventListener('message', (event: MessageEvent) => {
@@ -104,7 +116,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         if (msg.payload.userId !== userRef.current.userId) {
           const isNew = !remoteParticipants.current.has(msg.payload.userId);
           remoteParticipants.current.set(msg.payload.userId, msg.payload);
-          if (isNew) syncList(); // only re-render UI on new join
+          if (isNew) syncList();
         }
       } else if (msg.type === 'LEAVE') {
         remoteParticipants.current.delete(msg.payload.userId);
@@ -116,12 +128,14 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       } else if (msg.type === 'INSIGHT_CARD') {
         addInsightCard(msg.payload);
       } else if (msg.type === 'LEADER_CHANGE') {
-        // Anti-circular: ignore if I am currently leading (not following anyone)
         const { leaderId, followingRemoteUserId } = useStore.getState();
         if (leaderId === 'USER' && !followingRemoteUserId) return;
         setFollowingRemoteUser(msg.payload.userId);
       } else if (msg.type === 'BOARDROOM_COUNTDOWN') {
         triggerBoardroomEntry();
+      } else if (msg.type === 'ARENA_ENTRY') {
+        const { isBoardroomMode, toggleBoardroomMode } = useStore.getState();
+        if (isBoardroomMode) toggleBoardroomMode();
       } else if (msg.type === 'LASER_MOVE') {
         if (msg.payload.userId !== userRef.current.userId) {
           remoteLasers.current.set(msg.payload.userId, msg.payload.position);
@@ -134,9 +148,51 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         if (newLeaderId !== userRef.current.userId) {
           setFollowingRemoteUser(newLeaderId);
         } else {
-          // I'm now the leader — stop following anyone
           setFollowingRemoteUser(null);
         }
+      } else if (msg.type === 'MODEL_CHANGE') {
+        const { modelType, fileBase64, fileName } = msg.payload;
+        const { setActiveModelType, setImportedModel } = useStore.getState();
+        if (modelType === 'synth' || modelType === 'bicycle') {
+          setActiveModelType(modelType);
+        } else if (modelType === 'imported' && fileBase64 && fileName) {
+          const ext = fileName.split('.').pop()?.toLowerCase() || 'glb';
+          const mimeMap: Record<string, string> = {
+            glb: 'model/gltf-binary', gltf: 'model/gltf+json',
+            obj: 'text/plain', fbx: 'application/octet-stream', stl: 'application/octet-stream',
+          };
+          const mime = mimeMap[ext] || 'application/octet-stream';
+          const bytes = Uint8Array.from(atob(fileBase64), c => c.charCodeAt(0));
+          const file = new File([bytes], fileName, { type: mime });
+          parseModelFile(file)
+            .then(result => setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition))
+            .catch(err => console.error('[MODEL_CHANGE] Parse error:', err));
+        }
+      } else if (msg.type === 'HOST_CHANGE') {
+        setSessionHostId(msg.payload.hostId);
+        // If I just became the host (e.g. previous host left), update local state
+        if (msg.payload.hostId === userRef.current.userId) {
+          setSessionHostId(msg.payload.hostId);
+        }
+      } else if (msg.type === 'MEETING_END') {
+        const { endMeeting } = useStore.getState();
+        endMeeting(true);
+      } else if (msg.type === 'TAKEOVER_SYNC') {
+        const { setTakeoverModeEnabled, setTakeoverApprovedUserIds } = useStore.getState();
+        setTakeoverModeEnabled(msg.payload.enabled);
+        setTakeoverApprovedUserIds(msg.payload.approvedUserIds);
+      } else if (msg.type === 'PRESENTER_REQUEST') {
+        // Only the host handles this — store it for the host's UI to show
+        const { sessionHostId } = useStore.getState();
+        if (sessionHostId === userRef.current.userId) {
+          setPendingPresenterRequest(msg.payload);
+        }
+      } else if (msg.type === 'PRESENTER_CHANGED') {
+        // Server-authoritative presenter change (takeover mode)
+        const newUserId = msg.payload.userId;
+        const { setBoardroomLeaderId, resumeBoardroomPresenter } = useStore.getState();
+        setBoardroomLeaderId(newUserId);
+        resumeBoardroomPresenter(); // clear local detach state; BoardroomPresenterSync will update followingRemoteUserId
       }
     });
 
@@ -148,44 +204,15 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     };
   }, [roomId]);
 
-  function broadcastPresence(
-    position: [number, number, number],
-    lookAt: [number, number, number],
-  ) {
+  function broadcastPresence(position: [number, number, number], lookAt: [number, number, number]) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
     const msg: RoomMessage = {
       type: 'PRESENCE',
-      payload: {
-        userId: userRef.current.userId,
-        name: userRef.current.name,
-        color: userRef.current.color,
-        position,
-        lookAt,
-      },
+      payload: { userId: userRef.current.userId, name: userRef.current.name, color: userRef.current.color, position, lookAt },
     };
     socket.send(JSON.stringify(msg));
-
-    // Takeover detection: if I moved significantly, auto-claim leadership
-    const [px, py, pz] = lastBroadcastPos.current;
-    const dx = position[0] - px, dy = position[1] - py, dz = position[2] - pz;
-    const distSq = dx * dx + dy * dy + dz * dz;
-    if (distSq > 0.01) { // threshold ~0.1 units
-      lastBroadcastPos.current = position;
-      const { isBoardroomMode, takeoverModeEnabled, takeoverApprovedUserIds, boardroomLeaderId } = useStore.getState();
-      const myId = userRef.current.userId;
-      if (
-        isBoardroomMode &&
-        takeoverModeEnabled &&
-        takeoverApprovedUserIds.includes(myId) &&
-        boardroomLeaderId !== myId
-      ) {
-        broadcastLeaderTakeover(myId);
-        setBoardroomLeaderId(myId);
-        setFollowingRemoteUser(null);
-      }
-    }
   }
 
   function broadcastPresenterChange(agentId: string | null) {
@@ -212,6 +239,12 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'BOARDROOM_COUNTDOWN', payload: {} }));
   }
 
+  function broadcastArenaEntry() {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'ARENA_ENTRY', payload: {} }));
+  }
+
   function broadcastLaserMove(position: [number, number, number] | null) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -230,6 +263,42 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'LEADER_TAKEOVER', payload: { userId } }));
   }
 
+  function broadcastModelChange(modelType: 'synth' | 'bicycle' | 'imported', fileBase64?: string, fileName?: string) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'MODEL_CHANGE', payload: { modelType, fileBase64, fileName } }));
+  }
+
+  function broadcastMeetingEnd() {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'MEETING_END', payload: {} }));
+  }
+
+  function broadcastTakeoverSync(enabled: boolean, approvedUserIds: string[]) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'TAKEOVER_SYNC', payload: { enabled, approvedUserIds } }));
+  }
+
+  function broadcastHostTransfer(toUserId: string) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'HOST_TRANSFER', payload: { toUserId } }));
+  }
+
+  function broadcastPresenterRequest(fromUserId: string, fromName: string) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'PRESENTER_REQUEST', payload: { fromUserId, fromName } }));
+  }
+
+  function broadcastTakeoverAttempt(userId: string) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'TAKEOVER_ATTEMPT', payload: { userId } }));
+  }
+
   return {
     localUserId: userRef.current.userId,
     remoteParticipants,
@@ -240,8 +309,15 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastInsightCard,
     broadcastLeaderChange,
     broadcastBoardroomCountdown,
+    broadcastArenaEntry,
     broadcastLaserMove,
     broadcastPrivacyMode,
     broadcastLeaderTakeover,
+    broadcastModelChange,
+    broadcastMeetingEnd,
+    broadcastTakeoverSync,
+    broadcastHostTransfer,
+    broadcastPresenterRequest,
+    broadcastTakeoverAttempt,
   };
 }

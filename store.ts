@@ -328,7 +328,21 @@ interface AppState {
   setBoardroomLeaderId: (userId: string | null) => void;
   setTakeoverModeEnabled: (v: boolean) => void;
   toggleTakeoverApproval: (userId: string) => void;
+  setTakeoverApprovedUserIds: (ids: string[]) => void;
   setPrivacyMode: (enabled: boolean) => void;
+
+  // Local-only boardroom presenter detach (drag to look around, auto-resume after 3s)
+  boardroomPresenterDetachedId: string | null;
+  detachBoardroomPresenter: (presenterId: string) => void;
+  resumeBoardroomPresenter: () => void;
+
+  // Presenter request (non-host requests; host sees notification)
+  pendingPresenterRequest: { fromUserId: string; fromName: string } | null;
+  setPendingPresenterRequest: (req: { fromUserId: string; fromName: string } | null) => void;
+
+  // --- SESSION HOST ---
+  sessionHostId: string | null; // Zoom-style host: first to join, controls view transitions
+  setSessionHostId: (id: string | null) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -614,8 +628,13 @@ export const useStore = create<AppState>((set) => ({
   // --- NEW: Import Status Actions ---
   clearImportStatus: () => set({ importError: null, importSuccess: null }),
 
+  // --- SESSION HOST ---
+  sessionHostId: null,
+
   // --- BOARDROOM MODE ---
   boardroomPendingEntry: false,
+  boardroomPresenterDetachedId: null,
+  pendingPresenterRequest: null,
   isBoardroomMode: false,
   boardroomLayout: 'focus' as BoardroomLayout,
   boardroomInteractionEnabled: false,
@@ -637,6 +656,9 @@ export const useStore = create<AppState>((set) => ({
         viewMode: ViewMode.FREE,
         activeAgentId: null,
         temporarilyDisengagedFromAgentId: null,
+        // Host is presenter by default; BoardroomPresenterSync will set followingRemoteUserId for non-hosts
+        boardroomLeaderId: state.sessionHostId,
+        boardroomPresenterDetachedId: null,
       };
     }
     return {
@@ -647,6 +669,7 @@ export const useStore = create<AppState>((set) => ({
       viewMode: ViewMode.FREE,
       activeAgentId: null,
       temporarilyDisengagedFromAgentId: null,
+      boardroomPresenterDetachedId: null,
     };
   }),
   setBoardroomLayout: (layout) => set({ boardroomLayout: layout }),
@@ -670,7 +693,16 @@ export const useStore = create<AppState>((set) => ({
         : [...ids, userId],
     };
   }),
+  setTakeoverApprovedUserIds: (ids) => set({ takeoverApprovedUserIds: ids }),
   setPrivacyMode: (enabled) => set({ isPrivacyMode: enabled }),
+  setSessionHostId: (id) => set({ sessionHostId: id }),
+  detachBoardroomPresenter: (presenterId) => set({
+    boardroomPresenterDetachedId: presenterId,
+    followingRemoteUserId: null,
+    leaderId: null,
+  }),
+  resumeBoardroomPresenter: () => set({ boardroomPresenterDetachedId: null }),
+  setPendingPresenterRequest: (req) => set({ pendingPresenterRequest: req }),
 
 }));
 
