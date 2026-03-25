@@ -314,26 +314,27 @@ const SceneRenderer = () => {
 
 
     // --- 2. RENDER LOGIC (Split vs Standard) ---
-    
-    // CRITICAL: Use physical pixels for Viewport/Scissor
-    const dpr = gl.getPixelRatio();
-    const totalWidth = Math.floor(size.width * dpr);
-    const totalHeight = Math.floor(size.height * dpr);
+
+    // Three.js setViewport/setScissor accept CSS (logical) pixel values and multiply
+    // by pixelRatio internally. Do NOT pre-multiply by DPR here — it would be applied
+    // twice on HiDPI screens (DPR=2 → 4× too large), breaking pointer/laser alignment.
+    const w = size.width;
+    const h = size.height;
 
     gl.autoClear = false;
     gl.clear();
-    
+
     if (viewMode === ViewMode.SPLIT_SCREEN) {
         // -- Split Screen --
-        const halfWidth = Math.floor(totalWidth / 2);
+        const halfWidth = Math.floor(w / 2);
 
         // 1. Render Left Panel (User View)
         // Update Aspect Ratio based on LOGICAL size
         mainCam.aspect = (size.width / 2) / size.height;
         mainCam.updateProjectionMatrix();
 
-        gl.setViewport(0, 0, halfWidth, totalHeight);
-        gl.setScissor(0, 0, halfWidth, totalHeight);
+        gl.setViewport(0, 0, halfWidth, h);
+        gl.setScissor(0, 0, halfWidth, h);
         gl.setScissorTest(true);
         gl.render(scene, mainCam);
 
@@ -350,9 +351,9 @@ const SceneRenderer = () => {
                 const p = new THREE.Vector3();
                 p.setFromMatrixPosition(agentObj.matrixWorld);
                 p.y += 0.6; // Eye/Screen level
-                
+
                 agentCamRef.current.position.copy(p);
-                
+
                 // Use the agent's rotation exactly
                 const q = new THREE.Quaternion();
                 agentObj.getWorldQuaternion(q);
@@ -364,24 +365,24 @@ const SceneRenderer = () => {
                 agentCamRef.current.aspect = (size.width / 2) / size.height;
                 agentCamRef.current.updateProjectionMatrix();
                 agentCamRef.current.updateMatrixWorld();
-                
+
                 // IMPORTANT: Hide the agent itself so they don't block their own view
                 const wasVisible = agentObj.visible;
                 agentObj.visible = false;
-                
-                gl.setViewport(halfWidth, 0, halfWidth, totalHeight);
-                gl.setScissor(halfWidth, 0, halfWidth, totalHeight);
+
+                gl.setViewport(halfWidth, 0, halfWidth, h);
+                gl.setScissor(halfWidth, 0, halfWidth, h);
                 gl.render(scene, agentCamRef.current);
-                
+
                 // Restore visibility
                 agentObj.visible = wasVisible;
             }
         }
-        
+
         // Fallback if no agent selected or not found: Clear/Black
         if (!agentFound) {
-             gl.setViewport(halfWidth, 0, halfWidth, totalHeight);
-             gl.setScissor(halfWidth, 0, halfWidth, totalHeight);
+             gl.setViewport(halfWidth, 0, halfWidth, h);
+             gl.setScissor(halfWidth, 0, halfWidth, h);
              gl.setClearColor(new THREE.Color('#111'));
              gl.clear();
              // Restore default clear color
@@ -391,8 +392,8 @@ const SceneRenderer = () => {
         gl.setScissorTest(false);
     } else {
         // -- Standard View --
-        gl.setViewport(0, 0, totalWidth, totalHeight);
-        gl.setScissor(0, 0, totalWidth, totalHeight);
+        gl.setViewport(0, 0, w, h);
+        gl.setScissor(0, 0, w, h);
         gl.setScissorTest(false);
         gl.render(scene, mainCam);
     }
@@ -464,8 +465,10 @@ const ViewpointCanvas: React.FC = () => {
     <>
     <BoardroomPresenterSync />
     <Canvas
-      shadows 
-      dpr={[1, 2]} 
+      shadows
+      dpr={[1, 2]}
+      eventPrefix="client"
+      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
       gl={{
         antialias: true,
         toneMapping: THREE.ACESFilmicToneMapping,

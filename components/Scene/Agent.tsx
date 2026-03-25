@@ -329,7 +329,7 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
           </Trail>
       )}
 
-      {(isActive || isSplitTarget) && !isPossessed && (
+      {((isActive && viewMode === ViewMode.POV_AGENT) || (isSplitTarget && viewMode === ViewMode.SPLIT_SCREEN)) && !isPossessed && (
         <mesh position={[0, -0.8, 0]} rotation={[-Math.PI/2, 0, 0]}>
             <ringGeometry args={[0.4, 0.5, 32]} />
             <meshBasicMaterial color={isSplitTarget ? "#00ff00" : agentColor} opacity={0.5} transparent />

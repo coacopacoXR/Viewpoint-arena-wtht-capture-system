@@ -149,8 +149,8 @@ const SceneTree: React.FC = () => {
             // Set the imported model in the store
             setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition);
 
-            // Broadcast to remote participants (cap at 5MB to stay within WS limits)
-            if (file.size <= 5 * 1024 * 1024) {
+            // Broadcast to remote participants (cap at 50MB for local use; production would need blob storage)
+            if (file.size <= 50 * 1024 * 1024) {
                 const buffer = await file.arrayBuffer();
                 const bytes = new Uint8Array(buffer);
                 let binary = '';
@@ -160,7 +160,7 @@ const SceneTree: React.FC = () => {
                 }
                 broadcastModelChange('imported', btoa(binary), file.name);
             } else {
-                console.warn('[ModelSync] File >5MB — skipping multiplayer sync');
+                setImportError('Model loaded locally but is too large to share with other participants (max 50MB).');
             }
         } catch (error) {
             console.error('Model import error:', error);
