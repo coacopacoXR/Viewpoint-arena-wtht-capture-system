@@ -149,8 +149,9 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
     const resizeCanvas = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = window.innerWidth * dpr;
+        canvas.height = window.innerHeight * dpr;
         redraw();
     }, [redraw]);
 
@@ -184,9 +185,10 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         if (!canvas) return { x: 0, y: 0 };
 
         const rect = canvas.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
         return {
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top
+            x: (e.clientX - rect.left) * dpr,
+            y: (e.clientY - rect.top) * dpr
         };
     };
 
