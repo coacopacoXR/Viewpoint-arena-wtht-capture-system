@@ -285,20 +285,6 @@ const CommentCard: React.FC<{
 };
 
 // Main Comments Panel
-// Utility function to capture WebGL canvas
-const captureCanvas = (): string | null => {
-    const canvas = Array.from(document.querySelectorAll('canvas')).find(
-        (el) => el.width > 0 && el.height > 0
-    );
-    if (!canvas) return null;
-    try {
-        return canvas.toDataURL('image/png');
-    } catch (e) {
-        console.warn('Failed to capture canvas:', e);
-        return null;
-    }
-};
-
 const CommentsPanel: React.FC = () => {
     const {
         comments,
