@@ -294,6 +294,9 @@ interface AppState {
   setCapturedScreenshot: (data: string | null) => void;
   setDrawingInteractionActive: (active: boolean) => void;
   setShowDrawingCanvas: (show: boolean) => void;
+  // Non-serializable: live reference so handleSave can capture the current GL frame.
+  _glCapture: (() => string | null) | null;
+  setGlCapture: (fn: (() => string | null) | null) => void;
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode: RightPanelMode) => void;
@@ -610,6 +613,8 @@ export const useStore = create<AppState>((set) => ({
   setCapturedScreenshot: (data) => set({ capturedScreenshot: data }),
   setDrawingInteractionActive: (active) => set({ drawingInteractionActive: active }),
   setShowDrawingCanvas: (show) => set({ showDrawingCanvas: show }),
+  _glCapture: null,
+  setGlCapture: (fn) => set({ _glCapture: fn }),
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode) => set({ rightPanelMode: mode }),

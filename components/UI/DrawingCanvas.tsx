@@ -84,19 +84,9 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // Clear canvas first
+        // Keep canvas transparent — the live 3D scene shows through underneath.
+        // The background image is only composited at save time.
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Draw background
-        if (bgImageRef.current) {
-            ctx.drawImage(bgImageRef.current, 0, 0, canvas.width, canvas.height);
-            // Add slight overlay to make drawings more visible
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-        } else {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-        }
 
         // Draw all paths from history
         const state = history[historyIndex];
@@ -146,33 +136,45 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         ctx.globalCompositeOperation = 'source-over';
     }, [history, historyIndex, currentPath]);
 
+    // Keep a stable ref to the latest redraw so resize/bg effects don't have
+    // redraw in their deps (which would re-run them on every mouse move).
+    const redrawRef = useRef(redraw);
+    useEffect(() => { redrawRef.current = redraw; });
+
     const resizeCanvas = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const dpr = window.devicePixelRatio || 1;
         canvas.width = window.innerWidth * dpr;
         canvas.height = window.innerHeight * dpr;
-        redraw();
-    }, [redraw]);
+        redrawRef.current();
+    }, []); // empty deps — only re-run on mount and window resize
 
     useEffect(() => {
         resizeCanvas();
     }, [resizeCanvas]);
 
-    // Load background image on mount and redraw when it is ready.
+    // Redraw whenever drawing state changes (history, currentPath).
+    useEffect(() => {
+        redraw();
+    }, [redraw]);
+
+    // Load background image on mount only (not on every mouse move).
     useEffect(() => {
         if (backgroundImage) {
             const img = new Image();
             img.onload = () => {
                 bgImageRef.current = img;
-                redraw();
+                // Do NOT resize canvas here — keep it at window.innerWidth * dpr
+                // from resizeCanvas so getCanvasPoint scale stays consistent.
+                redrawRef.current();
             };
             img.src = backgroundImage;
         } else {
             bgImageRef.current = null;
-            redraw();
+            redrawRef.current();
         }
-    }, [backgroundImage, redraw]);
+    }, [backgroundImage]);
 
     useEffect(() => {
         const handleResize = () => resizeCanvas();
@@ -183,12 +185,10 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
     const getCanvasPoint = (e: React.MouseEvent) => {
         const canvas = canvasRef.current;
         if (!canvas) return { x: 0, y: 0 };
-
         const rect = canvas.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
         return {
-            x: (e.clientX - rect.left) * dpr,
-            y: (e.clientY - rect.top) * dpr
+            x: (e.clientX - rect.left) * (canvas.width / rect.width),
+            y: (e.clientY - rect.top) * (canvas.height / rect.height),
         };
     };
 
@@ -252,58 +252,88 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        // Create export canvas with background + drawing annotations
-        const exportCanvas = document.createElement('canvas');
-        exportCanvas.width = canvas.width;
-        exportCanvas.height = canvas.height;
-        const ctx = exportCanvas.getContext('2d');
-        if (!ctx) return;
+        const compositeAndExport = (bgElement: HTMLImageElement | null) => {
+            // Use background dimensions as export size when available so background
+            // is drawn 1:1 (no scaling). Path coordinates are in drawing-canvas buffer
+            // space (canvas.width × canvas.height); scale them to match export size.
+            const exportW = bgElement ? bgElement.naturalWidth : canvas.width;
+            const exportH = bgElement ? bgElement.naturalHeight : canvas.height;
+            const scaleX = exportW / canvas.width;
+            const scaleY = exportH / canvas.height;
 
-        // Draw background image (3D view snapshot) if available
-        if (bgImageRef.current) {
-            ctx.drawImage(bgImageRef.current, 0, 0, canvas.width, canvas.height);
-        }
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = exportW;
+            exportCanvas.height = exportH;
+            const ctx = exportCanvas.getContext('2d');
+            if (!ctx) return;
 
-        // Draw all annotation paths on top
-        const state = history[historyIndex];
-        state.paths.forEach(path => {
-            ctx.strokeStyle = path.color;
-            ctx.lineWidth = path.width;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-
-            if (path.tool === 'pen') {
-                ctx.beginPath();
-                path.points.forEach((point, i) => {
-                    if (i === 0) {
-                        ctx.moveTo(point.x, point.y);
-                    } else {
-                        ctx.lineTo(point.x, point.y);
-                    }
-                });
-                ctx.stroke();
-            } else if (path.tool === 'line' && path.points.length >= 2) {
-                ctx.beginPath();
-                ctx.moveTo(path.points[0].x, path.points[0].y);
-                ctx.lineTo(path.points[path.points.length - 1].x, path.points[path.points.length - 1].y);
-                ctx.stroke();
-            } else if (path.tool === 'circle' && path.points.length >= 2) {
-                const start = path.points[0];
-                const end = path.points[path.points.length - 1];
-                const radius = Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2));
-                ctx.beginPath();
-                ctx.arc(start.x, start.y, radius, 0, Math.PI * 2);
-                ctx.stroke();
-            } else if (path.tool === 'rectangle' && path.points.length >= 2) {
-                const start = path.points[0];
-                const end = path.points[path.points.length - 1];
-                ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
+            if (bgElement) {
+                ctx.drawImage(bgElement, 0, 0, exportW, exportH);
             }
-        });
 
-        const dataUrl = exportCanvas.toDataURL('image/png');
-        setDrawingInteractionActive(false);
-        onSave(dataUrl);
+            const state = history[historyIndex];
+            state.paths.forEach(path => {
+                ctx.strokeStyle = path.color;
+                ctx.lineWidth = path.width * scaleX;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+
+                if (path.tool === 'pen') {
+                    ctx.beginPath();
+                    path.points.forEach((point, i) => {
+                        if (i === 0) ctx.moveTo(point.x * scaleX, point.y * scaleY);
+                        else ctx.lineTo(point.x * scaleX, point.y * scaleY);
+                    });
+                    ctx.stroke();
+                } else if (path.tool === 'line' && path.points.length >= 2) {
+                    ctx.beginPath();
+                    ctx.moveTo(path.points[0].x * scaleX, path.points[0].y * scaleY);
+                    ctx.lineTo(path.points[path.points.length - 1].x * scaleX, path.points[path.points.length - 1].y * scaleY);
+                    ctx.stroke();
+                } else if (path.tool === 'circle' && path.points.length >= 2) {
+                    const start = path.points[0];
+                    const end = path.points[path.points.length - 1];
+                    const radius = Math.sqrt(Math.pow((end.x - start.x) * scaleX, 2) + Math.pow((end.y - start.y) * scaleY, 2));
+                    ctx.beginPath();
+                    ctx.arc(start.x * scaleX, start.y * scaleY, radius, 0, Math.PI * 2);
+                    ctx.stroke();
+                } else if (path.tool === 'rectangle' && path.points.length >= 2) {
+                    const start = path.points[0];
+                    const end = path.points[path.points.length - 1];
+                    ctx.strokeRect(start.x * scaleX, start.y * scaleY, (end.x - start.x) * scaleX, (end.y - start.y) * scaleY);
+                }
+            });
+
+            const MAX_WIDTH = 1200;
+            let finalCanvas = exportCanvas;
+            if (exportCanvas.width > MAX_WIDTH) {
+                const scale = MAX_WIDTH / exportCanvas.width;
+                const scaled = document.createElement('canvas');
+                scaled.width = MAX_WIDTH;
+                scaled.height = Math.round(exportCanvas.height * scale);
+                const sCtx = scaled.getContext('2d');
+                if (sCtx) {
+                    sCtx.drawImage(exportCanvas, 0, 0, scaled.width, scaled.height);
+                    finalCanvas = scaled;
+                }
+            }
+            const dataUrl = finalCanvas.toDataURL('image/jpeg', 0.75);
+            setDrawingInteractionActive(false);
+            onSave(dataUrl);
+        };
+
+        // Prefer a fresh GL capture (camera-frozen, matches exactly what was drawn).
+        // Fall back to the pre-loaded bgImageRef which is already a decoded HTMLImageElement.
+        const { _glCapture } = useStore.getState();
+        const freshUrl = _glCapture?.() ?? null;
+
+        if (freshUrl) {
+            const img = new Image();
+            img.onload = () => compositeAndExport(img);
+            img.src = freshUrl;
+        } else {
+            compositeAndExport(bgImageRef.current);
+        }
     }, [history, historyIndex, onSave, setDrawingInteractionActive]);
 
     useEffect(() => {
@@ -341,13 +371,11 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({ onSave, onCancel, backgro
 
     return (
         <>
-            {/* Minimal backdrop - simple dark overlay */}
+            {/* Subtle backdrop — just enough contrast for the drawing strokes
+                without hiding the live 3D scene underneath */}
             <div
-                className={clsx(
-                    "fixed inset-0 z-[300] transition-opacity duration-150",
-                    isReady ? "bg-black/20" : "bg-black/40"
-                )}
-                style={{ pointerEvents: 'none' }}
+                className="fixed inset-0 z-[300] bg-black/25 transition-opacity duration-150"
+                style={{ pointerEvents: 'none', opacity: isReady ? 1 : 0 }}
             />
 
             {/* Canvas */}

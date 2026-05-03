@@ -225,20 +225,6 @@ const CommentMarker: React.FC<{
     );
 };
 
-// Utility to capture WebGL canvas
-const captureCanvas = (): string | null => {
-    const canvas = Array.from(document.querySelectorAll('canvas')).find(
-        (el) => el.width > 0 && el.height > 0
-    );
-    if (!canvas) return null;
-    try {
-        return canvas.toDataURL('image/png');
-    } catch (e) {
-        console.warn('Failed to capture canvas:', e);
-        return null;
-    }
-};
-
 // Comment placement preview (shown when placing a new comment or drawing)
 const CommentPlacementPreview: React.FC = () => {
     const { camera, scene, gl } = useThree();
@@ -297,9 +283,21 @@ const CommentPlacementPreview: React.FC = () => {
         }
     });
 
-    // Handle click to place comment or drawing anchor
+    // Handle click to place comment or drawing anchor.
+    // For drawing mode we capture the screenshot on mousedown (before the
+    // camera can drift) and then confirm on mouseup/click.
+    const pendingScreenshotRef = useRef<string | null>(null);
+
     React.useEffect(() => {
         if (!isPlacingMode) return;
+
+        const handleMouseDown = (e: MouseEvent) => {
+            if (e.button !== 0) return;
+            if (commentMode === 'placing-drawing') {
+                // Capture the exact frame the user is looking at right now.
+                pendingScreenshotRef.current = gl.domElement.toDataURL('image/jpeg', 0.85);
+            }
+        };
 
         const handleClick = (e: MouseEvent) => {
             if (e.button !== 0) return; // Only left click
@@ -335,10 +333,9 @@ const CommentPlacementPreview: React.FC = () => {
                         foundName
                     );
 
-                    // For drawing mode, capture screenshot and open drawing canvas
                     if (commentMode === 'placing-drawing') {
-                        const screenshot = captureCanvas();
-                        setCapturedScreenshot(screenshot);
+                        setCapturedScreenshot(pendingScreenshotRef.current);
+                        pendingScreenshotRef.current = null;
                         setCommentMode('drawing');
                         setShowDrawingCanvas(true);
                     }
@@ -347,8 +344,12 @@ const CommentPlacementPreview: React.FC = () => {
             }
         };
 
+        window.addEventListener('mousedown', handleMouseDown);
         window.addEventListener('click', handleClick);
-        return () => window.removeEventListener('click', handleClick);
+        return () => {
+            window.removeEventListener('mousedown', handleMouseDown);
+            window.removeEventListener('click', handleClick);
+        };
     }, [commentMode, isPlacingMode, camera, scene, gl, setPendingComment, setCommentMode, setCapturedScreenshot, setShowDrawingCanvas, currentTree]);
 
     if (!isPlacingMode) return null;
@@ -372,10 +373,19 @@ const CommentPlacementPreview: React.FC = () => {
 
 // Main component that renders all spatial comments
 const SpatialComments: React.FC = () => {
+    const { gl } = useThree();
     const comments = useStore(state => state.comments);
     const commentsExpandedInScene = useStore(state => state.commentsExpandedInScene);
     const toggleCommentExpanded = useStore(state => state.toggleCommentExpanded);
     const setCommentScreenOffset = useStore(state => state.setCommentScreenOffset);
+
+    // Register GL capture here (always mounted) so handleSave can grab the
+    // current frame even after commentMode transitions away from placing-drawing.
+    React.useEffect(() => {
+        const { setGlCapture } = useStore.getState();
+        setGlCapture(() => gl.domElement.toDataURL('image/jpeg', 0.85));
+        return () => setGlCapture(null);
+    }, [gl]);
 
     return (
         <group>
