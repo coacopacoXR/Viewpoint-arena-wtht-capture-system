@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, BoardroomLayout } from './types';
 import { Vector3, Group } from 'three';
+import { flushSessionToTracker } from './lib/trackerBridge';
 
 const INITIAL_AGENTS: AgentState[] = [
   { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: '#ff4400', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
@@ -349,7 +350,7 @@ interface AppState {
   setSessionHostId: (id: string | null) => void;
 }
 
-export const useStore = create<AppState>((set) => ({
+export const useStore = create<AppState>((set, get) => ({
   viewMode: ViewMode.FREE,
   representationMode: RepresentationMode.FULL,
   showFrustums: false,
@@ -420,7 +421,19 @@ export const useStore = create<AppState>((set) => ({
   toggleGaze: () => set((state) => ({ showGaze: !state.showGaze })),
   toggleTrails: () => set((state) => ({ showTrails: !state.showTrails })),
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
-  endMeeting: (ended) => set({ isMeetingEnded: ended, isPlaying: !ended }),
+  endMeeting: (ended) => {
+    if (ended) {
+      const { insightCards, agents, activeModelType } = get();
+      const roomId = window.location.pathname.split('/room/')[1] ?? 'local';
+      flushSessionToTracker({
+        roomId,
+        insightCards,
+        participantCount: agents.length,
+        modelName: activeModelType ?? null,
+      });
+    }
+    set({ isMeetingEnded: ended, isPlaying: !ended });
+  },
   setTime: (time) => set({ time }),
   resetTime: () => set({ time: 0, heatmapValues: {}, chatHistory: [], insightCards: [] }),
   
