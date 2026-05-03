@@ -448,7 +448,7 @@ const BoardroomShell: React.FC = () => {
                 </button>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <ConversationPanel onCardSelect={(card) => setSelectedInsightCard(card)} onShowExplainer={() => setShowInsightExplainer(true)} />
+                <ConversationPanel />
               </div>
             </div>
           </div>

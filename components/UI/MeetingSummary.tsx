@@ -1,5 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store';
 import {
     CheckCircle2, AlertTriangle, Lightbulb, FileText, Download,
@@ -386,6 +387,7 @@ const buildCausalChain = (
 // ============================================================================
 
 const MeetingSummary: React.FC = () => {
+    const navigate = useNavigate();
     const insightCards = useStore(state => state.insightCards);
     const requirements = useStore(state => state.requirements);
     const chatHistory = useStore(state => state.chatHistory);
@@ -846,6 +848,12 @@ const MeetingSummary: React.FC = () => {
                     <div className="flex items-center gap-3">
                         <button className="bg-gray-800 text-gray-300 px-4 py-2 rounded font-bold text-xs hover:text-white hover:bg-gray-700 transition-colors flex items-center gap-2">
                             <Download size={14} /> PDF Report
+                        </button>
+                        <button
+                            onClick={() => navigate('/tracker')}
+                            className="bg-gray-800 text-gray-300 px-4 py-2 rounded font-bold text-xs hover:text-white hover:bg-gray-700 transition-colors"
+                        >
+                            Open Tracker →
                         </button>
                         <button
                             onClick={() => endMeeting(false)}
