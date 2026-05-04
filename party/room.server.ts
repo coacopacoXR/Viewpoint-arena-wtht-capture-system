@@ -16,6 +16,7 @@ type RoomMessage =
   | { type: 'INSIGHT_CARD'; payload: any }
   | { type: 'LEADER_CHANGE'; payload: { userId: string | null } }
   | { type: 'BOARDROOM_COUNTDOWN'; payload: Record<string, never> }
+  | { type: 'BOARDROOM_STATE'; payload: { active: boolean } }
   | { type: 'ARENA_ENTRY'; payload: Record<string, never> }
   | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
@@ -50,6 +51,8 @@ export default class RoomServer implements Party.Server {
   currentModel: { modelType: string; fileBase64?: string; fileName?: string } | null = null;
   // Persisted spatial comments for late joiners
   comments: any[] = [];
+  // Whether the room is currently in boardroom mode — sent to late joiners
+  isBoardroomMode = false;
 
   constructor(readonly room: Party.Room) {}
 
@@ -71,6 +74,7 @@ export default class RoomServer implements Party.Server {
       conn.send(JSON.stringify({ type: 'MODEL_CHANGE', payload: this.currentModel } as RoomMessage));
     }
     conn.send(JSON.stringify({ type: 'COMMENT_ROSTER', payload: { comments: this.comments } } as RoomMessage));
+    conn.send(JSON.stringify({ type: 'BOARDROOM_STATE', payload: { active: this.isBoardroomMode } } as RoomMessage));
   }
 
   onMessage(message: string, sender: Party.Connection) {
@@ -156,12 +160,18 @@ export default class RoomServer implements Party.Server {
       // Relay to all peers; client filters by `to` field
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
 
+    } else if (msg.type === 'BOARDROOM_COUNTDOWN') {
+      this.isBoardroomMode = true;
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
+    } else if (msg.type === 'ARENA_ENTRY') {
+      this.isBoardroomMode = false;
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
     } else if (
       msg.type === 'PRESENTER_CHANGE' ||
       msg.type === 'INSIGHT_CARD' ||
       msg.type === 'LEADER_CHANGE' ||
-      msg.type === 'BOARDROOM_COUNTDOWN' ||
-      msg.type === 'ARENA_ENTRY' ||
       msg.type === 'LASER_MOVE' ||
       msg.type === 'PRIVACY_MODE' ||
       msg.type === 'LEADER_TAKEOVER' ||

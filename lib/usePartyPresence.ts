@@ -16,6 +16,7 @@ type RoomMessage =
   | { type: 'INSIGHT_CARD'; payload: InsightCard }
   | { type: 'LEADER_CHANGE'; payload: { userId: string | null } }
   | { type: 'BOARDROOM_COUNTDOWN'; payload: Record<string, never> }
+  | { type: 'BOARDROOM_STATE'; payload: { active: boolean } }
   | { type: 'ARENA_ENTRY'; payload: Record<string, never> }
   | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
@@ -146,6 +147,12 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         const { leaderId, followingRemoteUserId } = useStore.getState();
         if (leaderId === 'USER' && !followingRemoteUserId) return;
         setFollowingRemoteUser(msg.payload.userId);
+      } else if (msg.type === 'BOARDROOM_STATE') {
+        // Late-joiner sync: enter boardroom directly without countdown if room is already in it
+        const { isBoardroomMode, toggleBoardroomMode } = useStore.getState();
+        if (msg.payload.active && !isBoardroomMode) {
+          toggleBoardroomMode();
+        }
       } else if (msg.type === 'BOARDROOM_COUNTDOWN') {
         triggerBoardroomEntry();
       } else if (msg.type === 'ARENA_ENTRY') {

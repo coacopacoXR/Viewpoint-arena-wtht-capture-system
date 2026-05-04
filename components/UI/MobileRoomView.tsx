@@ -2,10 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../../store';
 import { useShallow } from 'zustand/react/shallow';
 import { usePresence } from '../../lib/PresenceContext';
+import { useWebRTCContext } from '../../lib/WebRTCContext';
 import ViewpointCanvas from '../Scene/ViewpointCanvas';
 import BoardroomCountdown from './BoardroomCountdown';
+import HumanParticipantTile from './Boardroom/HumanParticipantTile';
 import { InsightCard, SpatialComment } from '../../types';
-import { MonitorPlay, Radio } from 'lucide-react';
+import { MonitorPlay, Radio, Mic, MicOff, Video, VideoOff, Power } from 'lucide-react';
 
 type Tab = '3d' | 'insights' | 'people';
 
@@ -24,7 +26,7 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
   const {
     insightCards, isBoardroomMode, sessionHostId,
     followingRemoteUserId, setFollowingRemoteUser,
-    boardroomLeaderId, time, isPrivacyMode,
+    boardroomLeaderId, time, isPrivacyMode, endMeeting,
   } = useStore(useShallow(state => ({
     insightCards: state.insightCards,
     isBoardroomMode: state.isBoardroomMode,
@@ -34,9 +36,11 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
     boardroomLeaderId: state.boardroomLeaderId,
     time: state.time,
     isPrivacyMode: state.isPrivacyMode,
+    endMeeting: state.endMeeting,
   })));
 
-  const { remoteParticipantList, broadcastPresence, broadcastCommentAdd, localUserId } = usePresence();
+  const { remoteParticipantList, broadcastPresence, broadcastCommentAdd, broadcastMeetingEnd, localUserId } = usePresence();
+  const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam } = useWebRTCContext();
 
   const [activeTab, setActiveTab] = useState<Tab>('3d');
   const [commentText, setCommentText] = useState('');
@@ -119,155 +123,112 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
 
   // ─── BOARDROOM VIEW ─────────────────────────────────────────────────────────
   if (isBoardroomMode) {
+    const isHost = sessionHostId === localUserId || sessionHostId === null;
+
+    // PiP participants: self first, then up to 2 remote
+    const pipParticipants = [
+      { userId: localUserId, name: userName, color: '#10b981', isYou: true, stream: localStream },
+      ...remoteParticipantList.slice(0, 2).map(p => ({
+        userId: p.userId, name: p.name, color: p.color, isYou: false,
+        stream: remoteStreams.get(p.userId) ?? null,
+      })),
+    ];
+
     return (
       <div
-        className="flex flex-col overflow-hidden"
-        style={{ height: '100dvh', background: '#0a0a0a', fontFamily: 'Inter, system-ui, sans-serif' }}
+        className="relative overflow-hidden"
+        style={{ height: '100dvh', background: '#0a0a0a' }}
       >
-        {/* BoardroomCountdown overlay (handles its own visibility via store) */}
         <BoardroomCountdown />
 
-        {/* Boardroom header */}
-        <div
-          className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-b"
-          style={{ borderColor: '#1f1f1f', background: '#0d0d0d' }}
-        >
-          <div className="flex items-center gap-2.5">
-            <MonitorPlay size={13} className="text-white/50" />
-            <span className="text-white text-[11px] font-bold tracking-tight uppercase">Boardroom</span>
-            <div className="h-3.5 w-px bg-white/10" />
-            {!isPrivacyMode && (
-              <div className="flex items-center gap-1 text-[9px] font-mono text-green-400">
-                <Radio size={8} className="animate-pulse" />
-                REC
-              </div>
-            )}
-            <span className="font-mono text-[9px]" style={{ color: 'rgba(255,255,255,0.25)' }}>{formatTime(time)}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{ background: '#1a1a1a', color: '#6b7280', border: '1px solid #2a2a2a' }}>
-              {roomId.slice(0, 6).toUpperCase()}
-            </span>
-            <div className="flex items-center gap-1">
-              <span style={{ color: '#10b981', fontSize: 7 }}>●</span>
-              <span className="font-mono text-[9px]" style={{ color: '#4b5563' }}>{allParticipants.length} live</span>
-            </div>
-          </div>
+        {/* 3D canvas fills entire screen */}
+        <div className="absolute inset-0">
+          <ViewpointCanvas />
         </div>
 
-        {/* Presenter / shared screen — 3D canvas constrained to ~42% height */}
-        <div className="flex-shrink-0 relative" style={{ height: '42dvh' }}>
-          <ViewpointCanvas />
-          {/* Presenter label */}
+        {/* Header bar */}
+        <div
+          className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-3"
+          style={{ paddingTop: 'max(10px, env(safe-area-inset-top))', paddingBottom: 10, background: 'linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%)' }}
+        >
+          <div className="flex items-center gap-2">
+            <MonitorPlay size={12} className="text-white/50" />
+            <span className="text-white text-[11px] font-bold tracking-tight uppercase">Boardroom</span>
+            {!isPrivacyMode && (
+              <>
+                <div className="h-3 w-px bg-white/20" />
+                <div className="flex items-center gap-1 text-[9px] font-mono text-green-400">
+                  <Radio size={7} className="animate-pulse" />
+                  REC
+                </div>
+              </>
+            )}
+            <span className="font-mono text-[9px] text-white/25">{formatTime(time)}</span>
+          </div>
           {leaderName && (
-            <div className="absolute top-2.5 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full" style={{ background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(255,255,255,0.12)', backdropFilter: 'blur(8px)' }}>
-                <div className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
-                <span className="text-yellow-300 text-[10px] font-mono font-bold">{leaderName}</span>
-                <span className="text-white/40 text-[10px] font-mono">presenting</span>
-              </div>
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full" style={{ background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(251,191,36,0.4)' }}>
+              <div className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+              <span className="text-yellow-300 text-[9px] font-mono font-bold">{leaderName}</span>
             </div>
           )}
-          {/* Shared screen label */}
-          <div className="absolute bottom-2 left-2 pointer-events-none">
-            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.6)' }}>
-              <span className="font-mono text-[8px]" style={{ color: 'rgba(255,255,255,0.3)' }}>SHARED SCREEN</span>
-            </div>
-          </div>
         </div>
 
-        {/* Participant strip — horizontal scroll */}
-        <div
-          className="flex-shrink-0 flex gap-2.5 px-3 py-2.5 overflow-x-auto border-b border-t"
-          style={{ borderColor: '#1f1f1f', background: '#0d0d0d' }}
-        >
-          {allParticipants.map(p => (
-            <div key={p.userId} className="flex flex-col items-center gap-1 shrink-0">
-              <div
-                className="relative rounded-xl overflow-hidden flex items-center justify-center"
-                style={{
-                  width: 56,
-                  height: 42,
-                  background: `radial-gradient(ellipse at 50% 20%, ${p.color}22 0%, #111 80%)`,
-                  border: boardroomLeaderId === p.userId
-                    ? '1.5px solid rgba(251,191,36,0.6)'
-                    : '1px solid rgba(255,255,255,0.1)',
-                }}
-              >
-                <div
-                  className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white"
-                  style={{ background: p.color }}
-                >
-                  {p.name[0]?.toUpperCase()}
-                </div>
-                {boardroomLeaderId === p.userId && (
-                  <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center py-0.5" style={{ background: 'rgba(251,191,36,0.25)' }}>
-                    <span className="font-mono text-[7px] text-yellow-300 font-bold">PRES</span>
-                  </div>
-                )}
-                {p.isYou && (
-                  <div className="absolute top-0.5 right-0.5">
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                  </div>
-                )}
-              </div>
-              <span className="font-mono text-[8px] max-w-[56px] truncate text-center" style={{ color: '#6b7280' }}>
-                {p.isYou ? 'You' : p.name.split(' ')[0]}
-              </span>
+        {/* PiP camera tiles — stacked on right side */}
+        <div className="absolute right-3 z-20 flex flex-col gap-2" style={{ top: 'max(56px, calc(env(safe-area-inset-top) + 48px))' }}>
+          {pipParticipants.map(p => (
+            <div key={p.userId} style={{ width: 88, height: 66 }} className="rounded-xl overflow-hidden shadow-lg ring-1 ring-white/10">
+              <HumanParticipantTile
+                stream={p.stream}
+                name={p.name}
+                color={p.color}
+                isMicOn={p.isYou ? isMicOn : true}
+                isCamOn={p.isYou ? isCamOn : true}
+                isYou={p.isYou}
+                isPresenter={boardroomLeaderId === p.userId}
+                size="fill"
+              />
             </div>
           ))}
         </div>
 
-        {/* Insight cards feed */}
-        <div ref={feedRef} className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5 min-h-0">
-          {insightCards.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center gap-3 py-6">
-              <span style={{ fontSize: 22, opacity: 0.5 }}>✦</span>
-              <p className="font-mono text-[11px]" style={{ color: '#374151' }}>Waiting for AI insights…</p>
-            </div>
-          ) : (
-            [...insightCards].reverse().map((card: InsightCard) => {
-              const s = TYPE_STYLES[card.type] ?? { border: 'rgba(255,255,255,0.1)', text: '#9ca3af', dot: '#4b5563' };
-              return (
-                <div key={card.id} className="rounded-xl p-3" style={{ background: '#111', border: `1px solid ${s.border}` }}>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: s.dot, display: 'inline-block' }} />
-                    <span className="text-[9px] font-bold font-mono uppercase tracking-wide" style={{ color: s.text }}>{card.type}</span>
-                    <span className="ml-auto font-mono text-[8px]" style={{ color: '#374151' }}>{card.agentId}</span>
-                  </div>
-                  <p className="text-xs font-semibold mb-1 leading-snug" style={{ color: '#f3f4f6' }}>{card.title}</p>
-                  <p className="text-[11px] leading-relaxed" style={{ color: '#6b7280' }}>{card.description}</p>
-                </div>
-              );
-            })
-          )}
-        </div>
+        {/* Bottom controls */}
+        <div
+          className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-center gap-5 py-4"
+          style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))', background: 'linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)' }}
+        >
+          <button
+            onClick={toggleMic}
+            className="w-13 h-13 rounded-full flex items-center justify-center transition-all"
+            style={{
+              width: 52, height: 52,
+              background: isMicOn ? 'rgba(255,255,255,0.15)' : 'rgba(239,68,68,0.35)',
+              border: `1px solid ${isMicOn ? 'rgba(255,255,255,0.25)' : 'rgba(239,68,68,0.5)'}`,
+            }}
+          >
+            {isMicOn ? <Mic size={20} color="#fff" /> : <MicOff size={20} color="#f87171" />}
+          </button>
 
-        {/* Comment input */}
-        <div className="flex-shrink-0 px-3 py-2.5 border-t" style={{ borderColor: '#1f1f1f', background: '#0a0a0a', paddingBottom: 'max(10px, env(safe-area-inset-bottom))' }}>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={commentText}
-              onChange={e => setCommentText(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleSend(); }}
-              placeholder="Comment to room…"
-              className="flex-1 rounded-xl px-3 py-2 text-sm outline-none"
-              style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#f3f4f6' }}
-            />
+          <button
+            onClick={toggleCam}
+            className="rounded-full flex items-center justify-center transition-all"
+            style={{
+              width: 52, height: 52,
+              background: isCamOn ? 'rgba(255,255,255,0.15)' : 'rgba(239,68,68,0.35)',
+              border: `1px solid ${isCamOn ? 'rgba(255,255,255,0.25)' : 'rgba(239,68,68,0.5)'}`,
+            }}
+          >
+            {isCamOn ? <Video size={20} color="#fff" /> : <VideoOff size={20} color="#f87171" />}
+          </button>
+
+          {isHost && (
             <button
-              onClick={handleSend}
-              disabled={!commentText.trim()}
-              className="px-4 py-2 rounded-xl text-sm font-bold transition-all"
-              style={{
-                background: sent ? 'rgba(16,185,129,0.2)' : commentText.trim() ? '#fff' : '#1a1a1a',
-                color: sent ? '#10b981' : commentText.trim() ? '#000' : '#374151',
-                border: sent ? '1px solid rgba(16,185,129,0.4)' : '1px solid #2a2a2a',
-              }}
+              onClick={() => { endMeeting(true); broadcastMeetingEnd(); }}
+              className="rounded-full flex items-center justify-center transition-all"
+              style={{ width: 52, height: 52, background: 'rgba(239,68,68,0.3)', border: '1px solid rgba(239,68,68,0.45)' }}
             >
-              {sent ? '✓' : '↑'}
+              <Power size={20} color="#f87171" />
             </button>
-          </div>
+          )}
         </div>
       </div>
     );
