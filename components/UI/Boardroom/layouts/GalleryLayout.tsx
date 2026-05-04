@@ -15,6 +15,7 @@ interface GalleryLayoutProps {
   onPanelWidthChange?: (w: number) => void;
   onWebcamOnlyChange?: (value: boolean) => void;
   userSelfTile?: React.ReactNode;
+  humanTiles?: React.ReactNode;
 }
 
 const MIN_PANEL = 260;
@@ -24,7 +25,7 @@ const CELL_GAP = 8;       // gap-2
 const GalleryLayout: React.FC<GalleryLayoutProps> = ({
   agents, speakingAgentId, pinnedAgentId, pois, onPin,
   presenterLabel, interactionEnabled, screenSharing,
-  onPanelWidthChange, onWebcamOnlyChange, userSelfTile,
+  onPanelWidthChange, onWebcamOnlyChange, userSelfTile, humanTiles,
 }) => {
   const [panelWidth, setPanelWidth] = useState(320);
   const [isWebcamOnly, setIsWebcamOnly] = useState(false);
@@ -154,8 +155,10 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
                 </div>
               );
             })}
-            {/* Self tile */}
-            {userSelfTile && (
+            {/* Human participant tiles (WebRTC) — or legacy self tile */}
+            {humanTiles ? (
+              humanTiles
+            ) : userSelfTile && (
               <div className="relative" style={{ height: wcCellHeight }}>
                 <div className="absolute inset-0">{userSelfTile}</div>
               </div>
@@ -203,8 +206,10 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
               </div>
             );
           })}
-          {/* Self tile */}
-          {userSelfTile && (
+          {/* Human participant tiles (WebRTC) — or legacy self tile */}
+          {humanTiles ? (
+            humanTiles
+          ) : userSelfTile && (
             <div className="relative" style={{ height: cellHeight }}>
               <div className="absolute inset-0">{userSelfTile}</div>
             </div>

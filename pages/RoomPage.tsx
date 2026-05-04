@@ -6,6 +6,8 @@ import MobileRoomView from '../components/UI/MobileRoomView';
 import { useStore } from '../store';
 import { usePartyPresence } from '../lib/usePartyPresence';
 import { PresenceContext } from '../lib/PresenceContext';
+import { useWebRTC } from '../lib/useWebRTC';
+import { WebRTCContext } from '../lib/WebRTCContext';
 
 function getMobileUserName(): string {
   try {
@@ -21,6 +23,7 @@ const RoomPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const isMeetingEnded = useStore(state => state.isMeetingEnded);
+  const isBoardroomMode = useStore(state => state.isBoardroomMode);
 
   const isMobile = window.innerWidth < 768 || /Mobi|Android/i.test(navigator.userAgent);
 
@@ -35,9 +38,18 @@ const RoomPage: React.FC = () => {
 
   const presence = usePartyPresence(roomId);
 
+  const webrtc = useWebRTC({
+    localUserId: presence.localUserId,
+    remoteParticipantList: presence.remoteParticipantList,
+    broadcastWebRTCSignal: presence.broadcastWebRTCSignal,
+    registerWebRTCSignalHandler: presence.registerWebRTCSignalHandler,
+    active: isBoardroomMode,
+  });
+
   // PresenceContext wraps BOTH mobile and desktop so ViewpointCanvas works in both
   return (
     <PresenceContext.Provider value={presence}>
+    <WebRTCContext.Provider value={webrtc}>
       {isMobile ? (
         <MobileRoomView
           roomId={roomId ?? ''}
@@ -51,6 +63,7 @@ const RoomPage: React.FC = () => {
           </div>
         </div>
       )}
+    </WebRTCContext.Provider>
     </PresenceContext.Provider>
   );
 };

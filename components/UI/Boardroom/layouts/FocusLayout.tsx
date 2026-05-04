@@ -13,11 +13,12 @@ interface FocusLayoutProps {
   interactionEnabled: boolean;
   screenSharing: boolean;
   userSelfTile?: React.ReactNode;
+  humanTiles?: React.ReactNode;
 }
 
 const FocusLayout: React.FC<FocusLayoutProps> = ({
   agents, speakingAgentId, pinnedAgentId, pois, onPin,
-  presenterLabel, interactionEnabled, screenSharing, userSelfTile,
+  presenterLabel, interactionEnabled, screenSharing, userSelfTile, humanTiles,
 }) => {
   return (
     <div className="flex flex-col w-full h-full">
@@ -62,8 +63,10 @@ const FocusLayout: React.FC<FocusLayoutProps> = ({
             />
           );
         })}
-        {/* Self tile */}
-        {userSelfTile}
+        {/* Human participant tiles (WebRTC) */}
+        {humanTiles}
+        {/* Self tile (legacy fallback) */}
+        {!humanTiles && userSelfTile}
       </div>
     </div>
   );
