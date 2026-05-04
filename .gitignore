@@ -25,3 +25,4 @@ dist-ssr
 
 # PartyKit local dev state
 .partykit/state/
+.vercel

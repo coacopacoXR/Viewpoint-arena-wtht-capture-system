@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Viewpoint Arena</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -56,6 +56,19 @@
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
         letter-spacing: -0.01em;
+        /* Fix mobile viewport height (accounts for dynamic browser chrome) */
+        height: 100dvh;
+        position: fixed;
+        width: 100%;
+        /* Prevent iOS bounce scroll */
+        overscroll-behavior: none;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      #root {
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
       }
 
       .font-mono {

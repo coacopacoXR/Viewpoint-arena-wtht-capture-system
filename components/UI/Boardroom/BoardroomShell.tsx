@@ -1,9 +1,11 @@
 import React, { useState, useMemo, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   Settings, LayoutGrid, Radio, Power, MonitorPlay,
   MessageSquare, X, Monitor, MonitorOff, Layers, ChevronRight, ChevronDown,
-  Video, VideoOff, User, Mic2, CheckCircle, XCircle
+  Video, VideoOff, User, Mic2, CheckCircle, XCircle, Share2
 } from 'lucide-react';
+import SharePanel from '../SharePanel';
 import { clsx } from 'clsx';
 import { useStore } from '../../../store';
 import { useShallow } from 'zustand/react/shallow';
@@ -60,6 +62,7 @@ const FloatingPanel: React.FC<{
 );
 
 const BoardroomShell: React.FC = () => {
+  const { roomId } = useParams<{ roomId: string }>();
   const {
     agents, pois, chatHistory, time, isPrivacyMode,
     toggleBoardroomMode,
@@ -105,6 +108,7 @@ const BoardroomShell: React.FC = () => {
 
   const [showManager, setShowManager] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
+  const [showShare, setShowShare] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [showComments, setShowComments] = useState(false);
@@ -327,6 +331,28 @@ const BoardroomShell: React.FC = () => {
               Transcript
             </button>
           )}
+
+          <div className="h-5 w-px bg-white/10 mx-0.5" />
+
+          {/* Share */}
+          <div className="relative">
+            <button
+              onClick={() => setShowShare(v => !v)}
+              className={clsx(
+                'px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide border transition-all flex items-center gap-1',
+                showShare
+                  ? 'bg-white text-black border-white'
+                  : 'bg-white/8 text-white/50 border-white/10 hover:bg-white/15 hover:text-white'
+              )}
+              title="Invite participants"
+            >
+              <Share2 size={10} />
+              Share
+            </button>
+            {showShare && roomId && (
+              <SharePanel roomId={roomId} onClose={() => setShowShare(false)} />
+            )}
+          </div>
 
           <div className="h-5 w-px bg-white/10 mx-0.5" />
 

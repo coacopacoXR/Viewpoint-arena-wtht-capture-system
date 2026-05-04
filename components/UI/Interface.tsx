@@ -6,8 +6,10 @@ import {
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
   ShieldOff, Shield, Radio, Glasses, MessageSquare, Mic,
   ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight,
-  MonitorPlay
+  MonitorPlay, Share2
 } from 'lucide-react';
+import SharePanel from './SharePanel';
+import { useParams } from 'react-router-dom';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
@@ -84,7 +86,8 @@ const Interface: React.FC = () => {
   const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, broadcastBoardroomCountdown, broadcastPrivacyMode, broadcastArenaEntry, broadcastMeetingEnd } = usePresence();
   const sessionHostId = useStore(state => state.sessionHostId);
   const isHost = sessionHostId === localUserId || sessionHostId === null; // null = solo session, treat as host
-  const [shareCopied, setShareCopied] = useState(false);
+  const { roomId } = useParams<{ roomId: string }>();
+  const [showShare, setShowShare] = useState(false);
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
@@ -341,17 +344,23 @@ const Interface: React.FC = () => {
                     {isPrivacyMode ? "Privacy On" : "Privacy"}
                 </button>
 
-                {/* Share link */}
-                <button
-                    onClick={() => {
-                        navigator.clipboard.writeText(window.location.href);
-                        setShareCopied(true);
-                        setTimeout(() => setShareCopied(false), 2000);
-                    }}
-                    className="px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2 bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400"
-                >
-                    <Link size={12} /> {shareCopied ? 'Copied!' : 'Share'}
-                </button>
+                {/* Share */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowShare(v => !v)}
+                    className={clsx(
+                      'px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2',
+                      showShare
+                        ? 'bg-gray-800 text-white border-gray-600'
+                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400'
+                    )}
+                  >
+                    <Share2 size={12} /> Share
+                  </button>
+                  {showShare && roomId && (
+                    <SharePanel roomId={roomId} onClose={() => setShowShare(false)} />
+                  )}
+                </div>
 
                 {/* Boardroom Mode Toggle — host only */}
                 {isHost && (
