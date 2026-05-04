@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Settings, LayoutGrid, Radio, Power, MonitorPlay,
@@ -21,6 +21,7 @@ import CommentsPanel from '../CommentsPanel';
 import InsightDetailModal from '../InsightDetailModal';
 import { useWebRTCContext } from '../../../lib/WebRTCContext';
 import HumanParticipantTile from './HumanParticipantTile';
+import MobileBoardroomLayout from './layouts/MobileBoardroomLayout';
 
 // Thin collapsable floating panel wrapper used for tree and comments
 const FloatingPanel: React.FC<{
@@ -103,6 +104,13 @@ const BoardroomShell: React.FC = () => {
   const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam } = useWebRTCContext();
   const isHost = sessionHostId === localUserId || sessionHostId === null;
   const isPresenter = boardroomLeaderId === localUserId;
+
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
 
   // Presenter label based on the real person driving the camera
   const leaderName = boardroomLeaderId === localUserId
@@ -191,6 +199,25 @@ const BoardroomShell: React.FC = () => {
       isPresenter={boardroomLeaderId === localUserId}
     />
   );
+
+  // Mobile: simplified layout — 3D fills screen, PiP cameras top-right, no AI insights
+  if (isMobile) {
+    return (
+      <MobileBoardroomLayout
+        localUserId={localUserId}
+        localStream={localStream}
+        remoteStreams={remoteStreams}
+        remoteParticipantList={remoteParticipantList}
+        isMicOn={isMicOn}
+        isCamOn={isCamOn}
+        toggleMic={toggleMic}
+        toggleCam={toggleCam}
+        onEnd={() => { endMeeting(true); broadcastMeetingEnd(); }}
+        isHost={isHost}
+        boardroomLeaderId={boardroomLeaderId}
+      />
+    );
+  }
 
   const layoutProps = {
     agents, speakingAgentId, pinnedAgentId, pois,
