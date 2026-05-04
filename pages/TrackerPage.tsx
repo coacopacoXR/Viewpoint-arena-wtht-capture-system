@@ -13,6 +13,7 @@ import {
   useSensor,
   useSensors,
   closestCorners,
+  useDroppable,
 } from '@dnd-kit/core';
 import {
   SortableContext,
@@ -348,9 +349,10 @@ interface BoardViewProps {
   items: TrackerItem[];
   onItemClick: (i: TrackerItem) => void;
   onStatusChange: (id: string, status: TrackerItem['status']) => Promise<void>;
+  onAddItem: (status: TrackerItem['status']) => void;
 }
 
-const BoardView: React.FC<BoardViewProps> = ({ items, onItemClick, onStatusChange }) => {
+const BoardView: React.FC<BoardViewProps> = ({ items, onItemClick, onStatusChange, onAddItem }) => {
   const [activeItem, setActiveItem] = useState<TrackerItem | null>(null);
   const [localItems, setLocalItems] = useState(items);
 
@@ -391,7 +393,7 @@ const BoardView: React.FC<BoardViewProps> = ({ items, onItemClick, onStatusChang
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd}>
       <div className="flex gap-4 h-full overflow-x-auto pb-4">
         {ALL_STATUSES.map(status => (
-          <DroppableColumn key={status} status={status} items={colItems(status)} onItemClick={onItemClick} />
+          <DroppableColumn key={status} status={status} items={colItems(status)} onItemClick={onItemClick} onAddItem={onAddItem} />
         ))}
       </div>
       <DragOverlay>
@@ -401,7 +403,8 @@ const BoardView: React.FC<BoardViewProps> = ({ items, onItemClick, onStatusChang
   );
 };
 
-const DroppableColumn: React.FC<{ status: TrackerItem['status']; items: TrackerItem[]; onItemClick: (i: TrackerItem) => void }> = ({ status, items, onItemClick }) => {
+const DroppableColumn: React.FC<{ status: TrackerItem['status']; items: TrackerItem[]; onItemClick: (i: TrackerItem) => void; onAddItem: (status: TrackerItem['status']) => void }> = ({ status, items, onItemClick, onAddItem }) => {
+  const { setNodeRef, isOver } = useDroppable({ id: status });
   const colHeader: Record<TrackerItem['status'], string> = {
     Open: 'text-gray-600',
     'In Review': 'text-blue-600',
@@ -416,11 +419,14 @@ const DroppableColumn: React.FC<{ status: TrackerItem['status']; items: TrackerI
       </div>
       <SortableContext items={items.map(i => i.id)} strategy={verticalListSortingStrategy} id={status}>
         <div
-          className="flex-1 overflow-y-auto space-y-2 min-h-[120px] rounded-xl p-2 transition-colors"
-          style={{ background: items.length === 0 ? undefined : 'transparent' }}
+          ref={setNodeRef}
+          className={clsx(
+            'flex-1 overflow-y-auto space-y-2 min-h-[120px] rounded-xl p-2 transition-all duration-150',
+            isOver ? 'bg-blue-50 ring-2 ring-blue-200 ring-offset-1' : ''
+          )}
         >
           {items.length === 0 ? (
-            <div className="border-2 border-dashed border-gray-100 rounded-xl h-24 flex items-center justify-center text-[11px] text-gray-300 font-mono">
+            <div className={clsx('border-2 border-dashed rounded-xl h-24 flex items-center justify-center text-[11px] font-mono transition-colors', isOver ? 'border-blue-300 text-blue-400 bg-blue-50/50' : 'border-gray-100 text-gray-300')}>
               drop here
             </div>
           ) : items.map((item, idx) => (
@@ -428,6 +434,12 @@ const DroppableColumn: React.FC<{ status: TrackerItem['status']; items: TrackerI
           ))}
         </div>
       </SortableContext>
+      <button
+        onClick={() => onAddItem(status)}
+        className="mt-2 text-[11px] font-mono text-gray-300 hover:text-gray-600 text-left px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-1"
+      >
+        <span className="text-base leading-none">+</span> Add item
+      </button>
     </div>
   );
 };
@@ -712,9 +724,10 @@ interface ItemDrawerProps {
   item: TrackerItem;
   onClose: () => void;
   onUpdate: (id: string, updates: Partial<TrackerItem>) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
 }
 
-const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate }) => {
+const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate, onDelete }) => {
   const [tab, setTab] = useState<DrawerTab>('details');
   const [comments, setComments] = useState<TrackerComment[]>([]);
   const [history, setHistory] = useState<StatusHistoryEntry[]>([]);
@@ -884,8 +897,14 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate }) => {
           )}
         </div>
         <div className="flex-shrink-0 px-6 py-3 border-t border-gray-100 flex items-center justify-between">
-          <span className="font-mono text-[10px] text-gray-300">Updated {fmtShort(item.updated_at)}</span>
-          <button onClick={() => exportToCSV([item], `item-${item.id.slice(0, 8)}`)} className="text-xs font-medium text-gray-400 hover:text-gray-800 transition-colors">↓ Export</button>
+          <button
+            onClick={async () => { if (confirm('Delete this item permanently?')) { await onDelete(item.id); onClose(); } }}
+            className="text-xs font-medium text-red-400 hover:text-red-600 transition-colors flex items-center gap-1"
+          >🗑 Delete item</button>
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-[10px] text-gray-300">Updated {fmtShort(item.updated_at)}</span>
+            <button onClick={() => exportToCSV([item], `item-${item.id.slice(0, 8)}`)} className="text-xs font-medium text-gray-400 hover:text-gray-800 transition-colors">↓ Export</button>
+          </div>
         </div>
       </div>
     </>
@@ -894,11 +913,39 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate }) => {
 
 // ─── Session Sidebar ──────────────────────────────────────────────────────────
 
-const SessionSidebar: React.FC<{ sessions: TrackerSession[]; allItems: TrackerItem[]; selectedSessionId: string | null; onSelect: (id: string | null) => void }> = ({ sessions, allItems, selectedSessionId, onSelect }) => {
+const SessionSidebar: React.FC<{
+  sessions: TrackerSession[];
+  allItems: TrackerItem[];
+  selectedSessionId: string | null;
+  onSelect: (id: string | null) => void;
+  onDeleteSession: (id: string) => Promise<void>;
+  onUpdateSession: (id: string, updates: Partial<Pick<TrackerSession, 'title' | 'ended_at'>>) => Promise<void>;
+}> = ({ sessions, allItems, selectedSessionId, onSelect, onDeleteSession, onUpdateSession }) => {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const editRef = useRef<HTMLInputElement>(null);
+
+  function startEdit(s: TrackerSession, e: React.MouseEvent) {
+    e.stopPropagation();
+    setEditingId(s.id);
+    setEditTitle(s.title);
+    setEditDate(s.ended_at.split('T')[0]);
+    setTimeout(() => editRef.current?.focus(), 0);
+  }
+
+  async function commitEdit(id: string) {
+    if (editTitle.trim()) {
+      await onUpdateSession(id, { title: editTitle.trim(), ended_at: editDate ? new Date(editDate).toISOString() : undefined });
+    }
+    setEditingId(null);
+  }
+
   function counts(sid: string) {
     const its = allItems.filter(i => i.session_id === sid);
     return { R: its.filter(i => i.type === 'RISK').length, A: its.filter(i => i.type === 'ACTION').length, Ra: its.filter(i => i.type === 'RATIONALE').length, total: its.length };
   }
+
   return (
     <aside className="hidden lg:flex flex-col w-56 flex-shrink-0 bg-[#111111] h-full overflow-y-auto">
       <div className="px-3 pt-5 pb-4">
@@ -911,16 +958,57 @@ const SessionSidebar: React.FC<{ sessions: TrackerSession[]; allItems: TrackerIt
         {sessions.map(s => {
           const { R, A, Ra, total } = counts(s.id);
           const active = selectedSessionId === s.id;
+          const editing = editingId === s.id;
           return (
-            <button key={s.id} onClick={() => onSelect(s.id)} className={clsx('w-full text-left px-3 py-2.5 rounded-lg transition-colors mb-0.5', active ? 'bg-white' : 'hover:bg-white/10')}>
-              <p className={clsx('text-xs font-semibold leading-tight truncate', active ? 'text-gray-900' : 'text-gray-300')}>{s.title}</p>
-              <p className={clsx('font-mono text-[10px] mt-0.5', active ? 'text-gray-500' : 'text-gray-600')}>{fmtShort(s.ended_at)} · {total}</p>
-              <div className="flex gap-2 mt-1 font-mono text-[10px]">
-                <span className={active ? 'text-red-500' : 'text-red-800'}>{R}R</span>
-                <span className={active ? 'text-blue-500' : 'text-blue-800'}>{A}A</span>
-                <span className={active ? 'text-amber-500' : 'text-amber-800'}>{Ra}Ra</span>
-              </div>
-            </button>
+            <div key={s.id} className={clsx('group/session relative rounded-lg mb-0.5 transition-colors', active ? 'bg-white' : 'hover:bg-white/10')}>
+              {editing ? (
+                <div className="px-3 py-2.5 space-y-1.5" onClick={e => e.stopPropagation()}>
+                  <input
+                    ref={editRef}
+                    value={editTitle}
+                    onChange={e => setEditTitle(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') commitEdit(s.id); if (e.key === 'Escape') setEditingId(null); }}
+                    className="w-full bg-white/10 text-white text-xs rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-white/30 border border-white/20"
+                    placeholder="Session title…"
+                  />
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={e => setEditDate(e.target.value)}
+                    className="w-full bg-white/10 text-white text-[10px] font-mono rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-white/30 border border-white/20"
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={() => commitEdit(s.id)} className="flex-1 text-[10px] font-mono bg-white text-gray-900 rounded px-2 py-1 hover:bg-gray-100 transition-colors">Save</button>
+                    <button onClick={() => setEditingId(null)} className="text-[10px] font-mono text-gray-500 hover:text-white px-2 py-1 transition-colors">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => onSelect(s.id)} className="w-full text-left px-3 py-2.5">
+                  <p className={clsx('text-xs font-semibold leading-tight truncate pr-10', active ? 'text-gray-900' : 'text-gray-300')}>{s.title}</p>
+                  <p className={clsx('font-mono text-[10px] mt-0.5', active ? 'text-gray-500' : 'text-gray-600')}>{fmtShort(s.ended_at)} · {total}</p>
+                  <div className="flex gap-2 mt-1 font-mono text-[10px]">
+                    <span className={active ? 'text-red-500' : 'text-red-800'}>{R}R</span>
+                    <span className={active ? 'text-blue-500' : 'text-blue-800'}>{A}A</span>
+                    <span className={active ? 'text-amber-500' : 'text-amber-800'}>{Ra}Ra</span>
+                  </div>
+                </button>
+              )}
+              {/* Hover actions */}
+              {!editing && (
+                <div className="absolute top-2 right-2 hidden group-hover/session:flex items-center gap-1">
+                  <button
+                    onClick={e => startEdit(s, e)}
+                    title="Edit session"
+                    className="w-5 h-5 rounded flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/20 transition-colors text-[10px]"
+                  >✎</button>
+                  <button
+                    onClick={async e => { e.stopPropagation(); if (confirm(`Delete "${s.title}" and all its items?`)) await onDeleteSession(s.id); }}
+                    title="Delete session"
+                    className="w-5 h-5 rounded flex items-center justify-center text-gray-600 hover:text-red-400 hover:bg-red-500/20 transition-colors text-[10px]"
+                  >✕</button>
+                </div>
+              )}
+            </div>
           );
         })}
       </div>
@@ -1171,6 +1259,151 @@ const TrendsView: React.FC<TrendsViewProps> = ({ sessions, allItems }) => {
   );
 };
 
+// ─── Add Item Modal ───────────────────────────────────────────────────────────
+
+interface AddItemModalProps {
+  sessions: TrackerSession[];
+  defaultSessionId: string | null;
+  defaultStatus: TrackerItem['status'];
+  onSave: (item: Omit<TrackerItem, 'id' | 'created_at' | 'updated_at' | 'session'>) => Promise<void>;
+  onClose: () => void;
+}
+
+const AddItemModal: React.FC<AddItemModalProps> = ({ sessions, defaultSessionId, defaultStatus, onSave, onClose }) => {
+  const [type, setType] = useState<TrackerItem['type']>('ACTION');
+  const [priority, setPriority] = useState<TrackerItem['priority']>('Medium');
+  const [status, setStatus] = useState<TrackerItem['status']>(defaultStatus);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [assignee, setAssignee] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [sessionId, setSessionId] = useState(defaultSessionId ?? sessions[0]?.id ?? '');
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!title.trim() || !sessionId) return;
+    setSaving(true);
+    await onSave({
+      session_id: sessionId,
+      type, priority, status,
+      title: title.trim(),
+      description: description.trim(),
+      assignee: assignee.trim() || null,
+      due_date: dueDate || null,
+      component_reference: null,
+      department: null,
+      agent_id: 'manual',
+      source_message_ids: null,
+      affected_requirement_ids: null,
+      impact: null,
+      mitigation_strategy: null,
+      design_driver: null,
+      tradeoff_analysis: null,
+    });
+    setSaving(false);
+    onClose();
+  }
+
+  const sel = 'border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black cursor-pointer w-full';
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50" onClick={onClose} />
+      <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[480px] bg-white rounded-2xl shadow-2xl border border-gray-200 animate-in fade-in zoom-in-95 duration-150 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="font-semibold text-gray-900 text-sm">Add Item</h2>
+          <button onClick={onClose} className="text-gray-300 hover:text-gray-700 text-xl leading-none">✕</button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          {/* Session */}
+          {sessions.length > 1 && (
+            <div>
+              <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Session</p>
+              <select value={sessionId} onChange={e => setSessionId(e.target.value)} className={sel}>
+                {sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+              </select>
+            </div>
+          )}
+          {/* Type + Priority */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Type</p>
+              <select value={type} onChange={e => setType(e.target.value as TrackerItem['type'])} className={sel}>
+                {ALL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Priority</p>
+              <select value={priority} onChange={e => setPriority(e.target.value as TrackerItem['priority'])} className={sel}>
+                {ALL_PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+          </div>
+          {/* Status */}
+          <div>
+            <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Status</p>
+            <div className="flex gap-2">
+              {ALL_STATUSES.map(s => (
+                <button key={s} onClick={() => setStatus(s)}
+                  className={clsx('px-3 py-1.5 rounded-full text-xs font-semibold border transition-all flex-1', status === s ? statusColor[s] + ' border-transparent shadow-sm' : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300')}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Title */}
+          <div>
+            <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Title <span className="text-red-400">*</span></p>
+            <input
+              autoFocus
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSave(); }}
+              placeholder="Describe the item…"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+            />
+          </div>
+          {/* Description */}
+          <div>
+            <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Description</p>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="Optional details…"
+              rows={2}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black resize-none"
+            />
+          </div>
+          {/* Assignee + Due date */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Assignee</p>
+              <input value={assignee} onChange={e => setAssignee(e.target.value)} placeholder="—" className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-black" />
+            </div>
+            <div>
+              <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Due Date</p>
+              <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-black" />
+            </div>
+          </div>
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between">
+          <span className="font-mono text-[10px] text-gray-300">⌘↵ to save</span>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors">Cancel</button>
+            <button
+              onClick={handleSave}
+              disabled={!title.trim() || !sessionId || saving}
+              className="px-5 py-2 bg-black text-white text-sm font-semibold rounded-xl hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {saving ? 'Saving…' : 'Add Item'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+};
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 type ViewMode = 'board' | 'list' | 'matrix' | 'trends';
@@ -1187,6 +1420,7 @@ const TrackerPage: React.FC = () => {
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [filters, setFilters] = useState<Filters>({ type: 'All', priority: 'All', status: 'All', assignee: 'All', search: '' });
+  const [addItemState, setAddItemState] = useState<{ open: boolean; status: TrackerItem['status'] }>({ open: false, status: 'Open' });
 
   const fetchSessions = useCallback(async () => {
     const { data } = await supabase.from('tracker_sessions').select('*').order('ended_at', { ascending: false });
@@ -1223,6 +1457,33 @@ const TrackerPage: React.FC = () => {
     const merged = { ...updates, updated_at: now };
     setAllItems(prev => prev.map(i => i.id === id ? { ...i, ...merged } : i));
     setSelectedItem(prev => prev?.id === id ? { ...prev, ...merged } : prev);
+  }, []);
+
+  const deleteSession = useCallback(async (id: string) => {
+    // Delete items first (avoids FK issues if no cascade)
+    await supabase.from('tracker_items').delete().eq('session_id', id);
+    await supabase.from('tracker_sessions').delete().eq('id', id);
+    if (selectedSessionId === id) setSelectedSessionId(null);
+    setSessions(prev => prev.filter(s => s.id !== id));
+    setAllItems(prev => prev.filter(i => i.session_id !== id));
+  }, [selectedSessionId]);
+
+  const updateSession = useCallback(async (id: string, updates: Partial<Pick<TrackerSession, 'title' | 'ended_at'>>) => {
+    await supabase.from('tracker_sessions').update(updates).eq('id', id);
+    setSessions(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+  }, []);
+
+  const deleteItem = useCallback(async (id: string) => {
+    await supabase.from('tracker_comments').delete().eq('item_id', id);
+    await supabase.from('tracker_status_history').delete().eq('item_id', id);
+    await supabase.from('tracker_items').delete().eq('id', id);
+    setAllItems(prev => prev.filter(i => i.id !== id));
+  }, []);
+
+  const createItem = useCallback(async (item: Omit<TrackerItem, 'id' | 'created_at' | 'updated_at' | 'session'>) => {
+    const now = new Date().toISOString();
+    const { data } = await supabase.from('tracker_items').insert({ ...item, created_at: now, updated_at: now }).select('*, session:tracker_sessions(*)').single();
+    if (data) setAllItems(prev => [data as TrackerItem, ...prev]);
   }, []);
 
   async function handleSeed() {
@@ -1290,13 +1551,21 @@ const TrackerPage: React.FC = () => {
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
         <SessionSidebar sessions={sessions} allItems={allItems} selectedSessionId={selectedSessionId}
-          onSelect={id => { setSelectedSessionId(id); setSelectedItem(null); }} />
+          onSelect={id => { setSelectedSessionId(id); setSelectedItem(null); }}
+          onDeleteSession={deleteSession}
+          onUpdateSession={updateSession} />
 
         <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
           {/* Toolbar */}
           <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3 bg-white border-b border-gray-100 flex-wrap">
             <FilterBar filters={filters} assignees={assignees} onChange={setFilters} onOpenPalette={() => setPaletteOpen(true)} sessions={sessions} selectedSessionId={selectedSessionId} onSelectSession={id => { setSelectedSessionId(id); setSelectedItem(null); }} />
-            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5 ml-auto">
+            <button
+            onClick={() => setAddItemState({ open: true, status: 'Open' })}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white text-xs font-semibold rounded-lg hover:bg-gray-800 transition-colors ml-auto"
+          >
+            + New Item
+          </button>
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
               {(['board', 'list', 'matrix', 'trends'] as ViewMode[]).map(m => (
                 <button key={m} onClick={() => setViewMode(m)}
                   className={clsx('px-3 py-1 text-xs font-semibold rounded-md capitalize transition-colors', viewMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-700')}>
@@ -1318,7 +1587,7 @@ const TrackerPage: React.FC = () => {
             </div>
           ) : (
             <div className="flex-1 overflow-hidden p-6">
-              {viewMode === 'board' && <BoardView items={filteredItems} onItemClick={setSelectedItem} onStatusChange={(id, s) => updateItem(id, { status: s })} />}
+              {viewMode === 'board' && <BoardView items={filteredItems} onItemClick={setSelectedItem} onStatusChange={(id, s) => updateItem(id, { status: s })} onAddItem={status => setAddItemState({ open: true, status })} />}
               {viewMode === 'list' && <ListView items={filteredItems} onItemClick={setSelectedItem} />}
               {viewMode === 'matrix' && <RiskMatrix items={filteredItems} onItemClick={setSelectedItem} />}
               {viewMode === 'trends' && <TrendsView sessions={sessions} allItems={allItems} />}
@@ -1328,7 +1597,18 @@ const TrackerPage: React.FC = () => {
       </div>
 
       {/* Drawer */}
-      {selectedItem && <ItemDrawer item={selectedItem} onClose={() => setSelectedItem(null)} onUpdate={updateItem} />}
+      {selectedItem && <ItemDrawer item={selectedItem} onClose={() => setSelectedItem(null)} onUpdate={updateItem} onDelete={deleteItem} />}
+
+      {/* Add Item Modal */}
+      {addItemState.open && (
+        <AddItemModal
+          sessions={sessions}
+          defaultSessionId={selectedSessionId}
+          defaultStatus={addItemState.status}
+          onSave={createItem}
+          onClose={() => setAddItemState({ open: false, status: 'Open' })}
+        />
+      )}
 
       {/* Command Palette */}
       {paletteOpen && <CommandPalette items={allItems} sessions={sessions} onItemClick={item => { setSelectedItem(item); }} onClose={() => setPaletteOpen(false)} />}
