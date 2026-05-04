@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import PartySocket from 'partysocket';
 import type { ParticipantPresence } from '../party/room.server';
 import type { InsightCard } from '../types';
@@ -32,7 +32,11 @@ type RoomMessage =
   | { type: 'COMMENT_UPDATE'; payload: { id: string; updates: Record<string, any> } }
   | { type: 'COMMENT_DELETE'; payload: { id: string } }
   | { type: 'COMMENT_RESOLVE'; payload: { id: string } }
-  | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } };
+  | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } }
+  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } };
+
+// Module-level ref so it persists across re-renders and is accessible from the message handler
+const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; data: any }) => void) | null } = { current: null };
 
 const PARTYKIT_HOST: string =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
@@ -78,6 +82,8 @@ export interface UsePartyPresenceReturn {
   broadcastCommentUpdate: (id: string, updates: Record<string, any>) => void;
   broadcastCommentDelete: (id: string) => void;
   broadcastCommentResolve: (id: string) => void;
+  broadcastWebRTCSignal: (to: string, data: any) => void;
+  registerWebRTCSignalHandler: (handler: (payload: { from: string; to: string; data: any }) => void) => () => void;
 }
 
 export function usePartyPresence(roomId: string | undefined): UsePartyPresenceReturn {
@@ -217,6 +223,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       } else if (msg.type === 'COMMENT_RESOLVE') {
         const { resolveComment } = useStore.getState();
         resolveComment(msg.payload.id);
+      } else if (msg.type === 'WEBRTC_SIGNAL') {
+        webRTCSignalHandlerRef.current?.(msg.payload);
       }
     });
 
@@ -347,6 +355,23 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'COMMENT_RESOLVE', payload: { id } }));
   }
 
+  function broadcastWebRTCSignal(to: string, data: any) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({
+      type: 'WEBRTC_SIGNAL',
+      payload: { from: userRef.current.userId, to, data },
+    }));
+  }
+
+  // Stable reference — must not change across renders so the useWebRTC effect only runs once.
+  // If this were a plain function it would be recreated every render, causing the effect to
+  // repeatedly cleanup (null) then re-register, creating a window where signals get dropped.
+  const registerWebRTCSignalHandler = useCallback((handler: (payload: { from: string; to: string; data: any }) => void): () => void => {
+    webRTCSignalHandlerRef.current = handler;
+    return () => { webRTCSignalHandlerRef.current = null; };
+  }, []);
+
   return {
     localUserId: userRef.current.userId,
     remoteParticipants,
@@ -371,5 +396,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastCommentUpdate,
     broadcastCommentDelete,
     broadcastCommentResolve,
+    broadcastWebRTCSignal,
+    registerWebRTCSignalHandler,
   };
 }

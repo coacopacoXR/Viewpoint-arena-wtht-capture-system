@@ -27,6 +27,8 @@ export const PresenceContext = createContext<UsePartyPresenceReturn>({
   broadcastCommentUpdate: noop,
   broadcastCommentDelete: noop,
   broadcastCommentResolve: noop,
+  broadcastWebRTCSignal: noop,
+  registerWebRTCSignalHandler: () => () => {},
 });
 
 export const usePresence = () => useContext(PresenceContext);

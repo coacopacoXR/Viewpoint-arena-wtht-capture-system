@@ -32,7 +32,8 @@ type RoomMessage =
   | { type: 'COMMENT_UPDATE'; payload: { id: string; updates: Record<string, any> } }
   | { type: 'COMMENT_DELETE'; payload: { id: string } }
   | { type: 'COMMENT_RESOLVE'; payload: { id: string } }
-  | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } };
+  | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } }
+  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } };
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
 
@@ -40,6 +41,8 @@ export default class RoomServer implements Party.Server {
   participants = new Map<string, ParticipantPresence>();
   // Ordered by first PRESENCE — index 0 is always the session host
   joinOrder: string[] = [];
+  // Maps PartyKit connection ID → app userId (populated on first PRESENCE from that conn)
+  connToUser = new Map<string, string>();
   // Server-authoritative presenter tracking for takeover mode
   currentPresenter: string | null = null;
   lastPresenterChange = 0;
@@ -79,6 +82,8 @@ export default class RoomServer implements Party.Server {
     }
 
     if (msg.type === 'PRESENCE') {
+      // Track which userId this connection belongs to so onClose can clean up correctly
+      this.connToUser.set(sender.id, msg.payload.userId);
       const isNew = !this.participants.has(msg.payload.userId);
       this.participants.set(msg.payload.userId, msg.payload);
 
@@ -147,6 +152,10 @@ export default class RoomServer implements Party.Server {
       }
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
 
+    } else if (msg.type === 'WEBRTC_SIGNAL') {
+      // Relay to all peers; client filters by `to` field
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
     } else if (
       msg.type === 'PRESENTER_CHANGE' ||
       msg.type === 'INSIGHT_CARD' ||
@@ -165,23 +174,22 @@ export default class RoomServer implements Party.Server {
   }
 
   onClose(conn: Party.Connection) {
-    for (const [userId, p] of this.participants) {
-      if (p.userId === conn.id) {
-        this.participants.delete(userId);
-        this.joinOrder = this.joinOrder.filter(id => id !== userId);
+    const userId = this.connToUser.get(conn.id);
+    this.connToUser.delete(conn.id);
 
-        this.room.broadcast(JSON.stringify({
-          type: 'LEAVE',
-          payload: { userId },
-        } as RoomMessage));
+    if (!userId || !this.participants.has(userId)) return;
 
-        // Broadcast new host (may have changed if the host left)
-        this.room.broadcast(JSON.stringify({
-          type: 'HOST_CHANGE',
-          payload: { hostId: this.computeHost() },
-        } as RoomMessage));
-        break;
-      }
-    }
+    this.participants.delete(userId);
+    this.joinOrder = this.joinOrder.filter(id => id !== userId);
+
+    this.room.broadcast(JSON.stringify({
+      type: 'LEAVE',
+      payload: { userId },
+    } as RoomMessage));
+
+    this.room.broadcast(JSON.stringify({
+      type: 'HOST_CHANGE',
+      payload: { hostId: this.computeHost() },
+    } as RoomMessage));
   }
 }

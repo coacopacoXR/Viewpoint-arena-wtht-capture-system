@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import {
   Settings, LayoutGrid, Radio, Power, MonitorPlay,
   MessageSquare, X, Monitor, MonitorOff, Layers, ChevronRight, ChevronDown,
-  Video, VideoOff, User, Mic2, CheckCircle, XCircle, Share2
+  Video, VideoOff, Mic, MicOff, Mic2, CheckCircle, XCircle, Share2
 } from 'lucide-react';
 import SharePanel from '../SharePanel';
 import { clsx } from 'clsx';
@@ -19,6 +19,8 @@ import ConversationPanel from '../ConversationPanel';
 import SceneTree from '../SceneTree';
 import CommentsPanel from '../CommentsPanel';
 import InsightDetailModal from '../InsightDetailModal';
+import { useWebRTCContext } from '../../../lib/WebRTCContext';
+import HumanParticipantTile from './HumanParticipantTile';
 
 // Thin collapsable floating panel wrapper used for tree and comments
 const FloatingPanel: React.FC<{
@@ -98,6 +100,7 @@ const BoardroomShell: React.FC = () => {
   })));
 
   const { localUserId, remoteParticipantList, broadcastArenaEntry, broadcastMeetingEnd, broadcastLeaderTakeover, broadcastPresenterRequest } = usePresence();
+  const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam } = useWebRTCContext();
   const isHost = sessionHostId === localUserId || sessionHostId === null;
   const isPresenter = boardroomLeaderId === localUserId;
 
@@ -115,7 +118,6 @@ const BoardroomShell: React.FC = () => {
   const [isWebcamOnly, setIsWebcamOnly] = useState(false);
   const [selectedInsightCard, setSelectedInsightCard] = useState<InsightCard | null>(null);
   const [showInsightExplainer, setShowInsightExplainer] = useState(false);
-  const [userWebcamOn, setUserWebcamOn] = useState(true);
 
   // Track gallery panel width to position floating panels without occluding it
   const [galleryPanelWidth, setGalleryPanelWidth] = useState(320);
@@ -147,63 +149,47 @@ const BoardroomShell: React.FC = () => {
   // Floating panel right edge: leave room for transcript if open
   const floatingCommentRight = showTranscript ? 348 : 8;
 
-  // Self (YOU) tile rendered in the participant strip
+  // Build human tiles from WebRTC streams (local + remote participants)
+  const localUserName = (() => {
+    try {
+      const s = localStorage.getItem('vp_user');
+      return s ? (JSON.parse(s).name || 'You') : 'You';
+    } catch { return 'You'; }
+  })();
+
+  const humanParticipants = [
+    { userId: localUserId, name: localUserName, color: '#10b981', isYou: true },
+    ...remoteParticipantList.map(p => ({ ...p, isYou: false })),
+  ];
+
+  const humanTiles = (
+    <>
+      {humanParticipants.map(p => (
+        <HumanParticipantTile
+          key={p.userId}
+          stream={p.isYou ? localStream : (remoteStreams.get(p.userId) ?? null)}
+          name={p.name}
+          color={p.color}
+          isMicOn={p.isYou ? isMicOn : true}
+          isCamOn={p.isYou ? isCamOn : true}
+          isYou={p.isYou}
+          isPresenter={boardroomLeaderId === p.userId}
+        />
+      ))}
+    </>
+  );
+
+  // Legacy self tile — kept as fallback (unused when humanTiles is passed)
   const userSelfTile = (
-    <div
-      className="relative rounded-lg overflow-hidden shrink-0 w-44 h-32 ring-1 ring-white/20 group"
-      style={{ background: 'radial-gradient(ellipse at 50% 30%, #1a2a1a 0%, #0d0d0d 80%)' }}
-    >
-      {/* Corner brackets */}
-      <div className="absolute top-1.5 left-1.5 w-3 h-3 border-t border-l border-white/20 rounded-tl" />
-      <div className="absolute top-1.5 right-1.5 w-3 h-3 border-t border-r border-white/20 rounded-tr" />
-      <div className="absolute bottom-6 left-1.5 w-3 h-3 border-b border-l border-white/20 rounded-bl" />
-      <div className="absolute bottom-6 right-1.5 w-3 h-3 border-b border-r border-white/20 rounded-br" />
-
-      {/* Content */}
-      <div className="flex items-center justify-center h-[calc(100%-28px)] relative">
-        {userWebcamOn ? (
-          <>
-            {/* Scanline for webcam feel */}
-            <div className="absolute inset-0 pointer-events-none opacity-[0.035]" style={{ backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(255,255,255,1) 3px, rgba(255,255,255,1) 4px)' }} />
-            <div className="w-11 h-11 rounded-full bg-emerald-700 flex items-center justify-center text-white font-bold text-lg shadow-lg" style={{ boxShadow: '0 0 20px rgba(16,185,129,0.4)' }}>
-              <User size={20} />
-            </div>
-            <div className="absolute top-1.5 left-1.5 flex items-center gap-1 bg-black/50 px-1.5 py-0.5 rounded z-20">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span className="text-[7px] font-mono text-green-400">LIVE</span>
-            </div>
-          </>
-        ) : (
-          <>
-            <svg viewBox="0 0 100 80" className="w-3/5 max-w-[72px] opacity-20" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="50" cy="26" r="17" fill="rgba(255,255,255,0.9)" />
-              <path d="M10 80 C10 53 28 45 50 45 C72 45 90 53 90 80 Z" fill="rgba(255,255,255,0.7)" />
-            </svg>
-            <div className="absolute bottom-2 right-2 text-[7px] font-mono text-white/25 bg-black/30 px-1.5 py-0.5 rounded tracking-wider">CAM OFF</div>
-          </>
-        )}
-        {/* Webcam toggle button - shows on hover */}
-        <button
-          onClick={() => setUserWebcamOn(v => !v)}
-          className="absolute bottom-2 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/70 hover:bg-black/90 text-white/80 hover:text-white px-2 py-1 rounded text-[8px] flex items-center gap-1 pointer-events-auto z-30"
-          title={userWebcamOn ? 'Turn camera off' : 'Turn camera on'}
-        >
-          {userWebcamOn ? <VideoOff size={9} /> : <Video size={9} />}
-          {userWebcamOn ? 'Cam off' : 'Cam on'}
-        </button>
-      </div>
-
-      {/* Name bar */}
-      <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm px-2 py-1 flex items-center justify-between">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-white text-[10px] font-mono font-bold truncate">YOU</span>
-        </div>
-        {boardroomLeaderId === localUserId
-          ? <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0 bg-yellow-500/30 text-yellow-300">LEADER</span>
-          : <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0 bg-emerald-500/30 text-emerald-300">HOST</span>
-        }
-      </div>
-    </div>
+    <HumanParticipantTile
+      stream={localStream}
+      name={localUserName}
+      color="#10b981"
+      isMicOn={isMicOn}
+      isCamOn={isCamOn}
+      isYou
+      isPresenter={boardroomLeaderId === localUserId}
+    />
   );
 
   const layoutProps = {
@@ -212,6 +198,7 @@ const BoardroomShell: React.FC = () => {
     interactionEnabled: boardroomInteractionEnabled,
     screenSharing,
     userSelfTile,
+    humanTiles,
   };
 
   return (
@@ -314,6 +301,36 @@ const BoardroomShell: React.FC = () => {
           >
             <MessageSquare size={10} />
             Comments
+          </button>
+
+          {/* Mic toggle */}
+          <button
+            onClick={toggleMic}
+            title={isMicOn ? 'Mute' : 'Unmute'}
+            className={clsx(
+              'px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide border transition-all flex items-center gap-1',
+              !isMicOn
+                ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                : 'bg-white/8 text-white/50 border-white/10 hover:bg-white/15 hover:text-white'
+            )}
+          >
+            {isMicOn ? <Mic size={10} /> : <MicOff size={10} />}
+            {isMicOn ? 'Mute' : 'Unmute'}
+          </button>
+
+          {/* Cam toggle */}
+          <button
+            onClick={toggleCam}
+            title={isCamOn ? 'Stop video' : 'Start video'}
+            className={clsx(
+              'px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide border transition-all flex items-center gap-1',
+              !isCamOn
+                ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                : 'bg-white/8 text-white/50 border-white/10 hover:bg-white/15 hover:text-white'
+            )}
+          >
+            {isCamOn ? <Video size={10} /> : <VideoOff size={10} />}
+            {isCamOn ? 'Cam' : 'Cam Off'}
           </button>
 
           {/* Transcript */}
