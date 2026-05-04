@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
+import IntegrationsPanel from '../components/UI/IntegrationsPanel';
+import { getDisplayName } from '../lib/identity';
 import {
   DndContext,
   DragEndEvent,
@@ -741,7 +743,7 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate }) => {
   async function handleAddComment() {
     const text = newComment.trim(); if (!text) return;
     setSubmitting(true);
-    await supabase.from('tracker_comments').insert({ item_id: item.id, author_name: 'You', text });
+    await supabase.from('tracker_comments').insert({ item_id: item.id, author_name: getDisplayName(), text });
     setNewComment(''); await fetchComments(); setSubmitting(false);
   }
 
@@ -758,7 +760,7 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate }) => {
   return (
     <>
       <div className="fixed inset-0 bg-black/20 backdrop-blur-[2px] z-40" onClick={onClose} />
-      <div className="fixed right-0 top-0 h-screen w-[520px] bg-white z-50 flex flex-col shadow-2xl border-l border-gray-200 animate-in slide-in-from-right duration-200">
+      <div className="fixed right-0 top-0 h-screen w-full lg:w-[520px] bg-white z-50 flex flex-col shadow-2xl border-l border-gray-200 animate-in slide-in-from-right duration-200">
         <div className="flex items-start justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-2 flex-wrap pt-0.5">
             <TypeBadge type={item.type} />
@@ -898,7 +900,7 @@ const SessionSidebar: React.FC<{ sessions: TrackerSession[]; allItems: TrackerIt
     return { R: its.filter(i => i.type === 'RISK').length, A: its.filter(i => i.type === 'ACTION').length, Ra: its.filter(i => i.type === 'RATIONALE').length, total: its.length };
   }
   return (
-    <aside className="w-56 flex-shrink-0 bg-[#111111] h-full overflow-y-auto">
+    <aside className="hidden lg:flex flex-col w-56 flex-shrink-0 bg-[#111111] h-full overflow-y-auto">
       <div className="px-3 pt-5 pb-4">
         <p className="font-mono text-[9px] font-bold text-gray-600 uppercase tracking-widest px-2 mb-3">Sessions</p>
         <button onClick={() => onSelect(null)} className={clsx('w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition-colors mb-1', selectedSessionId === null ? 'bg-white text-gray-900' : 'text-gray-400 hover:bg-white/10 hover:text-white')}>
@@ -930,10 +932,31 @@ const SessionSidebar: React.FC<{ sessions: TrackerSession[]; allItems: TrackerIt
 
 interface Filters { type: TrackerItem['type'] | 'All'; priority: TrackerItem['priority'] | 'All'; status: TrackerItem['status'] | 'All'; assignee: string | 'All'; search: string; }
 
-const FilterBar: React.FC<{ filters: Filters; assignees: string[]; onChange: (f: Filters) => void; onOpenPalette: () => void }> = ({ filters, assignees, onChange, onOpenPalette }) => {
+interface FilterBarProps {
+  filters: Filters;
+  assignees: string[];
+  onChange: (f: Filters) => void;
+  onOpenPalette: () => void;
+  sessions?: TrackerSession[];
+  selectedSessionId?: string | null;
+  onSelectSession?: (id: string | null) => void;
+}
+
+const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, onChange, onOpenPalette, sessions, selectedSessionId, onSelectSession }) => {
   const sel = 'border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-black cursor-pointer hover:border-gray-300 transition-colors';
   return (
     <div className="flex items-center gap-2 flex-wrap">
+      {/* Mobile session selector — only visible on small screens */}
+      {sessions && sessions.length > 0 && onSelectSession && (
+        <select
+          value={selectedSessionId ?? ''}
+          onChange={e => onSelectSession(e.target.value || null)}
+          className={clsx(sel, 'lg:hidden')}
+        >
+          <option value="">All Sessions</option>
+          {sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+        </select>
+      )}
       <button onClick={onOpenPalette}
         className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-400 bg-white hover:border-gray-300 hover:text-gray-700 transition-colors w-44">
         <span>🔍</span>
@@ -962,9 +985,195 @@ const FilterBar: React.FC<{ filters: Filters; assignees: string[]; onChange: (f:
   );
 };
 
+// ─── Trends View ─────────────────────────────────────────────────────────────
+
+interface TrendsViewProps { sessions: TrackerSession[]; allItems: TrackerItem[]; }
+
+const TrendsView: React.FC<TrendsViewProps> = ({ sessions, allItems }) => {
+  // Sort sessions oldest → newest
+  const sortedSessions = [...sessions].sort((a, b) => a.ended_at.localeCompare(b.ended_at));
+
+  // Session timeline bar chart data
+  const sessionBars = sortedSessions.map(s => {
+    const its = allItems.filter(i => i.session_id === s.id);
+    return {
+      session: s,
+      risk: its.filter(i => i.type === 'RISK').length,
+      action: its.filter(i => i.type === 'ACTION').length,
+      rationale: its.filter(i => i.type === 'RATIONALE').length,
+      total: its.length,
+    };
+  });
+  const maxTotal = Math.max(...sessionBars.map(b => b.total), 1);
+
+  // Status distribution
+  const total = allItems.length || 1;
+  const statusCounts: Record<TrackerItem['status'], number> = { Open: 0, 'In Review': 0, Approved: 0, Rejected: 0 };
+  allItems.forEach(i => { statusCounts[i.status] = (statusCounts[i.status] || 0) + 1; });
+
+  // Priority breakdown
+  const priorityCounts: Record<TrackerItem['priority'], number> = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+  allItems.forEach(i => { priorityCounts[i.priority] = (priorityCounts[i.priority] || 0) + 1; });
+
+  // Approval rate
+  const approved = allItems.filter(i => i.status === 'Approved').length;
+  const approvalRate = allItems.length > 0 ? Math.round(approved / allItems.length * 100) : 0;
+  const ringR = 40; const ringCirc = 2 * Math.PI * ringR;
+  const ringDash = (approvalRate / 100) * ringCirc;
+
+  const statusSegments: { status: TrackerItem['status']; color: string; label: string }[] = [
+    { status: 'Open', color: '#9ca3af', label: 'Open' },
+    { status: 'In Review', color: '#3b82f6', label: 'In Review' },
+    { status: 'Approved', color: '#10b981', label: 'Approved' },
+    { status: 'Rejected', color: '#ef4444', label: 'Rejected' },
+  ];
+
+  const priorityTiles: { priority: TrackerItem['priority']; border: string; bg: string; text: string }[] = [
+    { priority: 'Critical', border: '#ef4444', bg: '#fef2f2', text: '#ef4444' },
+    { priority: 'High', border: '#f97316', bg: '#fff7ed', text: '#f97316' },
+    { priority: 'Medium', border: '#eab308', bg: '#fefce8', text: '#b45309' },
+    { priority: 'Low', border: '#9ca3af', bg: '#f9fafb', text: '#6b7280' },
+  ];
+
+  const BAR_W = 48;
+  const BAR_H = 160;
+  const BAR_GAP = 16;
+  const CHART_PAD_L = 36;
+  const CHART_PAD_B = 64;
+  const chartW = Math.max(sessionBars.length * (BAR_W + BAR_GAP) + CHART_PAD_L + 16, 300);
+  const chartH = BAR_H + CHART_PAD_B + 16;
+
+  return (
+    <div className="h-full overflow-y-auto bg-white">
+      <div className="max-w-5xl mx-auto px-6 py-6 space-y-8">
+
+        {/* Row 1: Session Timeline + Approval Rate */}
+        <div className="flex gap-6 flex-wrap items-start">
+
+          {/* Session Timeline Bar Chart */}
+          <div className="flex-1 min-w-[300px] bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+            <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-4">Items per Session</p>
+            {sessionBars.length === 0 ? (
+              <p className="text-xs text-gray-300 font-mono italic">No session data.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <svg width={chartW} height={chartH} style={{ display: 'block' }}>
+                  {/* Y-axis ticks */}
+                  {[0, 0.25, 0.5, 0.75, 1].map(t => {
+                    const y = 8 + (1 - t) * BAR_H;
+                    const val = Math.round(t * maxTotal);
+                    return (
+                      <React.Fragment key={t}>
+                        <line x1={CHART_PAD_L - 4} y1={y} x2={CHART_PAD_L + chartW - CHART_PAD_L - 16} y2={y} stroke="#f3f4f6" strokeWidth={1} />
+                        <text x={CHART_PAD_L - 6} y={y + 4} textAnchor="end" fontSize={9} fill="#9ca3af" fontFamily="monospace">{val}</text>
+                      </React.Fragment>
+                    );
+                  })}
+                  {/* Bars */}
+                  {sessionBars.map((b, idx) => {
+                    const x = CHART_PAD_L + idx * (BAR_W + BAR_GAP);
+                    const rH = (b.risk / maxTotal) * BAR_H;
+                    const aH = (b.action / maxTotal) * BAR_H;
+                    const raH = (b.rationale / maxTotal) * BAR_H;
+                    const y0 = 8 + BAR_H;
+                    return (
+                      <g key={b.session.id}>
+                        {/* Rationale (bottom) */}
+                        <rect x={x} y={y0 - raH} width={BAR_W} height={raH} fill="#fbbf24" rx={raH > 0 ? 2 : 0} />
+                        {/* Action (middle) */}
+                        <rect x={x} y={y0 - raH - aH} width={BAR_W} height={aH} fill="#3b82f6" />
+                        {/* Risk (top) */}
+                        <rect x={x} y={y0 - raH - aH - rH} width={BAR_W} height={rH} fill="#ef4444" rx={rH > 0 ? 2 : 0} />
+                        {/* Total label */}
+                        {b.total > 0 && (
+                          <text x={x + BAR_W / 2} y={y0 - raH - aH - rH - 4} textAnchor="middle" fontSize={10} fill="#374151" fontFamily="monospace" fontWeight="600">{b.total}</text>
+                        )}
+                        {/* Date label rotated */}
+                        <text
+                          x={x + BAR_W / 2} y={y0 + 10}
+                          textAnchor="end"
+                          fontSize={9} fill="#9ca3af" fontFamily="monospace"
+                          transform={`rotate(-45, ${x + BAR_W / 2}, ${y0 + 10})`}
+                        >{fmtShort(b.session.ended_at)}</text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+            )}
+            {/* Legend */}
+            <div className="flex gap-4 mt-2 flex-wrap">
+              {[{ c: '#ef4444', l: 'RISK' }, { c: '#3b82f6', l: 'ACTION' }, { c: '#fbbf24', l: 'RATIONALE' }].map(({ c, l }) => (
+                <div key={l} className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: c }} />
+                  <span className="font-mono text-[10px] text-gray-500">{l}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Approval Rate Ring */}
+          <div className="flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col items-center justify-center min-w-[160px]">
+            <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-4 text-center">Approval Rate</p>
+            <svg width={100} height={100} viewBox="0 0 100 100">
+              <circle cx={50} cy={50} r={ringR} fill="none" stroke="#f3f4f6" strokeWidth={10} />
+              <circle cx={50} cy={50} r={ringR} fill="none" stroke="#10b981" strokeWidth={10}
+                strokeDasharray={`${ringDash} ${ringCirc - ringDash}`}
+                strokeDashoffset={ringCirc / 4}
+                strokeLinecap="round"
+                style={{ transition: 'stroke-dasharray 0.5s ease' }} />
+              <text x={50} y={46} textAnchor="middle" fontSize={18} fontWeight="700" fill="#111827" fontFamily="Inter,system-ui,sans-serif">{approvalRate}%</text>
+              <text x={50} y={60} textAnchor="middle" fontSize={9} fill="#9ca3af" fontFamily="monospace">{approved}/{allItems.length}</text>
+            </svg>
+            <p className="font-mono text-[10px] text-gray-400 mt-2 text-center">items approved</p>
+          </div>
+        </div>
+
+        {/* Row 2: Status Distribution */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-4">Status Distribution</p>
+          <div className="flex h-6 rounded-lg overflow-hidden w-full">
+            {statusSegments.map(({ status, color }) => {
+              const pct = (statusCounts[status] / total) * 100;
+              if (pct < 0.5) return null;
+              return (
+                <div key={status} style={{ width: `${pct}%`, background: color }} title={`${status}: ${statusCounts[status]}`} className="transition-all" />
+              );
+            })}
+          </div>
+          <div className="flex gap-6 mt-3 flex-wrap">
+            {statusSegments.map(({ status, color, label }) => (
+              <div key={status} className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: color }} />
+                <span className="text-xs text-gray-600">{label}</span>
+                <span className="font-mono text-xs text-gray-400">{statusCounts[status]}</span>
+                <span className="font-mono text-[10px] text-gray-300">({Math.round((statusCounts[status] / total) * 100)}%)</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Row 3: Priority Breakdown */}
+        <div>
+          <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-3">Priority Breakdown</p>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {priorityTiles.map(({ priority, border, bg, text }) => (
+              <div key={priority} className="rounded-xl border-l-4 p-4 flex flex-col gap-1" style={{ borderLeftColor: border, background: bg }}>
+                <span className="text-2xl font-bold tabular-nums" style={{ color: text }}>{priorityCounts[priority]}</span>
+                <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-gray-500">{priority}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+};
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-type ViewMode = 'board' | 'list' | 'matrix';
+type ViewMode = 'board' | 'list' | 'matrix' | 'trends';
 
 const TrackerPage: React.FC = () => {
   const navigate = useNavigate();
@@ -975,6 +1184,7 @@ const TrackerPage: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('board');
   const [selectedItem, setSelectedItem] = useState<TrackerItem | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [filters, setFilters] = useState<Filters>({ type: 'All', priority: 'All', status: 'All', assignee: 'All', search: '' });
 
@@ -1062,6 +1272,10 @@ const TrackerPage: React.FC = () => {
           <button onClick={handleSeed} disabled={seeding} className="font-mono text-xs text-gray-600 hover:text-gray-300 transition-colors disabled:opacity-40">
             {seeding ? 'Seeding…' : '+ Demo Data'}
           </button>
+          <button onClick={() => setIntegrationsOpen(true)}
+            className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
+            <span>⚡</span> Integrations
+          </button>
           <button onClick={() => exportToCSV(filteredItems)} disabled={filteredItems.length === 0}
             className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors disabled:opacity-30">
             ↓ Export CSV
@@ -1081,12 +1295,12 @@ const TrackerPage: React.FC = () => {
         <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
           {/* Toolbar */}
           <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3 bg-white border-b border-gray-100 flex-wrap">
-            <FilterBar filters={filters} assignees={assignees} onChange={setFilters} onOpenPalette={() => setPaletteOpen(true)} />
+            <FilterBar filters={filters} assignees={assignees} onChange={setFilters} onOpenPalette={() => setPaletteOpen(true)} sessions={sessions} selectedSessionId={selectedSessionId} onSelectSession={id => { setSelectedSessionId(id); setSelectedItem(null); }} />
             <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5 ml-auto">
-              {(['board', 'list', 'matrix'] as ViewMode[]).map(m => (
+              {(['board', 'list', 'matrix', 'trends'] as ViewMode[]).map(m => (
                 <button key={m} onClick={() => setViewMode(m)}
                   className={clsx('px-3 py-1 text-xs font-semibold rounded-md capitalize transition-colors', viewMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-700')}>
-                  {m === 'matrix' ? '⬛ Matrix' : m === 'board' ? '🗂 Board' : '☰ List'}
+                  {m === 'matrix' ? '⬛ Matrix' : m === 'board' ? '🗂 Board' : m === 'list' ? '☰ List' : '📈 Trends'}
                 </button>
               ))}
             </div>
@@ -1107,6 +1321,7 @@ const TrackerPage: React.FC = () => {
               {viewMode === 'board' && <BoardView items={filteredItems} onItemClick={setSelectedItem} onStatusChange={(id, s) => updateItem(id, { status: s })} />}
               {viewMode === 'list' && <ListView items={filteredItems} onItemClick={setSelectedItem} />}
               {viewMode === 'matrix' && <RiskMatrix items={filteredItems} onItemClick={setSelectedItem} />}
+              {viewMode === 'trends' && <TrendsView sessions={sessions} allItems={allItems} />}
             </div>
           )}
         </main>
@@ -1117,6 +1332,15 @@ const TrackerPage: React.FC = () => {
 
       {/* Command Palette */}
       {paletteOpen && <CommandPalette items={allItems} sessions={sessions} onItemClick={item => { setSelectedItem(item); }} onClose={() => setPaletteOpen(false)} />}
+
+      {/* Integrations Panel */}
+      {integrationsOpen && (
+        <IntegrationsPanel
+          session={sessions.find(s => s.id === selectedSessionId) ?? sessions[0] ?? null}
+          items={filteredItems}
+          onClose={() => setIntegrationsOpen(false)}
+        />
+      )}
     </div>
   );
 };
