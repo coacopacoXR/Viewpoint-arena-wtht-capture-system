@@ -1,10 +1,31 @@
 import React, { useRef, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
-import { Vector3, Raycaster, Mesh, Group } from 'three';
+import { Vector3, Vector2, Raycaster, Mesh, Group, Box3 } from 'three';
+import * as THREE from 'three';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
 import { setLaserEntry, clearLaserEntry } from '../../lib/laserTargetRef';
+import { fingerPointerRef } from '../../lib/fingerPointerRef';
+
+// Find the active model in the scene (any object tagged with userData.modelId)
+// and project its center to NDC. Returns true on success.
+function computeModelCenterNDC(scene: THREE.Scene, camera: THREE.Camera, out: Vector2): boolean {
+    const box = new Box3();
+    let found = false;
+    scene.traverse((obj) => {
+        if ((obj as any).isMesh && obj.userData?.modelId) {
+            box.expandByObject(obj);
+            found = true;
+        }
+    });
+    if (!found) return false;
+    const center = new Vector3();
+    box.getCenter(center);
+    center.project(camera); // world → NDC
+    out.set(center.x, center.y);
+    return true;
+}
 
 const UserLaser: React.FC = () => {
     const { camera, scene } = useThree();
@@ -29,14 +50,16 @@ const UserLaser: React.FC = () => {
     const lastPartName = useRef<string | null>(null);
 
     // Activation sources tracked independently so the laser stays active as
-    // long as ANY source is held (mouse both-buttons OR the P key).
+    // long as ANY source is held (mouse both-buttons OR P key OR finger pointing).
     const mouseHeld = useRef(false);
     const keyHeld = useRef(false);
+    const fingerHeld = useRef(false);
     const wasActive = useRef(false);
+    const syncRef = useRef<() => void>(() => {});
 
     useEffect(() => {
         const sync = () => {
-            const active = mouseHeld.current || keyHeld.current;
+            const active = mouseHeld.current || keyHeld.current || fingerHeld.current;
             if (active === wasActive.current) return;
             wasActive.current = active;
             setLaserActive(active);
@@ -54,6 +77,7 @@ const UserLaser: React.FC = () => {
                 }
             }
         };
+        syncRef.current = sync;
 
         const isTextInput = (target: EventTarget | null) => {
             if (!(target instanceof HTMLElement)) return false;
@@ -115,10 +139,107 @@ const UserLaser: React.FC = () => {
         };
     }, [setLaserActive, selectNode, broadcastLaserMove, localUserId]);
 
+    // Reused per frame to avoid GC churn when finger pointing.
+    const fingerPointerVec = useRef(new Vector2());
+    // Trackpad-style anchoring. On fresh detection we record:
+    //   fingerOrigin = where the homography puts the hand at that moment
+    //   fingerAnchor = where on screen we want to start (model center)
+    // Each frame: pointer = anchor + (currentAim − origin) × sensitivity.
+    const FINGER_SENSITIVITY = 0.55;
+    // Hand must be visible this long before we even start checking stillness.
+    // Filters out brief flickers (face touches, reaching gestures).
+    const FINGER_ACTIVATION_DELAY_MS = 500;
+    // Once visible long enough, hand must be stationary (low velocity) this
+    // long before the anchor locks. Captures the position the user *settled at*,
+    // not the position they were still drifting through.
+    const FINGER_STILLNESS_REQUIRED_MS = 250;
+    // Per-frame NDC distance under which the pointer counts as "still". Small
+    // because the rolling window already smooths frame-to-frame noise; this
+    // is targeted at separating "user has stopped moving" from "user is moving".
+    const FINGER_STILLNESS_THRESHOLD = 0.008;
+    const fingerOrigin = useRef(new Vector2(0, 0));
+    const fingerAnchor = useRef(new Vector2(0, 0));
+    const fingerLocked = useRef(false);
+    const handPresentSince = useRef<number | null>(null);
+    const fingerStillSince = useRef<number | null>(null);
+    const lastFingerPos = useRef<[number, number] | null>(null);
+    const modelCenterTmp = useRef(new Vector2());
+
     useFrame((state) => {
+        const frameNow = Date.now();
+        const fingerFresh = frameNow - fingerPointerRef.lastUpdate < 200;
+        const handPresent = fingerFresh && fingerPointerRef.pointerNDC !== null;
+
+        if (handPresent) {
+            if (handPresentSince.current === null) handPresentSince.current = frameNow;
+        } else {
+            // Hand gone — reset every piece of activation state so the next
+            // appearance has to earn its way through visibility + stillness again.
+            handPresentSince.current = null;
+            fingerStillSince.current = null;
+            fingerLocked.current = false;
+            lastFingerPos.current = null;
+        }
+
+        const heldLongEnough =
+            handPresentSince.current !== null &&
+            frameNow - handPresentSince.current >= FINGER_ACTIVATION_DELAY_MS;
+
+        // Stillness detection. Only runs once the visibility delay has passed;
+        // we don't want incidental hand-raising frames to count as "settled".
+        if (handPresent && heldLongEnough && fingerPointerRef.pointerNDC && !fingerLocked.current) {
+            const curr = fingerPointerRef.pointerNDC;
+            if (lastFingerPos.current) {
+                const speed = Math.hypot(
+                    curr[0] - lastFingerPos.current[0],
+                    curr[1] - lastFingerPos.current[1],
+                );
+                if (speed < FINGER_STILLNESS_THRESHOLD) {
+                    if (fingerStillSince.current === null) fingerStillSince.current = frameNow;
+                    if (frameNow - fingerStillSince.current >= FINGER_STILLNESS_REQUIRED_MS) {
+                        // Hand has settled — lock origin to where the user actually is,
+                        // and snap the anchor to the model center.
+                        fingerOrigin.current.set(curr[0], curr[1]);
+                        if (computeModelCenterNDC(scene, camera, modelCenterTmp.current)) {
+                            fingerAnchor.current.copy(modelCenterTmp.current);
+                        } else {
+                            fingerAnchor.current.copy(fingerOrigin.current);
+                        }
+                        fingerLocked.current = true;
+                    }
+                } else {
+                    // Moved — restart the stillness timer.
+                    fingerStillSince.current = null;
+                }
+            }
+            lastFingerPos.current = [curr[0], curr[1]];
+        }
+
+        // Laser only engages once the hand is locked (visible + settled).
+        const fingerNow = handPresent && fingerLocked.current;
+        if (fingerNow !== fingerHeld.current) {
+            fingerHeld.current = fingerNow;
+            syncRef.current();
+        }
+
         if (!isLaserActive) return;
 
-        raycaster.current.setFromCamera(state.pointer, camera);
+        // Pick the pointer source. Finger source uses anchor + scaled delta.
+        let pointerX: number, pointerY: number;
+        if (fingerHeld.current && fingerPointerRef.pointerNDC) {
+            const dx = fingerPointerRef.pointerNDC[0] - fingerOrigin.current.x;
+            const dy = fingerPointerRef.pointerNDC[1] - fingerOrigin.current.y;
+            pointerX = fingerAnchor.current.x + dx * FINGER_SENSITIVITY;
+            pointerY = fingerAnchor.current.y + dy * FINGER_SENSITIVITY;
+            // Clamp so wild swings don't yank the pointer entirely off-screen.
+            pointerX = Math.max(-1, Math.min(1, pointerX));
+            pointerY = Math.max(-1, Math.min(1, pointerY));
+        } else {
+            pointerX = state.pointer.x;
+            pointerY = state.pointer.y;
+        }
+        fingerPointerVec.current.set(pointerX, pointerY);
+        raycaster.current.setFromCamera(fingerPointerVec.current, camera);
 
         const intersects = raycaster.current.intersectObjects(scene.children, true);
 
