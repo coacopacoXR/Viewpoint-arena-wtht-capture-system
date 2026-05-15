@@ -20,6 +20,7 @@ import ConversationPanel from './ConversationPanel';
 import CommentsPanel from './CommentsPanel';
 import ChatPanel from './ChatPanel';
 import FingerPointerHost from './FingerPointerHost';
+import ReviewViewpointsDock from './ReviewViewpointsDock';
 import SceneTree from './SceneTree';
 import MeetingSummary from './MeetingSummary';
 import DataFlowDrawer from './DataFlowDrawer';
@@ -274,6 +275,8 @@ const Interface: React.FC = () => {
     <div className="w-full h-full p-6 relative pointer-events-none">
       {/* Finger pointer prompt/calibration overlay + tracker host */}
       <FingerPointerHost />
+
+      {/* (ReviewViewpointsDock is mounted inside the bottom dock below, not here.) */}
 
       {/* Drawing Canvas Overlay - Rendered at root level to avoid backdrop-filter containing block issues */}
       {showDrawingCanvas && (
@@ -906,6 +909,22 @@ const Interface: React.FC = () => {
               <Network size={14} className={isDataFlowOpen ? "text-emerald-400" : "text-gray-400"} />
               <span className="text-[10px] font-bold uppercase tracking-wide">Data Flow</span>
           </button>
+
+          {/* Visual aids — relocated here so the bottom dock has room for the review pane */}
+          <div className="flex gap-1 bg-white/90 backdrop-blur p-1.5 rounded-full border border-gray-200 shadow-sm">
+              <Button onClick={toggleAgentStyle} title="Cycle Agent Style">
+                  <Box size={16} className={agentStyle === AgentStyle.BOX ? 'fill-black' : ''} />
+              </Button>
+              <Button active={showFrustums} onClick={toggleFrustums} title="Toggle Frustums">
+                  <Video size={16} />
+              </Button>
+              <Button active={showGaze} onClick={toggleGaze} title="Visual Grounding (Gaze)">
+                  {showGaze ? <Eye size={16} /> : <EyeOff size={16} />}
+              </Button>
+              <Button active={showTrails} onClick={toggleTrails} title="Movement Trails">
+                  <Footprints size={16} />
+              </Button>
+          </div>
       </div>
 
       {/* Bottom Controls Panel (Centered Dock) */}
@@ -1031,28 +1050,8 @@ const Interface: React.FC = () => {
             </div>
         </div>
 
-        {/* Right: Visibility Toggles */}
-        <div className="flex gap-2 pointer-events-auto bg-white/90 backdrop-blur-md p-1.5 rounded-md border border-gray-200 shadow-sm transition-all hover:shadow-md">
-             <div className="h-10 flex flex-col justify-center px-2 font-mono text-[10px] text-gray-400 text-right leading-tight">
-                <div>VISUAL</div>
-                <div>AIDS</div>
-             </div>
-            <div className="w-px h-10 bg-gray-200 mx-1"></div>
-            
-            <Button onClick={toggleAgentStyle} title="Cycle Agent Style">
-                <Box size={16} className={agentStyle === AgentStyle.BOX ? "fill-black" : ""} />
-            </Button>
-
-            <Button active={showFrustums} onClick={toggleFrustums} title="Toggle Frustums">
-                <Video size={16} />
-            </Button>
-            <Button active={showGaze} onClick={toggleGaze} title="Visual Grounding (Gaze)">
-                {showGaze ? <Eye size={16} /> : <EyeOff size={16} />}
-            </Button>
-            <Button active={showTrails} onClick={toggleTrails} title="Movement Trails">
-                <Footprints size={16} />
-            </Button>
-        </div>
+        {/* Right: Active Review pane (replaces the old Visual Aids panel) */}
+        <ReviewViewpointsDock />
 
       </div>
 

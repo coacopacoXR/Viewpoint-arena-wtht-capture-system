@@ -18,6 +18,7 @@ export const PresenceContext = createContext<UsePartyPresenceReturn>({
   broadcastPrivacyMode: noop,
   broadcastLeaderTakeover: noop,
   broadcastModelChange: noop,
+  broadcastReviewConfig: () => false,
   broadcastMeetingEnd: noop,
   broadcastTakeoverSync: noop,
   broadcastHostTransfer: noop,

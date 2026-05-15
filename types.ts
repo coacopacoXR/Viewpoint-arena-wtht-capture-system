@@ -270,6 +270,13 @@ export interface SpatialComment {
     // NEW: UI state for 3D display
     expanded?: boolean; // Whether comment text is expanded in 3D scene
     screenOffset?: { x: number; y: number }; // Offset for drag positioning
+    // Synthesized from a curated review viewpoint or pin. UI surfaces a
+    // "PRE-REVIEW" badge for these and edits flow back through the review store.
+    preReview?: boolean;
+    // Source id back-reference (viewpointId or pinId) when preReview is true.
+    preReviewSourceId?: string;
+    // 'viewpoint' (visual annotation) or 'pin' (text-only) — when preReview.
+    preReviewSourceKind?: 'viewpoint' | 'pin';
 }
 
 export type CommentMode = 'none' | 'placing-comment' | 'placing-drawing' | 'positioning-drawing' | 'drawing';

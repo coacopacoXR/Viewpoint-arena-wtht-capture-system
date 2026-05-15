@@ -8,6 +8,8 @@ import { usePartyPresence } from '../lib/usePartyPresence';
 import { PresenceContext } from '../lib/PresenceContext';
 import { useWebRTC } from '../lib/useWebRTC';
 import { WebRTCContext } from '../lib/WebRTCContext';
+import { useReviewSetupStore } from '../lib/reviewSetupStore';
+import { useActiveReviewStore } from '../lib/activeReviewStore';
 
 function getMobileUserName(): string {
   try {
@@ -37,6 +39,33 @@ const RoomPage: React.FC = () => {
   }, [roomId]);
 
   const presence = usePartyPresence(roomId);
+
+  // If we hold a local review draft matching this room id, publish it once
+  // the socket is open so all participants share the same viewpoints/pins.
+  // Also seed our own activeReviewStore immediately so the host doesn't have
+  // to wait for the server echo.
+  useEffect(() => {
+    const draft = useReviewSetupStore.getState().draft;
+    if (!roomId || !draft || draft.reviewId !== roomId) return;
+    useActiveReviewStore.getState().setConfig(draft);
+
+    // Try to broadcast as soon as the socket is open. The send function returns
+    // false when the socket isn't ready yet; poll briefly until it lands.
+    let sent = presence.broadcastReviewConfig(draft);
+    if (sent) return;
+    const id = setInterval(() => {
+      if (presence.broadcastReviewConfig(draft)) {
+        clearInterval(id);
+      }
+    }, 250);
+    const stop = setTimeout(() => clearInterval(id), 5000);
+    return () => { clearInterval(id); clearTimeout(stop); };
+  }, [roomId, presence]);
+
+  // Clear active review when leaving the room so it doesn't leak across sessions.
+  useEffect(() => {
+    return () => { useActiveReviewStore.getState().setConfig(null); };
+  }, []);
 
   const webrtc = useWebRTC({
     localUserId: presence.localUserId,

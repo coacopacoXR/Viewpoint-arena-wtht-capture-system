@@ -214,16 +214,25 @@ const CommentCard: React.FC<{
                             </button>
                             <hr className="my-1" />
                             <button
-                                onClick={() => { onDelete(); setShowMenu(false); }}
-                                className="w-full px-3 py-2 text-left text-xs hover:bg-red-50 text-red-600 flex items-center gap-2"
+                                onClick={() => { if (!comment.preReview) { onDelete(); setShowMenu(false); } }}
+                                disabled={!!comment.preReview}
+                                title={comment.preReview ? 'Pre-review items are managed in the Review panel / setup page' : undefined}
+                                className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2 ${comment.preReview ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-red-50 text-red-600'}`}
                             >
                                 <Trash2 size={12} />
-                                Delete
+                                Delete{comment.preReview ? ' (Pre-Review)' : ''}
                             </button>
                         </div>
                     )}
                 </div>
             </div>
+
+            {/* Pre-Review badge — set for comments synthesized from the curated review config */}
+            {comment.preReview && (
+                <div className="mb-2 inline-flex items-center gap-1 text-[8px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 border border-emerald-500/30">
+                    <span className="w-1 h-1 bg-emerald-500 rounded-full" /> Pre-Review · {comment.preReviewSourceKind === 'viewpoint' ? 'Viewpoint' : 'Pin'}
+                </div>
+            )}
 
             {/* Attached component */}
             <div className="text-[9px] text-gray-400 mb-2 flex items-center gap-1">

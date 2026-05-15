@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import {
   Settings, LayoutGrid, Radio, Power, MonitorPlay,
   MessageSquare, X, Monitor, MonitorOff, Layers, ChevronRight, ChevronDown,
-  Video, VideoOff, Mic, MicOff, Mic2, CheckCircle, XCircle, Share2
+  Video, VideoOff, Mic, MicOff, Mic2, CheckCircle, XCircle, Share2, Camera,
 } from 'lucide-react';
 import SharePanel from '../SharePanel';
 import { clsx } from 'clsx';
@@ -22,6 +22,8 @@ import InsightDetailModal from '../InsightDetailModal';
 import { useWebRTCContext } from '../../../lib/WebRTCContext';
 import HumanParticipantTile from './HumanParticipantTile';
 import MobileBoardroomLayout from './layouts/MobileBoardroomLayout';
+import { useActiveReviewStore } from '../../../lib/activeReviewStore';
+import ReviewPanelContent from '../ReviewPanelContent';
 
 // Thin collapsable floating panel wrapper used for tree and comments
 const FloatingPanel: React.FC<{
@@ -123,6 +125,7 @@ const BoardroomShell: React.FC = () => {
   const [screenSharing, setScreenSharing] = useState(false);
   const [showTree, setShowTree] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const [showReview, setShowReview] = useState(false);
   const [isWebcamOnly, setIsWebcamOnly] = useState(false);
   const [selectedInsightCard, setSelectedInsightCard] = useState<InsightCard | null>(null);
   const [showInsightExplainer, setShowInsightExplainer] = useState(false);
@@ -330,6 +333,10 @@ const BoardroomShell: React.FC = () => {
             Comments
           </button>
 
+          {/* Review — only when a curated config is active */}
+          <BoardroomReviewButton showReview={showReview} setShowReview={setShowReview} />
+
+
           {/* Mic toggle */}
           <button
             onClick={toggleMic}
@@ -501,6 +508,22 @@ const BoardroomShell: React.FC = () => {
           </FloatingPanel>
         )}
 
+        {/* Curated review viewpoints/pins panel — same FloatingPanel shell */}
+        {showReview && !isWebcamOnly && (
+          <FloatingPanel
+            title="Review"
+            icon={<Camera size={10} />}
+            isOpen={showReview}
+            onToggle={() => setShowReview(false)}
+            width={340}
+            style={{ top: 8, right: floatingCommentRight + (showComments ? 296 : 0) }}
+          >
+            <div className="max-h-[60vh] overflow-y-auto">
+              <ReviewPanelContent theme="dark" />
+            </div>
+          </FloatingPanel>
+        )}
+
         {/* ── Transcript popup — slides in from right ── */}
         {showTranscript && boardroomTranscriptPermission && (
           <div
@@ -590,6 +613,34 @@ const BoardroomShell: React.FC = () => {
         )}
       </div>
     </div>
+  );
+};
+
+// Toolbar button for the curated-review panel. Hides when no review config is
+// active so ad-hoc boardroom sessions stay uncluttered.
+const BoardroomReviewButton: React.FC<{
+  showReview: boolean;
+  setShowReview: (v: boolean) => void;
+}> = ({ showReview, setShowReview }) => {
+  const config = useActiveReviewStore((s) => s.config);
+  if (!config) return null;
+  const total = config.viewpoints.length + config.pins.length;
+  if (total === 0) return null;
+  return (
+    <button
+      onClick={() => setShowReview(!showReview)}
+      className={clsx(
+        'px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide border transition-all flex items-center gap-1',
+        showReview
+          ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
+          : 'bg-white/8 text-white/50 border-white/10 hover:bg-white/15 hover:text-white'
+      )}
+      title="Curated review viewpoints & pins"
+    >
+      <Camera size={10} />
+      Review
+      <span className="font-mono opacity-60 text-[8px]">{total}</span>
+    </button>
   );
 };
 
