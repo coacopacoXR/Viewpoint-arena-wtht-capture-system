@@ -389,8 +389,10 @@ const SpatialComments: React.FC = () => {
 
     return (
         <group>
-            {/* Render all comments */}
-            {comments.map(comment => (
+            {/* Render all live comments. Pre-review comments are already
+                rendered as dedicated markers by ReviewArtifacts, so skip them
+                here to avoid duplicate 3D markers. */}
+            {comments.filter(c => !c.preReview).map(comment => (
                 <CommentMarker
                     key={comment.id}
                     comment={comment}

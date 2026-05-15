@@ -4,6 +4,8 @@ import type { ParticipantPresence } from '../party/room.server';
 import type { InsightCard, LiveChatMessage, XRParticipantData } from '../types';
 import { remoteXRParticipants } from './xrPresenceRef';
 import { remoteLaserTargets, remoteLaserColors, remoteLaserMeshNames, remoteLaserPartNames, remoteLaserLastUpdate } from './laserTargetRef';
+import { useActiveReviewStore } from './activeReviewStore';
+import type { ReviewDraft } from './reviewSetupStore';
 import { useStore } from '../store';
 import { ViewMode } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
@@ -24,6 +26,7 @@ type RoomMessage =
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
   | { type: 'MODEL_CHANGE'; payload: { modelType: 'synth' | 'bicycle' | 'imported'; fileBase64?: string; fileName?: string } }
+  | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
   | { type: 'MEETING_END'; payload: Record<string, never> }
@@ -85,6 +88,7 @@ export interface UsePartyPresenceReturn {
   broadcastPrivacyMode: (enabled: boolean) => void;
   broadcastLeaderTakeover: (userId: string) => void;
   broadcastModelChange: (modelType: 'synth' | 'bicycle' | 'imported', fileBase64?: string, fileName?: string) => void;
+  broadcastReviewConfig: (config: ReviewDraft) => boolean;
   broadcastMeetingEnd: () => void;
   broadcastTakeoverSync: (enabled: boolean, approvedUserIds: string[]) => void;
   broadcastHostTransfer: (toUserId: string) => void;
@@ -217,6 +221,29 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
             .then(result => setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition))
             .catch(err => console.error('[MODEL_CHANGE] Parse error:', err));
         }
+      } else if (msg.type === 'REVIEW_CONFIG') {
+        // Store the curated review config and ensure the asset matches.
+        // The host sets its own draft locally before broadcasting; receivers
+        // (including late joiners via on-connect replay) update through here.
+        const cfg = msg.payload.config;
+        useActiveReviewStore.getState().setConfig(cfg);
+        const { setActiveModelType, setImportedModel } = useStore.getState();
+        const a = cfg.asset;
+        if (a.modelType === 'synth' || a.modelType === 'bicycle' || a.modelType === 'headphones') {
+          setActiveModelType(a.modelType);
+        } else if (a.modelType === 'imported' && a.importedFileBase64 && a.importedFileName) {
+          const ext = a.importedFileName.split('.').pop()?.toLowerCase() || 'glb';
+          const mimeMap: Record<string, string> = {
+            glb: 'model/gltf-binary', gltf: 'model/gltf+json',
+            obj: 'text/plain', fbx: 'application/octet-stream', stl: 'application/octet-stream',
+          };
+          const mime = mimeMap[ext] || 'application/octet-stream';
+          const bytes = Uint8Array.from(atob(a.importedFileBase64), (c) => c.charCodeAt(0));
+          const file = new File([bytes], a.importedFileName, { type: mime });
+          parseModelFile(file)
+            .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
+            .catch((err) => console.error('[REVIEW_CONFIG] parse error:', err));
+        }
       } else if (msg.type === 'HOST_CHANGE') {
         setSessionHostId(msg.payload.hostId);
         // If I just became the host (e.g. previous host left), update local state
@@ -346,6 +373,13 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'LEADER_TAKEOVER', payload: { userId } }));
   }
 
+  function broadcastReviewConfig(config: ReviewDraft): boolean {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify({ type: 'REVIEW_CONFIG', payload: { config } }));
+    return true;
+  }
+
   function broadcastModelChange(modelType: 'synth' | 'bicycle' | 'imported', fileBase64?: string, fileName?: string) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -450,6 +484,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastPrivacyMode,
     broadcastLeaderTakeover,
     broadcastModelChange,
+    broadcastReviewConfig,
     broadcastMeetingEnd,
     broadcastTakeoverSync,
     broadcastHostTransfer,

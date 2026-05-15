@@ -22,6 +22,7 @@ type RoomMessage =
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
   | { type: 'MODEL_CHANGE'; payload: { modelType: 'synth' | 'bicycle' | 'imported'; fileBase64?: string; fileName?: string } }
+  | { type: 'REVIEW_CONFIG'; payload: { config: any } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
   | { type: 'MEETING_END'; payload: Record<string, never> }
@@ -51,6 +52,8 @@ export default class RoomServer implements Party.Server {
   lastPresenterChange = 0;
   // Persisted model state for late joiners
   currentModel: { modelType: string; fileBase64?: string; fileName?: string } | null = null;
+  // Persisted curated review config (viewpoints, pins, agenda…)
+  reviewConfig: any | null = null;
   // Persisted spatial comments for late joiners
   comments: any[] = [];
   // Whether the room is currently in boardroom mode — sent to late joiners
@@ -74,6 +77,9 @@ export default class RoomServer implements Party.Server {
     } as RoomMessage));
     if (this.currentModel) {
       conn.send(JSON.stringify({ type: 'MODEL_CHANGE', payload: this.currentModel } as RoomMessage));
+    }
+    if (this.reviewConfig) {
+      conn.send(JSON.stringify({ type: 'REVIEW_CONFIG', payload: { config: this.reviewConfig } } as RoomMessage));
     }
     conn.send(JSON.stringify({ type: 'COMMENT_ROSTER', payload: { comments: this.comments } } as RoomMessage));
     conn.send(JSON.stringify({ type: 'BOARDROOM_STATE', payload: { active: this.isBoardroomMode } } as RoomMessage));
@@ -133,6 +139,10 @@ export default class RoomServer implements Party.Server {
 
     } else if (msg.type === 'MODEL_CHANGE') {
       this.currentModel = msg.payload;
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
+    } else if (msg.type === 'REVIEW_CONFIG') {
+      this.reviewConfig = msg.payload.config;
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'COMMENT_ADD') {

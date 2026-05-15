@@ -9,6 +9,7 @@ import UserLaser from './UserLaser';
 import MobileLaser from './MobileLaser';
 import SpatialComments from './SpatialComments';
 import XRManager from './XRManager';
+import ReviewArtifacts from './ReviewArtifacts';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
 import type { RemoteLaserState } from '../../lib/usePartyPresence';
@@ -406,18 +407,23 @@ const SceneRenderer = () => {
   }, 1);
   
   return (
-    <OrbitControls
-      ref={controlsRef}
-      enableDamping
-      dampingFactor={0.1}
-      // Always enable controls except for laser/drawing modes
-      // User interaction in POV mode will trigger disengage, then auto-resume after idle
-      enabled={!isLaserActive && !drawingInteractionActive}
-      minDistance={1}
-      maxDistance={20}
-      onStart={handleCanvasInteractionStart}
-      onEnd={handleCanvasInteractionEnd}
-    />
+    <>
+      <OrbitControls
+        ref={controlsRef}
+        enableDamping
+        dampingFactor={0.1}
+        // Always enable controls except for laser/drawing modes
+        // User interaction in POV mode will trigger disengage, then auto-resume after idle
+        enabled={!isLaserActive && !drawingInteractionActive}
+        minDistance={1}
+        maxDistance={20}
+        onStart={handleCanvasInteractionStart}
+        onEnd={handleCanvasInteractionEnd}
+      />
+      {/* Curated review artifacts (pins, camera-jump animator). Shares this
+          renderer's controlsRef so jumps update orbit controls in lockstep. */}
+      <ReviewArtifacts controlsRef={controlsRef} />
+    </>
   );
 };
 

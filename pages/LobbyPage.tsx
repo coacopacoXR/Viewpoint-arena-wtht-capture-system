@@ -66,6 +66,14 @@ const LobbyPage: React.FC = () => {
     enterRoom(crypto.randomUUID());
   }
 
+  function handleCurateReview() {
+    if (!name.trim()) { setError('Enter your name first.'); return; }
+    const id = buildIdentity();
+    setIdentity(id);
+    const reviewId = crypto.randomUUID();
+    navigate(`/review/${reviewId}/setup`);
+  }
+
   function handleJoin() {
     if (!name.trim()) { setError('Enter your name first.'); return; }
     const code = joinCode.trim();
@@ -229,6 +237,11 @@ const LobbyPage: React.FC = () => {
             <button onClick={handleNewSession}
               className={`w-full text-sm font-bold py-3 rounded-xl transition-colors ${joinCode.trim() ? 'bg-white/10 hover:bg-white/20 text-gray-400 border border-white/10' : 'bg-white hover:bg-gray-100 text-gray-900'}`}>
               {isReturning ? 'New session' : 'Start new session'}
+            </button>
+
+            <button onClick={handleCurateReview}
+              className="w-full text-sm font-bold py-3 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/20 transition-colors">
+              Curate a design review →
             </button>
 
             <div className="flex gap-2">
