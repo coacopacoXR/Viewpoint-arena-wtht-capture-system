@@ -6,7 +6,7 @@ import {
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
   ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic,
   ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight,
-  MonitorPlay, Share2, Crosshair
+  MonitorPlay, Share2, Crosshair, Hand
 } from 'lucide-react';
 import SharePanel from './SharePanel';
 import XRButton from './XRButton';
@@ -14,10 +14,12 @@ import { useParams } from 'react-router-dom';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
+import { useFingerPointerStore } from '../../lib/fingerPointerStore';
 import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
 import CommentsPanel from './CommentsPanel';
 import ChatPanel from './ChatPanel';
+import FingerPointerHost from './FingerPointerHost';
 import SceneTree from './SceneTree';
 import MeetingSummary from './MeetingSummary';
 import DataFlowDrawer from './DataFlowDrawer';
@@ -47,6 +49,41 @@ const Button: React.FC<{
     {children}
   </button>
 );
+
+const FingerPointerPill: React.FC = () => {
+  const mode = useFingerPointerStore((s) => s.mode);
+  const calibration = useFingerPointerStore((s) => s.calibration);
+  const enable = useFingerPointerStore((s) => s.enableFingerPointer);
+  const disable = useFingerPointerStore((s) => s.disableFingerPointer);
+  const recalibrate = useFingerPointerStore((s) => s.startRecalibration);
+
+  const isActive = mode === 'active';
+  return (
+    <div className="flex items-center gap-1 px-3 py-2 rounded-full border shadow-sm bg-white/90 backdrop-blur border-gray-200">
+      <Hand size={14} className={isActive ? 'text-emerald-500' : 'text-gray-400'} />
+      <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Finger</span>
+      <button
+        onClick={isActive ? disable : enable}
+        title={isActive ? 'Disable finger pointer' : 'Enable finger pointer'}
+        className={clsx(
+          'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
+          isActive ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-800'
+        )}
+      >
+        {isActive ? 'On' : 'Off'}
+      </button>
+      {calibration && (
+        <button
+          onClick={recalibrate}
+          title="Recalibrate corners"
+          className="text-[9px] font-bold uppercase px-2 py-0.5 rounded text-gray-400 hover:text-gray-700 transition-all"
+        >
+          Recal
+        </button>
+      )}
+    </div>
+  );
+};
 
 const Interface: React.FC = () => {
   const {
@@ -157,7 +194,9 @@ const Interface: React.FC = () => {
 
   return (
     <div className="w-full h-full p-6 relative pointer-events-none">
-      
+      {/* Finger pointer prompt/calibration overlay + tracker host */}
+      <FingerPointerHost />
+
       {/* Drawing Canvas Overlay - Rendered at root level to avoid backdrop-filter containing block issues */}
       {showDrawingCanvas && (
         <DrawingCanvas
@@ -813,6 +852,7 @@ const Interface: React.FC = () => {
               )}
             >Part</button>
           </div>
+          <FingerPointerPill />
       </div>
 
       {/* Bottom Controls Panel (Centered Dock) */}
