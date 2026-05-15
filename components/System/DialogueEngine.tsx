@@ -844,6 +844,7 @@ class ConversationContextManager {
 // --- MAIN COMPONENT ---
 const DialogueEngine: React.FC = () => {
     const agents = useStore(state => state.agents);
+    const hideAgents = useStore(state => state.hideAgents);
     const pois = useStore(state => state.pois);
     const isPlaying = useStore(state => state.isPlaying);
     const isPrivacyMode = useStore(state => state.isPrivacyMode);
@@ -928,8 +929,8 @@ const DialogueEngine: React.FC = () => {
     };
 
     useFrame(() => {
-        // Don't generate dialogue when paused or in privacy mode
-        if (!isPlaying || isPrivacyMode) return;
+        // Don't generate dialogue when paused, in privacy mode, or agents hidden
+        if (!isPlaying || isPrivacyMode || hideAgents) return;
 
         agents.forEach(agent => {
             const now = Date.now();

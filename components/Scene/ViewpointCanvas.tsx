@@ -1,14 +1,20 @@
 import React, { Suspense, useRef, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, Html } from '@react-three/drei';
+import { XR } from '@react-three/xr';
 import World from './World';
 import RemoteParticipants from './RemoteParticipant';
 import DialogueEngine from '../System/DialogueEngine';
 import UserLaser from './UserLaser';
+import MobileLaser from './MobileLaser';
 import SpatialComments from './SpatialComments';
+import XRManager from './XRManager';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
+import type { RemoteLaserState } from '../../lib/usePartyPresence';
+import { isLaserEntryFresh } from '../../lib/laserTargetRef';
 import { ViewMode } from '../../types';
+import { xrStore } from '../../lib/xrStore';
 import * as THREE from 'three';
 
 // Syncs followingRemoteUserId with boardroomLeaderId when in boardroom mode.
@@ -421,42 +427,179 @@ const RemoteParticipantsWrapper: React.FC = () => {
   return <RemoteParticipants participantsRef={remoteParticipants} />;
 };
 
-// Renders a glowing dot for each remote user's laser pointer
-const RemoteLasers: React.FC = () => {
-  const { remoteLasers } = usePresence();
+// Per-user laser dot + beam with name label, pulsing animation, and target part display.
+// Color is read from remoteParticipants every frame (not from the prop) so it stays
+// fresh even when participant data syncs after the laser has started.
+const RemoteLaserDot: React.FC<{
+  userId: string;
+  remoteLasers: React.MutableRefObject<Map<string, RemoteLaserState>>;
+  remoteParticipants: React.MutableRefObject<Map<string, import('../../party/room.server').ParticipantPresence>>;
+}> = ({ userId, remoteLasers, remoteParticipants }) => {
   const groupRef = useRef<THREE.Group>(null);
+  const dotRef = useRef<THREE.Mesh>(null);
+  const dotMatRef = useRef<THREE.MeshBasicMaterial>(null);
+  const beamRef = useRef<THREE.Mesh>(null);
+  const beamMatRef = useRef<THREE.MeshBasicMaterial>(null);
+  const pointLightRef = useRef<THREE.PointLight>(null);
+  const nameLabelRef = useRef<HTMLDivElement>(null);
+  const targetLabelRef = useRef<HTMLDivElement>(null);
+  const nameTextRef = useRef<HTMLSpanElement>(null);
+  const _start = useRef(new THREE.Vector3());
+  const _end = useRef(new THREE.Vector3());
+  const _mid = useRef(new THREE.Vector3());
+  const _color = useRef(new THREE.Color());
+  const lastColor = useRef<string>('');
+  const lastName = useRef<string>('');
 
-  useFrame(() => {
-    if (!groupRef.current) return;
-    let i = 0;
-    remoteLasers.current.forEach((pos) => {
-      const child = groupRef.current!.children[i] as THREE.Mesh | undefined;
-      if (child) {
-        if (pos) {
-          child.visible = true;
-          child.position.set(pos[0], pos[1], pos[2]);
-        } else {
-          child.visible = false;
-        }
+  useFrame(({ clock }) => {
+    const state = remoteLasers.current.get(userId);
+    const pos = state?.position ?? null;
+    const participant = remoteParticipants.current.get(userId);
+    const color = participant?.color ?? '#ffffff';
+    const name = participant?.name ?? userId.slice(0, 6);
+
+    // --- Apply color imperatively (handles late-arriving participant data) ---
+    if (color !== lastColor.current) {
+      lastColor.current = color;
+      _color.current.set(color);
+      if (dotMatRef.current) dotMatRef.current.color.copy(_color.current);
+      if (beamMatRef.current) beamMatRef.current.color.copy(_color.current);
+      if (pointLightRef.current) pointLightRef.current.color.copy(_color.current);
+      if (nameLabelRef.current) {
+        nameLabelRef.current.style.background = color;
+        nameLabelRef.current.style.borderColor = color;
       }
-      i++;
-    });
-    // hide extras
-    for (; i < groupRef.current.children.length; i++) {
-      (groupRef.current.children[i] as THREE.Mesh).visible = false;
+    }
+    if (name !== lastName.current) {
+      lastName.current = name;
+      if (nameTextRef.current) nameTextRef.current.textContent = name;
+    }
+
+    // --- Dot at hit point ---
+    if (groupRef.current) {
+      if (pos) {
+        groupRef.current.position.set(pos[0], pos[1], pos[2]);
+        groupRef.current.visible = true;
+        if (dotRef.current) {
+          const pulse = 1.0 + 0.3 * Math.sin(clock.elapsedTime * 12.0);
+          dotRef.current.scale.setScalar(pulse);
+        }
+      } else {
+        groupRef.current.visible = false;
+      }
+    }
+
+    // --- Beam from participant avatar body to hit point ---
+    if (beamRef.current) {
+      if (pos && participant?.position) {
+        // Avatar visuals span ~y+0.1 to y+0.6 above the camera/group origin
+        // (see RemoteParticipant.tsx). Anchor the beam at the avatar body center.
+        _start.current.set(
+          participant.position[0],
+          participant.position[1] + 0.2,
+          participant.position[2],
+        );
+        _end.current.set(pos[0], pos[1], pos[2]);
+        _mid.current.addVectors(_start.current, _end.current).multiplyScalar(0.5);
+        beamRef.current.position.copy(_mid.current);
+        beamRef.current.lookAt(_end.current);
+        beamRef.current.rotateX(Math.PI / 2);
+        beamRef.current.scale.set(1, _start.current.distanceTo(_end.current), 1);
+        beamRef.current.visible = true;
+      } else {
+        beamRef.current.visible = false;
+      }
+    }
+
+    // --- Imperatively update target label — no React re-render ---
+    if (targetLabelRef.current) {
+      const partName = state?.partName ?? null;
+      targetLabelRef.current.textContent = partName ?? '';
+      targetLabelRef.current.style.display = partName ? 'block' : 'none';
     }
   });
 
-  // Pre-allocate slots (max 8 remote lasers)
   return (
-    <group ref={groupRef}>
-      {Array.from({ length: 8 }).map((_, idx) => (
-        <mesh key={idx} visible={false}>
-          <sphereGeometry args={[0.035, 8, 8]} />
-          <meshBasicMaterial color="#ff3300" toneMapped={false} />
+    <>
+      {/* Hit-point group: dot + glow + label. skipRaycast so the laser doesn't pin to its own dot. */}
+      <group ref={groupRef} visible={false} userData={{ skipRaycast: true }}>
+        <mesh ref={dotRef} renderOrder={999} userData={{ skipRaycast: true }}>
+          <sphereGeometry args={[0.035, 10, 10]} />
+          <meshBasicMaterial ref={dotMatRef} toneMapped={false} depthTest={false} />
         </mesh>
+        <pointLight ref={pointLightRef} intensity={1.5} distance={0.8} />
+        <Html position={[0, 0.12, 0]} center distanceFactor={6} style={{ pointerEvents: 'none' }} zIndexRange={[0, 0]}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+            <div
+              ref={nameLabelRef}
+              style={{
+                background: '#ffffff',
+                border: '1px solid #ffffff',
+                color: '#fff',
+                fontFamily: 'monospace',
+                fontSize: '7px',
+                padding: '0 3px',
+                borderRadius: '3px',
+                whiteSpace: 'nowrap',
+                backdropFilter: 'blur(4px)',
+              }}
+            >
+              <span ref={nameTextRef} />
+            </div>
+            <div
+              ref={targetLabelRef}
+              style={{
+                background: 'rgba(0,0,0,0.7)',
+                color: '#fff',
+                fontFamily: 'monospace',
+                fontSize: '6px',
+                padding: '0 3px',
+                borderRadius: '3px',
+                whiteSpace: 'nowrap',
+                display: 'none',
+              }}
+            />
+          </div>
+        </Html>
+      </group>
+      {/* Beam from remote avatar body to hit point — skipRaycast keeps it out of hit testing */}
+      <mesh ref={beamRef} visible={false} userData={{ skipRaycast: true }}>
+        <cylinderGeometry args={[0.004, 0.004, 1, 6]} />
+        <meshBasicMaterial ref={beamMatRef} transparent opacity={0.5} depthTest={false} />
+      </mesh>
+    </>
+  );
+};
+
+// Outer component: watches which users have active lasers, mounts one dot per active user.
+// Only the userId set drives mount/unmount — name/color are read live inside each dot.
+const RemoteLasers: React.FC = () => {
+  const { remoteLasers, remoteParticipants } = usePresence();
+  const [activeIds, setActiveIds] = React.useState<string[]>([]);
+  const lastKeySetRef = useRef('');
+
+  useFrame(() => {
+    const ids = Array.from(remoteLasers.current.entries())
+      .filter(([id, s]) => s.position !== null && isLaserEntryFresh(id))
+      .map(([id]) => id)
+      .sort();
+    const key = ids.join(',');
+    if (key === lastKeySetRef.current) return;
+    lastKeySetRef.current = key;
+    setActiveIds(ids);
+  });
+
+  return (
+    <>
+      {activeIds.map(userId => (
+        <RemoteLaserDot
+          key={userId}
+          userId={userId}
+          remoteLasers={remoteLasers}
+          remoteParticipants={remoteParticipants}
+        />
       ))}
-    </group>
+    </>
   );
 };
 
@@ -476,20 +619,24 @@ const ViewpointCanvas: React.FC = () => {
         preserveDrawingBuffer: true
       }}
     >
-      <PerspectiveCamera makeDefault position={[8, 6, 8]} fov={60} />
-      
-      {/* Systems */}
-      <DialogueEngine />
-      <UserLaser />
-      <SpatialComments />
-      <RemoteLasers />
-      <SceneRenderer />
-      <PresenceBroadcaster />
+      <XR store={xrStore}>
+        <PerspectiveCamera makeDefault position={[8, 6, 8]} fov={60} />
 
-      <Suspense fallback={null}>
-        <World />
-        <RemoteParticipantsWrapper />
-      </Suspense>
+        {/* Systems */}
+        <DialogueEngine />
+        <UserLaser />
+        <MobileLaser />
+        <XRManager />
+        <SpatialComments />
+        <RemoteLasers />
+        <SceneRenderer />
+        <PresenceBroadcaster />
+
+        <Suspense fallback={null}>
+          <World />
+          <RemoteParticipantsWrapper />
+        </Suspense>
+      </XR>
     </Canvas>
     </>
   );

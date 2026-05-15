@@ -6,7 +6,7 @@ const noop = () => {};
 export const PresenceContext = createContext<UsePartyPresenceReturn>({
   localUserId: '',
   remoteParticipants: { current: new Map() },
-  remoteLasers: { current: new Map() },
+  remoteLasers: { current: new Map<string, import('./usePartyPresence').RemoteLaserState>() },
   remoteParticipantList: [],
   broadcastPresence: noop,
   broadcastPresenterChange: noop,
@@ -27,6 +27,8 @@ export const PresenceContext = createContext<UsePartyPresenceReturn>({
   broadcastCommentUpdate: noop,
   broadcastCommentDelete: noop,
   broadcastCommentResolve: noop,
+  broadcastChatMessage: noop,
+  broadcastXRPresence: noop,
   broadcastWebRTCSignal: noop,
   registerWebRTCSignalHandler: () => () => {},
 });

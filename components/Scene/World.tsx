@@ -9,6 +9,7 @@ class EnvErrorBoundary extends React.Component<{ children: React.ReactNode }> {
 }
 import Product from './Product';
 import Bicycle from './Bicycle';
+import Headphones from './Headphones';
 import ImportedModel from './ImportedModel';
 import Agent from './Agent';
 import HeatmapOverlay from './HeatmapOverlay';
@@ -22,6 +23,7 @@ const World: React.FC = () => {
   const viewMode = useStore(state => state.viewMode);
   const setUserInteractionPoint = useStore(state => state.setUserInteractionPoint);
   const agents = useStore(state => state.agents);
+  const hideAgents = useStore(state => state.hideAgents);
   const activeModelType = useStore(state => state.activeModelType);
   
   // Ref to track throttle
@@ -82,6 +84,8 @@ const World: React.FC = () => {
           <ImportedModel />
         ) : activeModelType === 'bicycle' ? (
           <Bicycle />
+        ) : activeModelType === 'headphones' ? (
+          <Headphones />
         ) : (
           <Product />
         )}
@@ -98,7 +102,7 @@ const World: React.FC = () => {
       
       {isHeatmap && <HeatmapOverlay />}
 
-      {agents.map((agent) => (
+      {!hideAgents && agents.map((agent) => (
         <Agent key={agent.id} initialState={agent} allAgents={agents} />
       ))}
     </>

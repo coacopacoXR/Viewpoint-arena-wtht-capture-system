@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, BoardroomLayout } from './types';
+import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, BoardroomLayout, LiveChatMessage } from './types';
 import { Vector3, Group } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
 
@@ -129,6 +129,28 @@ export const BICYCLE_SCENE_TREE: SceneNode = {
   ]
 };
 
+export const HEADPHONES_SCENE_TREE: SceneNode = {
+  id: 'headphones_assembly', name: 'Sennheiser Momentum 4', type: 'GROUP', children: [
+    { id: 'left_cup', name: 'Left Ear Cup', type: 'GROUP', children: [
+        { id: 'left_driver', name: 'Left Driver Unit', type: 'PART' },
+        { id: 'left_cushion', name: 'Left Ear Cushion', type: 'MESH' }
+    ]},
+    { id: 'right_cup', name: 'Right Ear Cup', type: 'GROUP', children: [
+        { id: 'right_driver', name: 'Right Driver Unit', type: 'PART' },
+        { id: 'right_cushion', name: 'Right Ear Cushion', type: 'MESH' }
+    ]},
+    { id: 'headband', name: 'Headband', type: 'GROUP', children: [
+        { id: 'headband_pad', name: 'Headband Padding', type: 'MESH' },
+        { id: 'headband_frame', name: 'Headband Frame', type: 'MESH' }
+    ]},
+    { id: 'controls', name: 'Controls', type: 'GROUP', children: [
+        { id: 'usb_c_port', name: 'USB-C Port', type: 'PART' },
+        { id: 'power_button', name: 'Power Button', type: 'PART' },
+        { id: 'volume_control', name: 'Volume Control', type: 'PART' }
+    ]}
+  ]
+};
+
 // For backwards compatibility
 export const SCENE_TREE = SYNTH_SCENE_TREE;
 
@@ -176,6 +198,8 @@ interface AppState {
   splitScreenTargetId: string | null;
   userInteractionPoint: Vector3;
   isLaserActive: boolean;
+  laserHighlightGranularity: 'model' | 'part';
+  hideAgents: boolean;
 
   // Follow Request System
   followRequest: { agentId: string; timestamp: number } | null;
@@ -194,7 +218,9 @@ interface AppState {
 
   // Conversation & AI
   chatHistory: ChatMessage[];
+  liveChat: LiveChatMessage[];
   insightCards: InsightCard[];
+  mobileLaserNDC: [number, number] | null;
   requirements: Requirement[];
   knowledgeBase: KBEntry[];
 
@@ -254,6 +280,8 @@ interface AppState {
   setSplitScreenTarget: (id: string | null) => void;
   setUserInteractionPoint: (pos: Vector3) => void;
   setLaserActive: (active: boolean) => void;
+  setLaserHighlightGranularity: (g: 'model' | 'part') => void;
+  toggleHideAgents: () => void;
   setFollowRequest: (req: { agentId: string; timestamp: number } | null) => void;
   togglePrivacyMode: () => void;
   setFollowedAgent: (id: string | null) => void;
@@ -268,7 +296,9 @@ interface AppState {
   updateHeatmap: (poiId: string, amount: number) => void;
 
   addChatMessage: (msg: ChatMessage) => void;
+  addLiveChatMessage: (msg: LiveChatMessage) => void;
   addInsightCard: (card: InsightCard) => void;
+  setMobileLaserNDC: (ndc: [number, number] | null) => void;
   updateInsightType: (id: string, newType: InsightType) => void;
   updateInsight: (id: string, updates: Partial<InsightCard>) => void;
 
@@ -369,19 +399,23 @@ export const useStore = create<AppState>((set, get) => ({
   splitScreenTargetId: null,
   userInteractionPoint: new Vector3(),
   isLaserActive: false,
+  laserHighlightGranularity: 'part',
+  hideAgents: false,
   followRequest: null,
   isPrivacyMode: false,
   followedAgentId: null,
   temporarilyDisengagedFromAgentId: null,
   heatmapValues: {},
   chatHistory: [],
+  liveChat: [],
+  mobileLaserNDC: null,
   insightCards: [],
   requirements: REQUIREMENTS_DB,
   knowledgeBase: KB_DB,
-  objectStates: initObjectStates(SYNTH_SCENE_TREE),
+  objectStates: initObjectStates(HEADPHONES_SCENE_TREE),
 
   // --- NEW: Model Type ---
-  activeModelType: 'synth',
+  activeModelType: 'headphones',
   isImporting: false,
   importedMeshes: null,
   importedSceneTree: null,
@@ -452,6 +486,8 @@ export const useStore = create<AppState>((set, get) => ({
   setSplitScreenTarget: (id) => set({ splitScreenTargetId: id }),
   setUserInteractionPoint: (pos) => set({ userInteractionPoint: pos }),
   setLaserActive: (active) => set({ isLaserActive: active }),
+  setLaserHighlightGranularity: (g) => set({ laserHighlightGranularity: g }),
+  toggleHideAgents: () => set(state => ({ hideAgents: !state.hideAgents })),
   setFollowRequest: (req) => set({ followRequest: req }),
   togglePrivacyMode: () => set((state) => ({ isPrivacyMode: !state.isPrivacyMode })),
   setFollowedAgent: (id) => set({ followedAgentId: id }),
@@ -499,6 +535,12 @@ export const useStore = create<AppState>((set, get) => ({
     chatHistory: [...state.chatHistory, msg].slice(-50)
   })),
 
+  addLiveChatMessage: (msg) => set((state) => ({
+    liveChat: [...state.liveChat, msg].slice(-200)
+  })),
+
+  setMobileLaserNDC: (ndc) => set({ mobileLaserNDC: ndc }),
+
   addInsightCard: (card) => set((state) => {
     if (state.insightCards.some(c => c.id === card.id)) return state; // deduplicate
     return { insightCards: [card, ...state.insightCards].slice(0, 15) };
@@ -538,7 +580,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   // --- NEW: Model Import Actions ---
   setActiveModelType: (type) => set((state) => {
-      const tree = type === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+      const tree = type === 'bicycle' ? BICYCLE_SCENE_TREE : type === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
       return {
           activeModelType: type,
           objectStates: initObjectStates(tree),
@@ -731,5 +773,5 @@ export const getCurrentSceneTree = (modelType: ModelType, importedTree?: SceneNo
     if (modelType === 'imported' && importedTree) {
         return importedTree;
     }
-    return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : SYNTH_SCENE_TREE;
+    return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : modelType === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
 };
