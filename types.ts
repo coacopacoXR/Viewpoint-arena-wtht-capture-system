@@ -284,8 +284,36 @@ export interface ImportedModel {
     sceneTree: SceneNode;
 }
 
-export type ModelType = 'synth' | 'bicycle' | 'imported';
+export type ModelType = 'synth' | 'bicycle' | 'imported' | 'headphones';
+
+// --- XR TYPES ---
+
+export type XRPose = {
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+};
+
+export interface XRParticipantData {
+  userId: string;
+  name: string;
+  color: string;
+  head: XRPose;
+  leftController?: XRPose;
+  rightController?: XRPose;
+}
 
 // --- PANEL MODE TYPES ---
 
-export type RightPanelMode = 'meeting' | 'comments';
+export type RightPanelMode = 'meeting' | 'comments' | 'chat';
+
+export type ChatTag = 'RISK' | 'ACTION' | 'DECISION' | 'NOTE';
+
+export interface LiveChatMessage {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorColor: string;
+  text: string;
+  timestamp: number;
+  tag?: ChatTag;
+}

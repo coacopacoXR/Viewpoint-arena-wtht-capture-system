@@ -4,11 +4,12 @@ import {
   Video, User, Map, Activity, Flame, Footprints,
   SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
-  ShieldOff, Shield, Radio, Glasses, MessageSquare, Mic,
+  ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic,
   ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight,
-  MonitorPlay, Share2
+  MonitorPlay, Share2, Crosshair
 } from 'lucide-react';
 import SharePanel from './SharePanel';
+import XRButton from './XRButton';
 import { useParams } from 'react-router-dom';
 import { useStore } from '../../store';
 import { ViewMode, AgentStyle } from '../../types';
@@ -16,6 +17,7 @@ import { usePresence } from '../../lib/PresenceContext';
 import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
 import CommentsPanel from './CommentsPanel';
+import ChatPanel from './ChatPanel';
 import SceneTree from './SceneTree';
 import MeetingSummary from './MeetingSummary';
 import DataFlowDrawer from './DataFlowDrawer';
@@ -81,7 +83,11 @@ const Interface: React.FC = () => {
     isBoardroomMode,
     toggleBoardroomMode,
     triggerBoardroomEntry,
+    hideAgents,
+    toggleHideAgents,
   } = useStore();
+  const laserHighlightGranularity = useStore(state => state.laserHighlightGranularity);
+  const setLaserHighlightGranularity = useStore(state => state.setLaserHighlightGranularity);
 
   const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, broadcastBoardroomCountdown, broadcastPrivacyMode, broadcastArenaEntry, broadcastMeetingEnd } = usePresence();
   const sessionHostId = useStore(state => state.sessionHostId);
@@ -100,6 +106,13 @@ const Interface: React.FC = () => {
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
 
   const unresolvedComments = comments.filter(c => !c.resolved).length;
+  const liveChat = useStore(state => state.liveChat);
+  const [lastSeenChatCount, setLastSeenChatCount] = useState(0);
+  const unreadChat = rightPanelMode === 'chat' ? 0 : Math.max(0, liveChat.length - lastSeenChatCount);
+
+  useEffect(() => {
+    if (rightPanelMode === 'chat') setLastSeenChatCount(liveChat.length);
+  }, [rightPanelMode, liveChat.length]);
 
   // Derived state for HUD: Who is following me?
   const myFollowers = agents.filter(a => a.behavior === 'FOLLOWING' || (leaderId === 'USER'));
@@ -140,7 +153,7 @@ const Interface: React.FC = () => {
       }
   };
 
-  const showAIControls = viewMode === ViewMode.AI_GUIDED;
+  const showAIControls = viewMode === ViewMode.AI_GUIDED && !hideAgents;
 
   return (
     <div className="w-full h-full p-6 relative pointer-events-none">
@@ -330,6 +343,9 @@ const Interface: React.FC = () => {
 
            {/* Top buttons row */}
            <div className="flex items-center gap-2 mb-2">
+                {/* XR Entry */}
+                <XRButton />
+
                 {/* Privacy Mode Toggle */}
                 <button
                     onClick={() => { togglePrivacyMode(); broadcastPrivacyMode(!isPrivacyMode); }}
@@ -449,10 +465,15 @@ const Interface: React.FC = () => {
                   <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider flex items-center gap-2">
                       <Users size={12} /> Participants
                   </span>
-                  <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full font-mono">{agents.length + remoteParticipantList.length}</span>
+                  <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full font-mono">{(hideAgents ? 0 : agents.length) + remoteParticipantList.length}</span>
               </div>
               <div className="p-2 flex flex-col gap-1 max-h-64 overflow-y-auto custom-scrollbar">
-                  {agents.map(agent => {
+                  {hideAgents && agents.length > 0 && (
+                    <div className="px-2 py-1.5 text-[9px] font-mono text-gray-400 flex items-center gap-1.5">
+                      <EyeOff size={10} /> AI agents hidden
+                    </div>
+                  )}
+                  {!hideAgents && agents.map(agent => {
                       const isFollowing = followedAgentId === agent.id;
                       const isVR = agent.id === '4';
                       return (
@@ -583,29 +604,29 @@ const Interface: React.FC = () => {
         {!isRightPanelCollapsed && (
           <>
             {/* Panel Mode Toggle */}
-            <div className="flex mb-2 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm p-1">
+            <div className="flex mb-2 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm p-1 gap-0.5">
               <button
                 onClick={() => setRightPanelMode('meeting')}
                 className={clsx(
-                  "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all",
+                  "flex-1 px-2 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all",
                   rightPanelMode === 'meeting'
                     ? "bg-black text-white"
                     : "text-gray-500 hover:bg-gray-100"
                 )}
               >
-                <Mic size={12} />
-                Meeting Capture
+                <Mic size={11} />
+                Capture
               </button>
               <button
                 onClick={() => setRightPanelMode('comments')}
                 className={clsx(
-                  "flex-1 px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all relative",
+                  "flex-1 px-2 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all relative",
                   rightPanelMode === 'comments'
                     ? "bg-black text-white"
                     : "text-gray-500 hover:bg-gray-100"
                 )}
               >
-                <MessageSquare size={12} />
+                <MessageSquare size={11} />
                 Comments
                 {unresolvedComments > 0 && (
                   <span className={clsx(
@@ -616,14 +637,33 @@ const Interface: React.FC = () => {
                   </span>
                 )}
               </button>
+              <button
+                onClick={() => setRightPanelMode('chat')}
+                className={clsx(
+                  "flex-1 px-2 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all relative",
+                  rightPanelMode === 'chat'
+                    ? "bg-black text-white"
+                    : "text-gray-500 hover:bg-gray-100"
+                )}
+              >
+                <MessageCircle size={11} />
+                Chat
+                {unreadChat > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold bg-green-500 text-white">
+                    {unreadChat > 9 ? '9+' : unreadChat}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Panel Content */}
             <div className="flex-1 min-h-0 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm overflow-hidden">
               {rightPanelMode === 'meeting' ? (
                 <ConversationPanel />
-              ) : (
+              ) : rightPanelMode === 'comments' ? (
                 <CommentsPanel />
+              ) : (
+                <ChatPanel />
               )}
             </div>
           </>
@@ -632,7 +672,6 @@ const Interface: React.FC = () => {
         {/* Collapsed indicators */}
         {isRightPanelCollapsed && (
           <div className="flex flex-col gap-2 pointer-events-auto">
-            {/* Meeting/Comments quick access when collapsed */}
             <button
               onClick={() => { setIsRightPanelCollapsed(false); setRightPanelMode('meeting'); }}
               className={clsx(
@@ -655,6 +694,21 @@ const Interface: React.FC = () => {
               {unresolvedComments > 0 && (
                 <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold bg-blue-500 text-white">
                   {unresolvedComments}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => { setIsRightPanelCollapsed(false); setRightPanelMode('chat'); }}
+              className={clsx(
+                "w-10 h-10 bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all relative",
+                rightPanelMode === 'chat' && "border-black bg-black text-white hover:bg-gray-800"
+              )}
+              title="Chat"
+            >
+              <MessageCircle size={16} />
+              {unreadChat > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[8px] flex items-center justify-center font-bold bg-green-500 text-white">
+                  {unreadChat > 9 ? '9+' : unreadChat}
                 </span>
               )}
             </button>
@@ -706,20 +760,59 @@ const Interface: React.FC = () => {
          </div>
       )}
 
-      {/* DATA FLOW TOGGLE (Lower Left) */}
-      <div className="absolute bottom-6 left-6 z-[40] pointer-events-auto">
-          <button 
+      {/* BOTTOM-LEFT TOGGLES */}
+      <div className="absolute bottom-6 left-6 z-[40] pointer-events-auto flex flex-col gap-2 items-start">
+          <button
+            onClick={toggleHideAgents}
+            className={clsx(
+                "flex items-center gap-2 px-3 py-2 rounded-full border shadow-sm transition-all hover:scale-105",
+                hideAgents
+                    ? "bg-black text-white border-black"
+                    : "bg-white/90 backdrop-blur text-gray-600 border-gray-200 hover:border-gray-400"
+            )}
+          >
+              {hideAgents ? <EyeOff size={14} className="text-orange-400" /> : <Eye size={14} className="text-gray-400" />}
+              <span className="text-[10px] font-bold uppercase tracking-wide">
+                {hideAgents ? 'Agents Off' : 'Agents On'}
+              </span>
+          </button>
+          <button
             onClick={() => setIsDataFlowOpen(!isDataFlowOpen)}
             className={clsx(
                 "flex items-center gap-2 px-3 py-2 rounded-full border shadow-sm transition-all hover:scale-105",
-                isDataFlowOpen 
-                    ? "bg-black text-white border-black" 
+                isDataFlowOpen
+                    ? "bg-black text-white border-black"
                     : "bg-white/90 backdrop-blur text-gray-600 border-gray-200 hover:border-gray-400"
             )}
           >
               <Network size={14} className={isDataFlowOpen ? "text-emerald-400" : "text-gray-400"} />
               <span className="text-[10px] font-bold uppercase tracking-wide">Data Flow</span>
           </button>
+          {/* Pointer highlight granularity toggle */}
+          <div className="flex items-center gap-1 px-3 py-2 rounded-full border shadow-sm bg-white/90 backdrop-blur border-gray-200">
+            <Crosshair size={14} className="text-gray-400" />
+            <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Highlight</span>
+            <button
+              onClick={() => setLaserHighlightGranularity('model')}
+              title="Highlight whole model"
+              className={clsx(
+                "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all",
+                laserHighlightGranularity === 'model'
+                  ? "bg-black text-white"
+                  : "text-gray-400 hover:text-gray-700"
+              )}
+            >Model</button>
+            <button
+              onClick={() => setLaserHighlightGranularity('part')}
+              title="Highlight specific part"
+              className={clsx(
+                "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all",
+                laserHighlightGranularity === 'part'
+                  ? "bg-black text-white"
+                  : "text-gray-400 hover:text-gray-700"
+              )}
+            >Part</button>
+          </div>
       </div>
 
       {/* Bottom Controls Panel (Centered Dock) */}

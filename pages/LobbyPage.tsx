@@ -227,7 +227,7 @@ const LobbyPage: React.FC = () => {
           {/* Actions */}
           <div className="space-y-3">
             <button onClick={handleNewSession}
-              className="w-full bg-white hover:bg-gray-100 text-gray-900 text-sm font-bold py-3 rounded-xl transition-colors">
+              className={`w-full text-sm font-bold py-3 rounded-xl transition-colors ${joinCode.trim() ? 'bg-white/10 hover:bg-white/20 text-gray-400 border border-white/10' : 'bg-white hover:bg-gray-100 text-gray-900'}`}>
               {isReturning ? 'New session' : 'Start new session'}
             </button>
 
@@ -241,7 +241,7 @@ const LobbyPage: React.FC = () => {
                 className="flex-1 bg-white/5 border border-white/10 text-white rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 placeholder:text-gray-700 transition-colors"
               />
               <button onClick={handleJoin}
-                className="bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white text-sm px-5 py-3 rounded-xl border border-white/10 transition-colors font-medium">
+                className={`text-sm px-5 py-3 rounded-xl transition-colors font-bold ${joinCode.trim() ? 'bg-white hover:bg-gray-100 text-gray-900' : 'bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white border border-white/10'}`}>
                 Join
               </button>
             </div>

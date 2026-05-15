@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import PartySocket from 'partysocket';
 import type { ParticipantPresence } from '../party/room.server';
-import type { InsightCard } from '../types';
+import type { InsightCard, LiveChatMessage, XRParticipantData } from '../types';
+import { remoteXRParticipants } from './xrPresenceRef';
+import { remoteLaserTargets, remoteLaserColors, remoteLaserMeshNames, remoteLaserPartNames, remoteLaserLastUpdate } from './laserTargetRef';
 import { useStore } from '../store';
 import { ViewMode } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
@@ -18,7 +20,7 @@ type RoomMessage =
   | { type: 'BOARDROOM_COUNTDOWN'; payload: Record<string, never> }
   | { type: 'BOARDROOM_STATE'; payload: { active: boolean } }
   | { type: 'ARENA_ENTRY'; payload: Record<string, never> }
-  | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null } }
+  | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null; targetId?: string | null; targetMeshName?: string | null; targetPartName?: string | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
   | { type: 'MODEL_CHANGE'; payload: { modelType: 'synth' | 'bicycle' | 'imported'; fileBase64?: string; fileName?: string } }
@@ -34,7 +36,9 @@ type RoomMessage =
   | { type: 'COMMENT_DELETE'; payload: { id: string } }
   | { type: 'COMMENT_RESOLVE'; payload: { id: string } }
   | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } }
-  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } };
+  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } }
+  | { type: 'LIVE_CHAT'; payload: LiveChatMessage }
+  | { type: 'XR_PRESENCE'; payload: XRParticipantData };
 
 // Module-level ref so it persists across re-renders and is accessible from the message handler
 const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; data: any }) => void) | null } = { current: null };
@@ -53,6 +57,13 @@ function getUserInfo(): { userId: string; name: string; color: string } {
   return { userId, name: user.name || 'Guest', color: user.color || '#4F8EF7' };
 }
 
+export interface RemoteLaserState {
+  position: [number, number, number] | null;
+  targetId: string | null;
+  targetMeshName: string | null;
+  partName: string | null;
+}
+
 export interface RemoteParticipantInfo {
   userId: string;
   name: string;
@@ -62,7 +73,7 @@ export interface RemoteParticipantInfo {
 export interface UsePartyPresenceReturn {
   localUserId: string;
   remoteParticipants: React.MutableRefObject<Map<string, ParticipantPresence>>;
-  remoteLasers: React.MutableRefObject<Map<string, [number, number, number] | null>>;
+  remoteLasers: React.MutableRefObject<Map<string, RemoteLaserState>>;
   remoteParticipantList: RemoteParticipantInfo[];
   broadcastPresence: (position: [number, number, number], lookAt: [number, number, number]) => void;
   broadcastPresenterChange: (agentId: string | null) => void;
@@ -70,7 +81,7 @@ export interface UsePartyPresenceReturn {
   broadcastLeaderChange: (userId: string | null) => void;
   broadcastBoardroomCountdown: () => void;
   broadcastArenaEntry: () => void;
-  broadcastLaserMove: (position: [number, number, number] | null) => void;
+  broadcastLaserMove: (position: [number, number, number] | null, targetId?: string | null, targetMeshName?: string | null, targetPartName?: string | null) => void;
   broadcastPrivacyMode: (enabled: boolean) => void;
   broadcastLeaderTakeover: (userId: string) => void;
   broadcastModelChange: (modelType: 'synth' | 'bicycle' | 'imported', fileBase64?: string, fileName?: string) => void;
@@ -81,6 +92,8 @@ export interface UsePartyPresenceReturn {
   broadcastTakeoverAttempt: (userId: string) => void;
   broadcastCommentAdd: (comment: any) => void;
   broadcastCommentUpdate: (id: string, updates: Record<string, any>) => void;
+  broadcastChatMessage: (msg: LiveChatMessage) => void;
+  broadcastXRPresence: (data: XRParticipantData) => void;
   broadcastCommentDelete: (id: string) => void;
   broadcastCommentResolve: (id: string) => void;
   broadcastWebRTCSignal: (to: string, data: any) => void;
@@ -89,7 +102,7 @@ export interface UsePartyPresenceReturn {
 
 export function usePartyPresence(roomId: string | undefined): UsePartyPresenceReturn {
   const remoteParticipants = useRef<Map<string, ParticipantPresence>>(new Map());
-  const remoteLasers = useRef<Map<string, [number, number, number] | null>>(new Map());
+  const remoteLasers = useRef<Map<string, RemoteLaserState>>(new Map());
   const [remoteParticipantList, setRemoteParticipantList] = React.useState<RemoteParticipantInfo[]>([]);
   const socketRef = useRef<PartySocket | null>(null);
   const userRef = useRef(getUserInfo());
@@ -135,7 +148,14 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
           if (isNew) syncList();
         }
       } else if (msg.type === 'LEAVE') {
-        remoteParticipants.current.delete(msg.payload.userId);
+        const leavingId = msg.payload.userId;
+        remoteParticipants.current.delete(leavingId);
+        remoteLasers.current.delete(leavingId);
+        remoteLaserTargets.delete(leavingId);
+        remoteLaserColors.delete(leavingId);
+        remoteLaserMeshNames.delete(leavingId);
+        remoteLaserPartNames.delete(leavingId);
+        remoteLaserLastUpdate.delete(leavingId);
         syncList();
       } else if (msg.type === 'PRESENTER_CHANGE') {
         const { agentId } = msg.payload;
@@ -159,8 +179,15 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         const { isBoardroomMode, toggleBoardroomMode } = useStore.getState();
         if (isBoardroomMode) toggleBoardroomMode();
       } else if (msg.type === 'LASER_MOVE') {
-        if (msg.payload.userId !== userRef.current.userId) {
-          remoteLasers.current.set(msg.payload.userId, msg.payload.position);
+        const { userId: laserId, position, targetId = null, targetMeshName = null, targetPartName = null } = msg.payload;
+        if (laserId !== userRef.current.userId) {
+          remoteLasers.current.set(laserId, { position, targetId, targetMeshName, partName: targetPartName });
+          remoteLaserTargets.set(laserId, targetId);
+          remoteLaserMeshNames.set(laserId, targetMeshName);
+          remoteLaserPartNames.set(laserId, targetPartName);
+          remoteLaserLastUpdate.set(laserId, Date.now());
+          const color = remoteParticipants.current.get(laserId)?.color ?? '#ffffff';
+          remoteLaserColors.set(laserId, color);
         }
       } else if (msg.type === 'PRIVACY_MODE') {
         setPrivacyMode(msg.payload.enabled);
@@ -230,6 +257,14 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       } else if (msg.type === 'COMMENT_RESOLVE') {
         const { resolveComment } = useStore.getState();
         resolveComment(msg.payload.id);
+      } else if (msg.type === 'LIVE_CHAT') {
+        const { addLiveChatMessage } = useStore.getState();
+        addLiveChatMessage(msg.payload);
+      } else if (msg.type === 'XR_PRESENCE') {
+        const { userId } = msg.payload;
+        if (userId !== userRef.current.userId) {
+          remoteXRParticipants.set(userId, msg.payload);
+        }
       } else if (msg.type === 'WEBRTC_SIGNAL') {
         webRTCSignalHandlerRef.current?.(msg.payload);
       }
@@ -284,10 +319,19 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'ARENA_ENTRY', payload: {} }));
   }
 
-  function broadcastLaserMove(position: [number, number, number] | null) {
+  function broadcastLaserMove(position: [number, number, number] | null, targetId?: string | null, targetMeshName?: string | null, targetPartName?: string | null) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({ type: 'LASER_MOVE', payload: { userId: userRef.current.userId, position } }));
+    socket.send(JSON.stringify({
+      type: 'LASER_MOVE',
+      payload: {
+        userId: userRef.current.userId,
+        position,
+        targetId: targetId ?? null,
+        targetMeshName: targetMeshName ?? null,
+        targetPartName: targetPartName ?? null,
+      },
+    }));
   }
 
   function broadcastPrivacyMode(enabled: boolean) {
@@ -342,6 +386,18 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ type: 'COMMENT_ADD', payload: { comment } }));
+  }
+
+  function broadcastChatMessage(msg: LiveChatMessage) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'LIVE_CHAT', payload: msg }));
+  }
+
+  function broadcastXRPresence(data: XRParticipantData) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'XR_PRESENCE', payload: data }));
   }
 
   function broadcastCommentUpdate(id: string, updates: Record<string, any>) {
@@ -403,6 +459,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastCommentUpdate,
     broadcastCommentDelete,
     broadcastCommentResolve,
+    broadcastChatMessage,
+    broadcastXRPresence,
     broadcastWebRTCSignal,
     registerWebRTCSignalHandler,
   };

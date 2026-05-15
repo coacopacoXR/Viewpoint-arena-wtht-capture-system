@@ -18,7 +18,7 @@ type RoomMessage =
   | { type: 'BOARDROOM_COUNTDOWN'; payload: Record<string, never> }
   | { type: 'BOARDROOM_STATE'; payload: { active: boolean } }
   | { type: 'ARENA_ENTRY'; payload: Record<string, never> }
-  | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null } }
+  | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null; targetId?: string | null; targetMeshName?: string | null; targetPartName?: string | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
   | { type: 'MODEL_CHANGE'; payload: { modelType: 'synth' | 'bicycle' | 'imported'; fileBase64?: string; fileName?: string } }
@@ -34,7 +34,9 @@ type RoomMessage =
   | { type: 'COMMENT_DELETE'; payload: { id: string } }
   | { type: 'COMMENT_RESOLVE'; payload: { id: string } }
   | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } }
-  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } };
+  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } }
+  | { type: 'LIVE_CHAT'; payload: any }
+  | { type: 'XR_PRESENCE'; payload: any };
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
 
@@ -177,7 +179,9 @@ export default class RoomServer implements Party.Server {
       msg.type === 'LEADER_TAKEOVER' ||
       msg.type === 'MEETING_END' ||
       msg.type === 'TAKEOVER_SYNC' ||
-      msg.type === 'PRESENTER_REQUEST'
+      msg.type === 'PRESENTER_REQUEST' ||
+      msg.type === 'LIVE_CHAT' ||
+      msg.type === 'XR_PRESENCE'
     ) {
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
     }
