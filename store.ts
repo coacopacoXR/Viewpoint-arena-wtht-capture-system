@@ -199,6 +199,9 @@ interface AppState {
   userInteractionPoint: Vector3;
   isLaserActive: boolean;
   laserHighlightGranularity: 'model' | 'part';
+  // When true, the laser auto-engages while the user dwells on a model part
+  // with the mouse (passive "hover pointing").
+  hoverPointingEnabled: boolean;
   hideAgents: boolean;
 
   // Follow Request System
@@ -281,6 +284,7 @@ interface AppState {
   setUserInteractionPoint: (pos: Vector3) => void;
   setLaserActive: (active: boolean) => void;
   setLaserHighlightGranularity: (g: 'model' | 'part') => void;
+  setHoverPointingEnabled: (enabled: boolean) => void;
   toggleHideAgents: () => void;
   setFollowRequest: (req: { agentId: string; timestamp: number } | null) => void;
   togglePrivacyMode: () => void;
@@ -400,6 +404,7 @@ export const useStore = create<AppState>((set, get) => ({
   userInteractionPoint: new Vector3(),
   isLaserActive: false,
   laserHighlightGranularity: 'part',
+  hoverPointingEnabled: false,
   hideAgents: false,
   followRequest: null,
   isPrivacyMode: false,
@@ -487,6 +492,7 @@ export const useStore = create<AppState>((set, get) => ({
   setUserInteractionPoint: (pos) => set({ userInteractionPoint: pos }),
   setLaserActive: (active) => set({ isLaserActive: active }),
   setLaserHighlightGranularity: (g) => set({ laserHighlightGranularity: g }),
+  setHoverPointingEnabled: (hoverPointingEnabled) => set({ hoverPointingEnabled }),
   toggleHideAgents: () => set(state => ({ hideAgents: !state.hideAgents })),
   setFollowRequest: (req) => set({ followRequest: req }),
   togglePrivacyMode: () => set((state) => ({ isPrivacyMode: !state.isPrivacyMode })),

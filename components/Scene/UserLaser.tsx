@@ -33,6 +33,7 @@ const UserLaser: React.FC = () => {
     const setLaserActive = useStore(state => state.setLaserActive);
     const selectNode = useStore(state => state.selectNode);
     const userColor = useStore(state => state.currentUserColor);
+    const hoverPointingEnabled = useStore(state => state.hoverPointingEnabled);
     const { broadcastLaserMove, localUserId } = usePresence();
     const lastLaserBroadcast = useRef(0);
 
@@ -50,16 +51,18 @@ const UserLaser: React.FC = () => {
     const lastPartName = useRef<string | null>(null);
 
     // Activation sources tracked independently so the laser stays active as
-    // long as ANY source is held (mouse both-buttons OR P key OR finger pointing).
+    // long as ANY source is held (mouse both-buttons OR P key OR finger pointing
+    // OR hover-dwell on a model part).
     const mouseHeld = useRef(false);
     const keyHeld = useRef(false);
     const fingerHeld = useRef(false);
+    const dwellHeld = useRef(false);
     const wasActive = useRef(false);
     const syncRef = useRef<() => void>(() => {});
 
     useEffect(() => {
         const sync = () => {
-            const active = mouseHeld.current || keyHeld.current || fingerHeld.current;
+            const active = mouseHeld.current || keyHeld.current || fingerHeld.current || dwellHeld.current;
             if (active === wasActive.current) return;
             wasActive.current = active;
             setLaserActive(active);
@@ -145,6 +148,21 @@ const UserLaser: React.FC = () => {
     //   fingerOrigin = where the homography puts the hand at that moment
     //   fingerAnchor = where on screen we want to start (model center)
     // Each frame: pointer = anchor + (currentAim − origin) × sensitivity.
+    // Hover-dwell pointing constants. The buffer keeps 2s of history so we
+    // can distinguish "cursor was moving, then settled here" (= pointing
+    // intent) from "cursor has been frozen here forever" (= idle). Activation
+    // requires BOTH a tight recent cluster AND evidence of approach.
+    const DWELL_BUFFER_MS = 2000;          // total history retained
+    const DWELL_RECENT_MS = 600;           // last slice that must be clustered
+    const DWELL_DISPERSION_NDC = 0.04;     // max recent distance from centroid
+    const DWELL_APPROACH_NDC = 0.06;       // older samples must reach at least this far away
+    const DWELL_MIN_RECENT = 10;           // min samples in the recent slice
+    const DWELL_MIN_OLDER = 6;             // min samples in the older slice to require approach
+    const dwellBuf = useRef<Array<{ x: number; y: number; t: number }>>([]);
+    const dwellSettledSince = useRef<number | null>(null);
+    const dwellRaycaster = useRef(new Raycaster());
+    const dwellVec = useRef(new Vector2());
+
     const FINGER_SENSITIVITY = 0.55;
     // Hand must be visible this long before we even start checking stillness.
     // Filters out brief flickers (face touches, reaching gestures).
@@ -220,6 +238,111 @@ const UserLaser: React.FC = () => {
         if (fingerNow !== fingerHeld.current) {
             fingerHeld.current = fingerNow;
             syncRef.current();
+        }
+
+        // ───── Mouse hover-dwell detection ─────
+        // Disabled by default; an explicit source always wins (don't dwell-
+        // engage while the user is mid-drag or holding finger/P).
+        const explicitActive = mouseHeld.current || keyHeld.current || fingerHeld.current;
+        if (hoverPointingEnabled && !explicitActive) {
+            const px = state.pointer.x;
+            const py = state.pointer.y;
+            const buf = dwellBuf.current;
+            buf.push({ x: px, y: py, t: frameNow });
+            while (buf.length > 0 && frameNow - buf[0].t > DWELL_BUFFER_MS) buf.shift();
+
+            // Split into recent slice (must be still) and older slice (must show approach).
+            const recentCutoff = frameNow - DWELL_RECENT_MS;
+            let recentCount = 0;
+            let recentCx = 0, recentCy = 0;
+            for (const p of buf) {
+                if (p.t >= recentCutoff) {
+                    recentCx += p.x; recentCy += p.y; recentCount++;
+                }
+            }
+
+            let settled = false;
+            if (recentCount >= DWELL_MIN_RECENT) {
+                recentCx /= recentCount; recentCy /= recentCount;
+
+                // Recent stillness: max distance from recent centroid in the recent slice.
+                let recentMaxDist = 0;
+                for (const p of buf) {
+                    if (p.t < recentCutoff) continue;
+                    const d = Math.hypot(p.x - recentCx, p.y - recentCy);
+                    if (d > recentMaxDist) recentMaxDist = d;
+                }
+
+                // Approach: did the cursor come from somewhere noticeably different?
+                // We look at the older slice's farthest distance from the recent
+                // centroid. If the cursor has been parked here forever the older
+                // samples all lie inside the same cluster and this stays small.
+                let olderCount = 0;
+                let olderFarthest = 0;
+                for (const p of buf) {
+                    if (p.t >= recentCutoff) continue;
+                    olderCount++;
+                    const d = Math.hypot(p.x - recentCx, p.y - recentCy);
+                    if (d > olderFarthest) olderFarthest = d;
+                }
+
+                const recentClustered = recentMaxDist < DWELL_DISPERSION_NDC;
+                // If we don't yet have enough older history (cursor just entered
+                // the canvas / hover just toggled on), an approach happened
+                // implicitly — accept on stillness alone.
+                const approached = olderCount < DWELL_MIN_OLDER || olderFarthest > DWELL_APPROACH_NDC;
+                settled = recentClustered && approached;
+            }
+
+            if (settled) {
+                if (dwellSettledSince.current === null) dwellSettledSince.current = frameNow;
+            } else {
+                dwellSettledSince.current = null;
+            }
+
+            // We engage on the same frame settling is detected — the recent
+            // window itself is the "hold" period, so no extra wait is needed.
+            const dwellLongEnough = dwellSettledSince.current !== null;
+
+            let newDwellHeld = false;
+            if (dwellLongEnough) {
+                // Confirm the cursor is over a tagged model — we only auto-engage
+                // when there's something to point at. Skip remote avatars / lasers.
+                dwellVec.current.set(px, py);
+                dwellRaycaster.current.setFromCamera(dwellVec.current, camera);
+                const hits = dwellRaycaster.current.intersectObjects(scene.children, true);
+                for (const hit of hits) {
+                    const obj: any = hit.object;
+                    if (
+                        obj.userData?.skipRaycast ||
+                        obj.name?.startsWith?.('Agent') ||
+                        obj.type === 'Line' ||
+                        obj.type === 'Points'
+                    ) continue;
+                    let curr: any = obj;
+                    let skip = false;
+                    while (curr) {
+                        if (curr.userData?.skipRaycast) { skip = true; break; }
+                        if (curr.userData?.modelId) { newDwellHeld = true; break; }
+                        curr = curr.parent ?? null;
+                    }
+                    if (skip) continue;
+                    if (newDwellHeld) break;
+                }
+            }
+
+            if (newDwellHeld !== dwellHeld.current) {
+                dwellHeld.current = newDwellHeld;
+                syncRef.current();
+            }
+        } else {
+            // Hover disabled or explicit source took over — drop any held dwell.
+            dwellBuf.current.length = 0;
+            dwellSettledSince.current = null;
+            if (dwellHeld.current) {
+                dwellHeld.current = false;
+                syncRef.current();
+            }
         }
 
         if (!isLaserActive) return;

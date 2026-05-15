@@ -5,7 +5,7 @@ import {
     MessageSquare, Info, SplitSquareHorizontal,
     ChevronRight, ChevronLeft, GripVertical,
     CheckCircle2, AlertTriangle, Lightbulb, Activity, LocateFixed, BookOpen,
-    HelpCircle, Check, X, ShieldOff
+    HelpCircle, Check, X, ShieldOff, ScanLine
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ViewMode, InsightCard } from '../../types';
@@ -13,6 +13,50 @@ import InsightDetailModal from './InsightDetailModal';
 import InsightExplainer from './InsightExplainer';
 
 // --- MAIN PANEL ---
+
+// Richer panel header — replaces the old "Detected Insights · count" strip.
+// Acts as the in-panel entry point to the InsightExplainer modal (which is the
+// fullscreen overlay rendered later in this file).
+const DetectedInsightsHeader: React.FC<{
+    insightCards: any[];
+    onOpenExplainer: () => void;
+}> = ({ insightCards, onOpenExplainer }) => {
+    const active = insightCards.filter((c) => c.details.status !== 'Rejected');
+    const risk = active.filter((c) => c.type === 'RISK').length;
+    const action = active.filter((c) => c.type === 'ACTION').length;
+    const rationale = active.filter((c) => c.type === 'RATIONALE').length;
+    return (
+        <button
+            onClick={onOpenExplainer}
+            title="Open the AI logic explainer"
+            className="w-full p-2 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center hover:bg-gray-100 transition-colors group text-left"
+        >
+            <div className="flex items-center gap-2">
+                <ScanLine size={13} className={active.length > 0 ? 'text-emerald-500' : 'text-gray-400'} />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-gray-600 group-hover:text-black">
+                    Detected Insights
+                </span>
+                <HelpCircle size={10} className="text-gray-300 group-hover:text-blue-400" />
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono font-bold text-black tabular-nums">{active.length}</span>
+                <div className="w-px h-4 bg-gray-200" />
+                <span className="flex items-center gap-1 text-[10px] font-mono text-gray-500 tabular-nums" title="Risks">
+                    <AlertTriangle size={10} className="text-red-400" />
+                    {risk}
+                </span>
+                <span className="flex items-center gap-1 text-[10px] font-mono text-gray-500 tabular-nums" title="Actions">
+                    <CheckCircle2 size={10} className="text-blue-400" />
+                    {action}
+                </span>
+                <span className="flex items-center gap-1 text-[10px] font-mono text-gray-500 tabular-nums" title="Rationales">
+                    <Lightbulb size={10} className="text-amber-400" />
+                    {rationale}
+                </span>
+            </div>
+        </button>
+    );
+};
 
 const ConversationPanel: React.FC = () => {
   const {
@@ -241,20 +285,10 @@ const ConversationPanel: React.FC = () => {
                 className="min-h-0 flex flex-col bg-white rounded border border-gray-100 overflow-hidden"
                 style={{ flex: `0 0 ${insightPanelRatio * 100}%` }}
             >
-                <div className="p-2 border-b border-gray-100 bg-gray-50/50 flex justify-between items-center">
-                    <button
-                        onClick={() => setShowExplainer(true)}
-                        className="text-[10px] font-bold uppercase text-gray-500 flex items-center gap-2 hover:text-blue-600 transition-colors group"
-                        title="View AI System Logic"
-                    >
-                        <Info size={12} className="group-hover:text-blue-500" />
-                        Detected Insights
-                        <HelpCircle size={10} className="text-gray-300 group-hover:text-blue-400" />
-                    </button>
-                    <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 rounded-full font-mono">
-                        {insightCards.filter(c => c.details.status !== 'Rejected').length}
-                    </span>
-                </div>
+                <DetectedInsightsHeader
+                    insightCards={insightCards}
+                    onOpenExplainer={() => setShowExplainer(true)}
+                />
                 <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2 custom-scrollbar">
                     {insightCards.filter(c => c.details.status !== 'Rejected').length === 0 && (
                         <div className="text-center p-8 text-gray-400 text-xs italic flex flex-col items-center gap-2">
