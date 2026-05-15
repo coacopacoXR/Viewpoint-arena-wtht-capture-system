@@ -6,7 +6,7 @@ import {
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
   ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic,
   ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight,
-  MonitorPlay, Share2, Crosshair, Hand
+  MonitorPlay, Share2, Crosshair, Hand, MousePointer
 } from 'lucide-react';
 import SharePanel from './SharePanel';
 import XRButton from './XRButton';
@@ -24,6 +24,7 @@ import SceneTree from './SceneTree';
 import MeetingSummary from './MeetingSummary';
 import DataFlowDrawer from './DataFlowDrawer';
 import ViewConfigExplainer from './ViewConfigExplainer';
+import DeicticFeaturesExplainer from './DeicticFeaturesExplainer';
 import DrawingCanvas from './DrawingCanvas';
 import BoardroomShell from './Boardroom/BoardroomShell';
 import BoardroomCountdown from './BoardroomCountdown';
@@ -85,6 +86,82 @@ const FingerPointerPill: React.FC = () => {
   );
 };
 
+const InlineFingerPill: React.FC = () => {
+  const mode = useFingerPointerStore((s) => s.mode);
+  const calibration = useFingerPointerStore((s) => s.calibration);
+  const enable = useFingerPointerStore((s) => s.enableFingerPointer);
+  const disable = useFingerPointerStore((s) => s.disableFingerPointer);
+  const recalibrate = useFingerPointerStore((s) => s.startRecalibration);
+  const isActive = mode === 'active';
+  return (
+    <div className="flex items-center gap-1 px-2">
+      <Hand size={14} className={isActive ? 'text-emerald-500' : 'text-gray-400'} />
+      <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Finger</span>
+      <button
+        onClick={isActive ? disable : enable}
+        title={isActive ? 'Disable finger pointer' : 'Enable finger pointer'}
+        className={clsx(
+          'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
+          isActive ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-800'
+        )}
+      >
+        {isActive ? 'On' : 'Off'}
+      </button>
+      {calibration && (
+        <button
+          onClick={recalibrate}
+          title="Recalibrate corners"
+          className="text-[9px] font-bold uppercase px-2 py-0.5 rounded text-gray-400 hover:text-gray-700 transition-all"
+        >
+          Recal
+        </button>
+      )}
+    </div>
+  );
+};
+
+const InlineHoverPill: React.FC = () => {
+  const enabled = useStore((s) => s.hoverPointingEnabled);
+  const setEnabled = useStore((s) => s.setHoverPointingEnabled);
+  return (
+    <div className="flex items-center gap-1 px-2">
+      <MousePointer size={14} className={enabled ? 'text-emerald-500' : 'text-gray-400'} />
+      <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Hover</span>
+      <button
+        onClick={() => setEnabled(!enabled)}
+        title={enabled ? 'Disable hover-to-point' : 'Auto-engage when you dwell on a part'}
+        className={clsx(
+          'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
+          enabled ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-800'
+        )}
+      >
+        {enabled ? 'On' : 'Off'}
+      </button>
+    </div>
+  );
+};
+
+const HoverPointerPill: React.FC = () => {
+  const enabled = useStore((s) => s.hoverPointingEnabled);
+  const setEnabled = useStore((s) => s.setHoverPointingEnabled);
+  return (
+    <div className="flex items-center gap-1 px-3 py-2 rounded-full border shadow-sm bg-white/90 backdrop-blur border-gray-200">
+      <MousePointer size={14} className={enabled ? 'text-emerald-500' : 'text-gray-400'} />
+      <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Hover</span>
+      <button
+        onClick={() => setEnabled(!enabled)}
+        title={enabled ? 'Disable hover-to-point' : 'Auto-engage the laser when you dwell on a part'}
+        className={clsx(
+          'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
+          enabled ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-800'
+        )}
+      >
+        {enabled ? 'On' : 'Off'}
+      </button>
+    </div>
+  );
+};
+
 const Interface: React.FC = () => {
   const {
     viewMode, setViewMode, followingRemoteUserId, setFollowingRemoteUser,
@@ -134,6 +211,7 @@ const Interface: React.FC = () => {
 
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
+  const [showDeicticExplainer, setShowDeicticExplainer] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
 
   // Expandable panel states
@@ -222,6 +300,7 @@ const Interface: React.FC = () => {
       <div className="relative z-[200]">
           <MeetingSummary />
           {showExplainer && <ViewConfigExplainer onClose={() => setShowExplainer(false)} />}
+          {showDeicticExplainer && <DeicticFeaturesExplainer onClose={() => setShowDeicticExplainer(false)} />}
       </div>
       
       {/* Drawer Layer */}
@@ -827,32 +906,6 @@ const Interface: React.FC = () => {
               <Network size={14} className={isDataFlowOpen ? "text-emerald-400" : "text-gray-400"} />
               <span className="text-[10px] font-bold uppercase tracking-wide">Data Flow</span>
           </button>
-          {/* Pointer highlight granularity toggle */}
-          <div className="flex items-center gap-1 px-3 py-2 rounded-full border shadow-sm bg-white/90 backdrop-blur border-gray-200">
-            <Crosshair size={14} className="text-gray-400" />
-            <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Highlight</span>
-            <button
-              onClick={() => setLaserHighlightGranularity('model')}
-              title="Highlight whole model"
-              className={clsx(
-                "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all",
-                laserHighlightGranularity === 'model'
-                  ? "bg-black text-white"
-                  : "text-gray-400 hover:text-gray-700"
-              )}
-            >Model</button>
-            <button
-              onClick={() => setLaserHighlightGranularity('part')}
-              title="Highlight specific part"
-              className={clsx(
-                "text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all",
-                laserHighlightGranularity === 'part'
-                  ? "bg-black text-white"
-                  : "text-gray-400 hover:text-gray-700"
-              )}
-            >Part</button>
-          </div>
-          <FingerPointerPill />
       </div>
 
       {/* Bottom Controls Panel (Centered Dock) */}
@@ -932,6 +985,49 @@ const Interface: React.FC = () => {
                 >
                     <Flame size={16} />
                 </Button>
+            </div>
+        </div>
+
+        {/* Center-Right: Deictic Features */}
+        <div className="flex flex-col items-center gap-2 pointer-events-auto">
+            <button
+                onClick={() => setShowDeicticExplainer(true)}
+                className="text-[10px] font-mono uppercase text-gray-400 tracking-widest mb-1 bg-white/40 px-2 py-0.5 rounded backdrop-blur-sm shadow-sm hover:bg-white/80 hover:text-black transition-colors"
+            >
+                Deictic Features
+            </button>
+            <div className="flex items-center gap-2 bg-white/90 backdrop-blur-md p-1.5 rounded-md border border-gray-200 shadow-sm transition-all hover:shadow-md">
+                {/* Highlight granularity */}
+                <div className="flex items-center gap-1 px-2">
+                    <Crosshair size={14} className="text-gray-400" />
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Highlight</span>
+                    <button
+                        onClick={() => setLaserHighlightGranularity('model')}
+                        title="Highlight whole model"
+                        className={clsx(
+                            'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
+                            laserHighlightGranularity === 'model'
+                                ? 'bg-black text-white'
+                                : 'text-gray-400 hover:text-gray-700'
+                        )}
+                    >Model</button>
+                    <button
+                        onClick={() => setLaserHighlightGranularity('part')}
+                        title="Highlight specific part"
+                        className={clsx(
+                            'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
+                            laserHighlightGranularity === 'part'
+                                ? 'bg-black text-white'
+                                : 'text-gray-400 hover:text-gray-700'
+                        )}
+                    >Part</button>
+                </div>
+                <div className="w-px h-8 bg-gray-200" />
+                {/* Finger pointer */}
+                <InlineFingerPill />
+                <div className="w-px h-8 bg-gray-200" />
+                {/* Hover dwell */}
+                <InlineHoverPill />
             </div>
         </div>
 

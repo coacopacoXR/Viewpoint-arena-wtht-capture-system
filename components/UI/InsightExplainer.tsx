@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
-import { 
-    X, Cpu, Server, ShieldCheck, Terminal, 
+import { createPortal } from 'react-dom';
+import {
+    X, Cpu, Server, ShieldCheck, Terminal,
     Network, Database, Lock, HardDrive, Share2, Globe,
     AlertTriangle, Lightbulb, CheckCircle2, ScanLine, Search
 } from 'lucide-react';
@@ -199,10 +200,13 @@ const InsightExplainer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const configs = activeTab === 'FUNCTIONAL' ? FUNCTIONAL_CONFIGS : TECHNICAL_CONFIGS;
     const activeConfig = configs.find(c => c.id === activeId) || configs[0];
 
-    return (
+    // Portal to <body> so the fullscreen overlay escapes any ancestor with
+    // `transform` / `overflow` (which would otherwise clip a `position: fixed`
+    // child — e.g., the conversation panel's containment).
+    return createPortal(
         <div className="fixed inset-0 z-[100] bg-[#F2F2F2]/90 backdrop-blur-xl flex items-center justify-center p-8 animate-in fade-in duration-300 pointer-events-auto">
-            
-            <button 
+
+            <button
                 onClick={onClose}
                 className="absolute top-8 right-8 p-2 rounded-full border border-gray-300 text-gray-500 hover:bg-white hover:text-black transition-colors"
             >
@@ -312,7 +316,8 @@ const InsightExplainer: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 </div>
 
             </div>
-        </div>
+        </div>,
+        document.body
     );
 };
 
