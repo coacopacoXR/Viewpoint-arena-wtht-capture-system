@@ -240,6 +240,16 @@ interface AppState {
   importedBaseScale: number;
   importedBasePosition: Vector3 | null;
 
+  // Curator-set transform applied to whatever model is loaded. Lives here
+  // (not in the imported* group) so it applies to presets too. Synced from
+  // the active review config's asset.transform when a curation loads.
+  modelTransform: {
+    position: [number, number, number];
+    rotation: [number, number, number];
+    scale: number;
+  };
+  setModelTransform: (t: { position: [number, number, number]; rotation: [number, number, number]; scale: number }) => void;
+
   // --- NEW: Comments System ---
   comments: SpatialComment[];
   commentMode: CommentMode;
@@ -421,6 +431,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   // --- NEW: Model Type ---
   activeModelType: 'headphones',
+  modelTransform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
   isImporting: false,
   importedMeshes: null,
   importedSceneTree: null,
@@ -585,6 +596,8 @@ export const useStore = create<AppState>((set, get) => ({
   }),
 
   // --- NEW: Model Import Actions ---
+  setModelTransform: (modelTransform) => set({ modelTransform }),
+
   setActiveModelType: (type) => set((state) => {
       const tree = type === 'bicycle' ? BICYCLE_SCENE_TREE : type === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
       return {

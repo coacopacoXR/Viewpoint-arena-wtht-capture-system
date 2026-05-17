@@ -45,11 +45,27 @@ export interface ReviewAssetReference {
   // intentionally NOT storing file contents here in v1 — only metadata
 }
 
+// Transform applied to whatever model is loaded — lets the curator fix
+// scale/orientation issues common to imported CAD (Onshape, uploads).
+// Rotation is in radians for direct passthrough to three.js.
+export interface ModelTransform {
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: number; // uniform scale
+}
+
+export const IDENTITY_TRANSFORM: ModelTransform = {
+  position: [0, 0, 0],
+  rotation: [0, 0, 0],
+  scale: 1,
+};
+
 export interface ReviewAsset {
   modelType: ModelType;
   importedFileBase64?: string;
   importedFileName?: string;
   references: ReviewAssetReference[];
+  transform?: ModelTransform;
 }
 
 export interface ReviewDraft {
@@ -85,6 +101,8 @@ interface ReviewSetupState {
   clearImportedFile: () => void;
   addReference: (ref: Omit<ReviewAssetReference, 'id'>) => void;
   removeReference: (id: string) => void;
+  setAssetTransform: (patch: Partial<ModelTransform>) => void;
+  resetAssetTransform: () => void;
 
   // Viewpoints
   addViewpoint: (vp: Omit<ReviewViewpoint, 'id' | 'createdAt'>) => string; // returns id
@@ -213,6 +231,28 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
             ...s.draft.asset,
             references: s.draft.asset.references.filter((r) => r.id !== id),
           },
+        };
+        return { draft: touch(next) };
+      }),
+
+      setAssetTransform: (patch) => set((s) => {
+        if (!s.draft) return s;
+        const current = s.draft.asset.transform ?? IDENTITY_TRANSFORM;
+        const next: ReviewDraft = {
+          ...s.draft,
+          asset: {
+            ...s.draft.asset,
+            transform: { ...current, ...patch },
+          },
+        };
+        return { draft: touch(next) };
+      }),
+
+      resetAssetTransform: () => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          asset: { ...s.draft.asset, transform: IDENTITY_TRANSFORM },
         };
         return { draft: touch(next) };
       }),
