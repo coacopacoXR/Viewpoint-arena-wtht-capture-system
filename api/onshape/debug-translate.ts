@@ -15,17 +15,17 @@ interface Attempt {
   body: Record<string, unknown>;
 }
 
-// Round 2: focus on the variations that got past the POST validation
-// (200 OK) but never got polled, plus a few new combos using Onshape's
-// full visualization-tessellation param set.
+// Round 3: every GLTF variation fails identically. Now test other formats
+// (STL/STEP/PARASOLID) to determine whether it's GLTF-specific or element-
+// specific. If STL succeeds, we know we need a different export format.
 const ATTEMPTS: Attempt[] = [
-  { label: 'D: maxFacet only',        body: { formatName: 'GLTF', storeInDocument: false, maxFacetWidth: 1.0 } },
-  { label: 'F: flattenAssemblies',    body: { formatName: 'GLTF', storeInDocument: false, flattenAssemblies: false } },
-  { label: 'G: outputFormat+version', body: { formatName: 'GLTF', storeInDocument: false, outputFormat: 'binary', glTFVersion: '2.0' } },
-  { label: 'J: full tessellation',    body: { formatName: 'GLTF', storeInDocument: false, angleTolerance: 0.1745, chordTolerance: 0.06, maxFacetWidth: 0.5, minimumFacetWidth: 0.01 } },
-  { label: 'K: explicit unitSystem',  body: { formatName: 'GLTF', storeInDocument: false, unit: 'millimeter' } },
-  { label: 'L: triangulationFalse',   body: { formatName: 'GLTF', storeInDocument: false, triangulate: true } },
-  { label: 'M: assembly-format-only', body: { formatName: 'GLTF', storeInDocument: false, includeNonSolids: false, expandSubassemblies: true } },
+  { label: 'N: STL ascii',         body: { formatName: 'STL', storeInDocument: false, mode: 'text', units: 'millimeter' } },
+  { label: 'O: STL binary',        body: { formatName: 'STL', storeInDocument: false, mode: 'binary', units: 'millimeter' } },
+  { label: 'P: STEP',              body: { formatName: 'STEP', storeInDocument: false } },
+  { label: 'Q: PARASOLID',         body: { formatName: 'PARASOLID', storeInDocument: false } },
+  { label: 'R: OBJ',               body: { formatName: 'OBJ', storeInDocument: false } },
+  { label: 'S: COLLADA',           body: { formatName: 'COLLADA', storeInDocument: false } },
+  { label: 'T: FBX',               body: { formatName: 'FBX', storeInDocument: false } },
 ];
 
 async function pollOnce(req: VercelRequest, res: VercelResponse, translationId: string): Promise<{ state: string; reason?: string; dataId?: string; documentId?: string }> {
