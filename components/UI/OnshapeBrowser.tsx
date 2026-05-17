@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import {
   getCurrentOnshapeUser, listOnshapeDocuments, listOnshapeElements,
-  fetchOnshapeGltf, startOnshapeSignIn, signOutOnshape,
+  importOnshapeModel, startOnshapeSignIn, signOutOnshape,
   type OnshapeUser, type OnshapeDocument, type OnshapeElement, type OnshapeDocFilter,
 } from '../../lib/onshape';
 
@@ -73,14 +73,20 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
     setAllElementTypes(allTypes);
   };
 
+  const [loadingPhase, setLoadingPhase] = useState<'starting' | 'translating' | 'downloading'>('starting');
+  const [loadingElapsed, setLoadingElapsed] = useState(0);
+
   const importElement = async (el: OnshapeElement) => {
     if (!selectedDoc?.defaultWorkspaceId) return;
     setError(null);
     setStep('loading');
     setLoadingMsg(el.name);
+    setLoadingPhase('starting');
+    setLoadingElapsed(0);
     try {
-      const file = await fetchOnshapeGltf(
+      const file = await importOnshapeModel(
         selectedDoc.id, selectedDoc.defaultWorkspaceId, el.id, el.type,
+        (phase, elapsed) => { setLoadingPhase(phase); setLoadingElapsed(elapsed); },
       );
       onImported(file);
       onClose();
@@ -294,8 +300,13 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
               <div className="relative mt-5 mx-auto max-w-[280px] h-1 rounded-full bg-white/10 overflow-hidden">
                 <div className="absolute inset-y-0 w-1/3 rounded-full bg-emerald-400 animate-onshape-progress" />
               </div>
-              <div className="text-[10px] text-white/40 mt-3">
-                Large assemblies may take up to a minute.
+              <div className="text-[10px] text-white/50 mt-3 flex items-center justify-center gap-2">
+                <span>
+                  {loadingPhase === 'starting' && 'Starting…'}
+                  {loadingPhase === 'translating' && 'Translating in Onshape…'}
+                  {loadingPhase === 'downloading' && 'Downloading model…'}
+                </span>
+                {loadingElapsed > 0 && <span className="font-mono text-white/30">{loadingElapsed}s</span>}
               </div>
               <style>{`
                 @keyframes onshape-progress {
