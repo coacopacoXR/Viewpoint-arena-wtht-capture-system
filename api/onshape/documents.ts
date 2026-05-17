@@ -3,7 +3,7 @@
 // trimming so we don't ship the whole giant payload to the browser.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape';
+import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape.js';
 
 interface OnshapeDocSummary {
   id: string;
