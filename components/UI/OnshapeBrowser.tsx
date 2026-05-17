@@ -77,12 +77,11 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
     if (!selectedDoc?.defaultWorkspaceId) return;
     setError(null);
     setStep('loading');
-    setLoadingMsg(`Translating ${el.name} to GLTF…`);
+    setLoadingMsg(el.name);
     try {
       const file = await fetchOnshapeGltf(
         selectedDoc.id, selectedDoc.defaultWorkspaceId, el.id, el.type,
       );
-      setLoadingMsg('Parsing model…');
       onImported(file);
       onClose();
     } catch (err) {
@@ -289,10 +288,24 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
           )}
 
           {step === 'loading' && (
-            <div className="px-8 py-16 text-center">
-              <Loader2 size={28} className="mx-auto text-emerald-400 animate-spin" />
-              <div className="text-[13px] text-white mt-4 font-bold">{loadingMsg || 'Loading…'}</div>
-              <div className="text-[11px] text-white/40 mt-1">Large assemblies may take 10–30 seconds.</div>
+            <div className="px-8 py-12 text-center">
+              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-300">Importing</div>
+              <div className="text-[14px] text-white mt-1.5 font-bold truncate">{loadingMsg}</div>
+              <div className="relative mt-5 mx-auto max-w-[280px] h-1 rounded-full bg-white/10 overflow-hidden">
+                <div className="absolute inset-y-0 w-1/3 rounded-full bg-emerald-400 animate-onshape-progress" />
+              </div>
+              <div className="text-[10px] text-white/40 mt-3">
+                Large assemblies may take up to a minute.
+              </div>
+              <style>{`
+                @keyframes onshape-progress {
+                  0%   { transform: translateX(-100%); }
+                  100% { transform: translateX(400%); }
+                }
+                .animate-onshape-progress {
+                  animation: onshape-progress 1.4s ease-in-out infinite;
+                }
+              `}</style>
             </div>
           )}
         </div>

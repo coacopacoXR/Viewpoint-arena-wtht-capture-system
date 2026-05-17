@@ -1,6 +1,8 @@
-// Streams the GLTF binary for a given Onshape part studio or assembly. The
-// frontend feeds the response into parseModelFile() so it reuses the same
-// importer pipeline as drag-and-drop uploads.
+// Imports an Onshape element as GLB. Uses Onshape's translation API which
+// is the more reliable path for both part studios and assemblies — POST to
+// kick off a translation, poll status until DONE, then download the binary
+// via the documents/externaldata endpoint. The whole dance is wrapped in
+// a single request to the browser so the frontend just does one fetch.
 //
 // GET /api/onshape/gltf?d=<documentId>&w=<workspaceId>&e=<elementId>&type=ASSEMBLY|PARTSTUDIO
 
@@ -8,38 +10,47 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape.js';
 
 const POLL_INTERVAL_MS = 1500;
-const POLL_TIMEOUT_MS = 55_000; // Vercel functions max out at 60s.
+const POLL_TIMEOUT_MS = 55_000; // stay inside Vercel's 60s function ceiling
 
-// Some assemblies are too complex for the synchronous /gltf endpoint and
-// Onshape returns a JSON translation handle instead of binary. We poll the
-// translation until it's done, then download the resulting GLB.
-async function waitForTranslation(
+interface TranslationHandle {
+  id: string;
+  requestState?: string;
+}
+
+interface TranslationStatus {
+  requestState: 'ACTIVE' | 'PENDING' | 'WAITING' | 'DONE' | 'FAILED' | string;
+  resultExternalDataIds?: string[];
+  documentId?: string;
+  failureReason?: string;
+}
+
+async function pollUntilDone(
   req: VercelRequest,
   res: VercelResponse,
   translationId: string,
-): Promise<Response> {
+): Promise<{ documentId: string; dataId: string }> {
   const started = Date.now();
+  // Quick first poll — small parts often finish before our 1.5s interval.
+  await new Promise((r) => setTimeout(r, 500));
   while (Date.now() - started < POLL_TIMEOUT_MS) {
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     const { response, refreshedCookies } = await callOnshape(req, `/api/v9/translations/${translationId}`);
     applyRefreshedCookies(res, refreshedCookies);
     if (!response.ok) {
-      throw new Error(`Translation status check failed: ${response.status}`);
+      throw new Error(`Translation status ${response.status}: ${await response.text()}`);
     }
-    const status = await response.json() as { requestState: string; resultExternalDataIds?: string[]; documentId?: string };
+    const status = await response.json() as TranslationStatus;
     if (status.requestState === 'DONE') {
       const dataId = status.resultExternalDataIds?.[0];
-      const did = status.documentId;
-      if (!dataId || !did) throw new Error('Translation done but no result data id');
-      const dl = await callOnshape(req, `/api/v9/documents/d/${did}/externaldata/${dataId}`);
-      applyRefreshedCookies(res, dl.refreshedCookies);
-      if (!dl.response.ok) throw new Error(`Translated GLB download failed: ${dl.response.status}`);
-      return dl.response;
+      const documentId = status.documentId;
+      if (!dataId || !documentId) {
+        throw new Error(`Translation done but missing result IDs: ${JSON.stringify(status)}`);
+      }
+      return { documentId, dataId };
     }
     if (status.requestState === 'FAILED') {
-      throw new Error('Onshape translation failed');
+      throw new Error(`Translation failed: ${status.failureReason || 'unknown'}`);
     }
-    // ACTIVE / WAITING — keep polling
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
   throw new Error('Translation timed out');
 }
@@ -55,44 +66,56 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    const base = type === 'ASSEMBLY'
-      ? `/api/v9/assemblies/d/${d}/w/${w}/e/${e}/gltf`
-      : `/api/v9/partstudios/d/${d}/w/${w}/e/${e}/gltf`;
-
-    const { response, refreshedCookies } = await callOnshape(req, base, {
-      headers: { 'Accept': 'model/gltf-binary;qs=0.9, model/gltf+json;qs=0.5' },
+    // 1) Kick off the translation.
+    const translationsPath = type === 'ASSEMBLY'
+      ? `/api/v9/assemblies/d/${d}/w/${w}/e/${e}/translations`
+      : `/api/v9/partstudios/d/${d}/w/${w}/e/${e}/translations`;
+    const body: Record<string, unknown> = {
+      formatName: 'GLTF',
+      storeInDocument: false,
+      yAxisIsUp: true,
+    };
+    if (type === 'ASSEMBLY') {
+      body.flattenAssemblies = false;
+      body.includeExportIds = false;
+    }
+    const start = await callOnshape(req, translationsPath, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
-    applyRefreshedCookies(res, refreshedCookies);
-
-    if (!response.ok) {
-      const text = await response.text();
-      res.status(response.status).json({ error: 'onshape_gltf_failed', detail: text.slice(0, 500) });
+    applyRefreshedCookies(res, start.refreshedCookies);
+    if (!start.response.ok) {
+      const detail = await start.response.text();
+      res.status(start.response.status).json({ error: 'onshape_translation_start_failed', detail: detail.slice(0, 500) });
+      return;
+    }
+    const handle = await start.response.json() as TranslationHandle;
+    if (!handle.id) {
+      res.status(502).json({ error: 'onshape_translation_no_id', detail: JSON.stringify(handle).slice(0, 300) });
       return;
     }
 
-    // Onshape responds with either:
-    //  - model/gltf-binary (.glb) directly — the happy path for simple parts.
-    //  - application/json describing a pending translation — we then poll.
-    const ct = response.headers.get('content-type') || '';
-    let finalResponse: Response = response;
-    if (ct.includes('application/json')) {
-      const handle = await response.json() as { id?: string; requestState?: string };
-      if (!handle.id) {
-        res.status(502).json({ error: 'onshape_gltf_unknown_response', detail: JSON.stringify(handle).slice(0, 300) });
-        return;
-      }
-      try {
-        finalResponse = await waitForTranslation(req, res, handle.id);
-      } catch (err) {
-        res.status(504).json({ error: 'onshape_gltf_translation_failed', detail: (err as Error).message });
-        return;
-      }
+    // 2) Poll until the translation is done.
+    let target: { documentId: string; dataId: string };
+    try {
+      target = await pollUntilDone(req, res, handle.id);
+    } catch (err) {
+      res.status(504).json({ error: 'onshape_translation_failed', detail: (err as Error).message.slice(0, 500) });
+      return;
     }
 
-    const outCt = finalResponse.headers.get('content-type') || 'model/gltf-binary';
-    res.setHeader('Content-Type', outCt);
+    // 3) Download the resulting GLB binary.
+    const dl = await callOnshape(req, `/api/v9/documents/d/${target.documentId}/externaldata/${target.dataId}`);
+    applyRefreshedCookies(res, dl.refreshedCookies);
+    if (!dl.response.ok) {
+      const detail = await dl.response.text();
+      res.status(dl.response.status).json({ error: 'onshape_download_failed', detail: detail.slice(0, 500) });
+      return;
+    }
+    const buf = Buffer.from(await dl.response.arrayBuffer());
+    res.setHeader('Content-Type', 'model/gltf-binary');
     res.setHeader('Content-Disposition', `inline; filename="onshape-${e}.glb"`);
-    const buf = Buffer.from(await finalResponse.arrayBuffer());
     res.status(200).send(buf);
   });
 }
