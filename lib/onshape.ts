@@ -77,12 +77,15 @@ export async function listOnshapeDocuments(
   return { items: result.items };
 }
 
-export async function listOnshapeElements(documentId: string, workspaceId: string): Promise<OnshapeElement[]> {
-  const result = await api<{ items: OnshapeElement[] }>(
+export async function listOnshapeElements(
+  documentId: string,
+  workspaceId: string,
+): Promise<{ items: OnshapeElement[]; allTypes: string[] }> {
+  const result = await api<{ items: OnshapeElement[]; allTypes?: string[] }>(
     `/api/onshape/elements?d=${documentId}&w=${workspaceId}`,
   );
-  if ('error' in result) return [];
-  return result.items;
+  if ('error' in result) return { items: [], allTypes: [] };
+  return { items: result.items, allTypes: result.allTypes ?? [] };
 }
 
 export async function fetchOnshapeGltf(

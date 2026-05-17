@@ -28,6 +28,7 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
   const [docsError, setDocsError] = useState<string | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<OnshapeDocument | null>(null);
   const [elements, setElements] = useState<OnshapeElement[] | null>(null);
+  const [allElementTypes, setAllElementTypes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loadingMsg, setLoadingMsg] = useState('');
 
@@ -65,9 +66,11 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
     }
     setSelectedDoc(doc);
     setElements(null);
+    setAllElementTypes([]);
     setStep('elements');
-    const els = await listOnshapeElements(doc.id, doc.defaultWorkspaceId);
-    setElements(els);
+    const { items, allTypes } = await listOnshapeElements(doc.id, doc.defaultWorkspaceId);
+    setElements(items);
+    setAllElementTypes(allTypes);
   };
 
   const importElement = async (el: OnshapeElement) => {
@@ -253,6 +256,11 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
                 {elements && elements.length === 0 && (
                   <div className="py-10 text-center text-white/40 text-[11px] italic">
                     This document has no assemblies or part studios.
+                    {allElementTypes.length > 0 && (
+                      <div className="mt-2 text-white/30 not-italic font-mono">
+                        Element types found: {allElementTypes.join(', ')}
+                      </div>
+                    )}
                   </div>
                 )}
                 {elements?.map((el) => (
