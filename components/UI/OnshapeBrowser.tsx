@@ -14,11 +14,14 @@ interface Props {
   onImported: (file: File) => void;
 }
 
-type Step = 'auth' | 'documents' | 'elements' | 'loading';
+type Step = 'checking' | 'auth' | 'documents' | 'elements' | 'loading';
 
 const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
   const [user, setUser] = useState<OnshapeUser | null | undefined>(undefined);
-  const [step, setStep] = useState<Step>('auth');
+  // Start in 'checking' so we don't flash the Connect CTA at users who are
+  // already signed in. The auth-status effect will flip us to 'auth' or
+  // 'documents' once /api/onshape/me responds.
+  const [step, setStep] = useState<Step>('checking');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<OnshapeDocFilter>('recent');
   const [documents, setDocuments] = useState<OnshapeDocument[] | null>(null);
@@ -133,6 +136,13 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto custom-scrollbar">
+          {step === 'checking' && (
+            <div className="px-8 py-16 text-center">
+              <Loader2 size={22} className="mx-auto text-emerald-400 animate-spin" />
+              <div className="text-[12px] text-white/70 mt-3">Checking Onshape session…</div>
+            </div>
+          )}
+
           {step === 'auth' && (
             <div className="px-8 py-10 text-center">
               <OnshapeMark large />
