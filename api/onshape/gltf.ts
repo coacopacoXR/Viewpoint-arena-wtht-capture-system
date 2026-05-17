@@ -66,19 +66,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    // 1) Kick off the translation.
+    // 1) Kick off the translation. GLTF accepts a very narrow set of params —
+    // any extras (yAxisIsUp, flattenAssemblies, includeExportIds, etc. — all
+    // of which work for STL/STEP) cause Onshape to reject the request with
+    // "Invalid GLTF detail parameters". Keep this minimal.
     const translationsPath = type === 'ASSEMBLY'
       ? `/api/v9/assemblies/d/${d}/w/${w}/e/${e}/translations`
       : `/api/v9/partstudios/d/${d}/w/${w}/e/${e}/translations`;
     const body: Record<string, unknown> = {
       formatName: 'GLTF',
       storeInDocument: false,
-      yAxisIsUp: true,
     };
-    if (type === 'ASSEMBLY') {
-      body.flattenAssemblies = false;
-      body.includeExportIds = false;
-    }
     const start = await callOnshape(req, translationsPath, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
