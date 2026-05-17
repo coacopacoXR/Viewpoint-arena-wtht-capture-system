@@ -6,13 +6,39 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape.js';
 
+// Onshape's /elements endpoint returns each element with two type fields:
+//  - `elementType`: enum string ("PARTSTUDIO" | "ASSEMBLY" | "DRAWING" | …)
+//  - `type`: integer (0 = part studio, 1 = assembly, 2 = drawing, …) on some
+//            API versions, string on others
+// We normalize both into our own union and only surface 3D-usable elements.
+
 interface OnshapeElement {
   id: string;
   name: string;
-  type: 'PARTSTUDIO' | 'ASSEMBLY' | 'DRAWING' | 'BLOB' | string;
-  elementType: string;
+  type?: string | number;
+  elementType?: string;
   microversionId?: string;
   thumbnailInfo?: { sizes?: { size: string; href: string }[] };
+}
+
+const TYPE_INT_TO_STR: Record<number, string> = {
+  0: 'PARTSTUDIO',
+  1: 'ASSEMBLY',
+  2: 'DRAWING',
+  3: 'BLOB',
+  4: 'APPLICATION',
+  5: 'TABLE',
+  6: 'BILLOFMATERIALS',
+  7: 'FEATURESTUDIO',
+  8: 'PUBLICATIONITEM',
+  9: 'VARIABLESTUDIO',
+};
+
+function normalizeType(e: OnshapeElement): string {
+  if (e.elementType) return e.elementType.toUpperCase().replace(/\s+/g, '');
+  if (typeof e.type === 'string') return e.type.toUpperCase().replace(/\s+/g, '');
+  if (typeof e.type === 'number') return TYPE_INT_TO_STR[e.type] ?? '';
+  return '';
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -31,14 +57,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
     const items = await response.json() as OnshapeElement[];
-    const trimmed = items
-      .filter((e) => e.type === 'ASSEMBLY' || e.type === 'PARTSTUDIO')
-      .map((e) => ({
-        id: e.id,
-        name: e.name,
-        type: e.type,
-        thumbnail: e.thumbnailInfo?.sizes?.[0]?.href,
-      }));
-    res.status(200).json({ items: trimmed });
+    const normalized = items.map((e) => ({
+      id: e.id,
+      name: e.name,
+      type: normalizeType(e),
+      thumbnail: e.thumbnailInfo?.sizes?.[0]?.href,
+    }));
+    // Only surface things we can actually load.
+    const trimmed = normalized.filter((e) => e.type === 'ASSEMBLY' || e.type === 'PARTSTUDIO');
+    // Include the set of types we saw so the UI can explain *why* the list
+    // might be empty (e.g. "this document only has drawings").
+    const allTypes = Array.from(new Set(normalized.map((e) => e.type).filter(Boolean)));
+    res.status(200).json({ items: trimmed, allTypes });
   });
 }
