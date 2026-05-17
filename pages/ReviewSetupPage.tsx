@@ -20,6 +20,7 @@ import type { ModelType } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { getIdentity } from '../lib/identity';
+import OnshapeBrowser from '../components/UI/OnshapeBrowser';
 
 type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda';
 
@@ -364,6 +365,7 @@ const AssetTab: React.FC = () => {
 
   const [refName, setRefName] = useState('');
   const [refUrl, setRefUrl] = useState('');
+  const [showOnshapeBrowser, setShowOnshapeBrowser] = useState(false);
 
   const handleFile = async (file: File) => {
     const buf = await file.arrayBuffer();
@@ -436,6 +438,13 @@ const AssetTab: React.FC = () => {
               {draft.asset.importedFileName ? `Imported: ${draft.asset.importedFileName}` : 'Upload your own (.glb, .obj, .fbx)'}
             </span>
           </button>
+          <button
+            onClick={() => setShowOnshapeBrowser(true)}
+            className="mt-2 w-full flex items-center justify-center gap-2 p-3 rounded border-2 border-dashed border-emerald-500/30 hover:border-emerald-400/60 hover:bg-emerald-500/5 text-emerald-200 transition-colors"
+          >
+            <span className="w-5 h-5 rounded flex items-center justify-center text-[8px] font-bold text-black bg-gradient-to-br from-emerald-300 to-emerald-500">OS</span>
+            <span className="text-xs font-bold">Import from Onshape</span>
+          </button>
         </div>
       </Section>
 
@@ -481,6 +490,13 @@ const AssetTab: React.FC = () => {
           </div>
         </div>
       </Section>
+
+      {showOnshapeBrowser && (
+        <OnshapeBrowser
+          onClose={() => setShowOnshapeBrowser(false)}
+          onImported={(file) => { handleFile(file); }}
+        />
+      )}
     </div>
   );
 };
