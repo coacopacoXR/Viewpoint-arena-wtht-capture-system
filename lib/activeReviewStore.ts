@@ -82,8 +82,11 @@ function syncMainComments(config: ReviewDraft | null) {
 // async parse — failures are logged but don't block setConfig.
 function syncMainModel(config: ReviewDraft | null) {
   if (!config) return;
-  const { setActiveModelType, setImportedModel } = useStore.getState();
+  const { setActiveModelType, setImportedModel, setModelTransform } = useStore.getState();
   const a = config.asset;
+  // Push the curator's transform onto the main store (used by World's group
+  // wrapper). Identity if none was set.
+  setModelTransform(a?.transform ?? { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
   if (!a?.modelType) return;
   if (a.modelType === 'imported') {
     if (!a.importedFileBase64 || !a.importedFileName) {

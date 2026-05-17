@@ -30,6 +30,7 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride }) => {
   const storeHideAgents = useStore(state => state.hideAgents);
   const hideAgents = hideAgentsOverride ?? storeHideAgents;
   const activeModelType = useStore(state => state.activeModelType);
+  const modelTransform = useStore(state => state.modelTransform);
   
   // Ref to track throttle
   const lastTimeUpdate = useRef(0);
@@ -84,16 +85,23 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride }) => {
       />
 
       <group position={[0, 0, 0]}>
-        {/* Conditionally render model based on activeModelType */}
-        {activeModelType === 'imported' ? (
-          <ImportedModel />
-        ) : activeModelType === 'bicycle' ? (
-          <Bicycle />
-        ) : activeModelType === 'headphones' ? (
-          <Headphones />
-        ) : (
-          <Product />
-        )}
+        {/* Inner group applies the curator's transform — affects only the
+            model itself, not contact shadows / heatmap / etc. */}
+        <group
+          position={modelTransform.position}
+          rotation={modelTransform.rotation}
+          scale={modelTransform.scale}
+        >
+          {activeModelType === 'imported' ? (
+            <ImportedModel />
+          ) : activeModelType === 'bicycle' ? (
+            <Bicycle />
+          ) : activeModelType === 'headphones' ? (
+            <Headphones />
+          ) : (
+            <Product />
+          )}
+        </group>
 
         <ContactShadows
             opacity={0.4}

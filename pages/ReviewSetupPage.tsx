@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import {
   ChevronLeft, Camera, MapPin, ListOrdered, Box, Trash2,
   Play, Plus, GripVertical, X, AlertTriangle, Info, ShieldAlert,
-  FileBox, Layers, Cloud, CloudOff, Check, Link2
+  FileBox, Layers, Cloud, CloudOff, Check, Link2, Move3D, RotateCcw
 } from 'lucide-react';
 import ReviewSetupCanvas, { type ReviewSetupCanvasHandle } from '../components/Scene/ReviewSetupCanvas';
 import {
@@ -14,6 +14,7 @@ import {
   type AgendaItem,
   type PinSeverity,
   type ReviewDraft,
+  IDENTITY_TRANSFORM,
 } from '../lib/reviewSetupStore';
 import { useStore } from '../store';
 import type { ModelType } from '../types';
@@ -164,6 +165,14 @@ const ReviewSetupPage: React.FC = () => {
   const importedFileBase64 = draft?.asset.importedFileBase64;
   const importedFileName = draft?.asset.importedFileName;
   const modelType = draft?.asset.modelType;
+  const assetTransform = draft?.asset.transform;
+
+  // Live transform sync — runs from any tab so the canvas updates even if the
+  // user has the Viewpoints / Pins / Agenda tab open.
+  const setModelTransform = useStore((s) => s.setModelTransform);
+  useEffect(() => {
+    setModelTransform(assetTransform ?? IDENTITY_TRANSFORM);
+  }, [assetTransform, setModelTransform]);
 
   useEffect(() => {
     if (!modelType) return;
@@ -448,6 +457,8 @@ const AssetTab: React.FC = () => {
           </button>
         </div>
       </Section>
+
+      <TransformSection />
 
       <Section label="Reference Materials">
         <div className="flex flex-col gap-2">
@@ -915,6 +926,147 @@ const Section: React.FC<{ label: string; children: React.ReactNode }> = ({ label
     {children}
   </div>
 );
+
+// Position / rotation / scale controls applied to the currently-loaded model.
+// Edits to ReviewSetupStore propagate through setConfig -> syncMainModel,
+// which pushes the transform onto the main store; World re-renders with the
+// new group transform. Auto-saves like any other curation change.
+const TransformSection: React.FC = () => {
+  const transform = useReviewSetupStore((s) => s.draft?.asset.transform ?? IDENTITY_TRANSFORM);
+  const setAssetTransform = useReviewSetupStore((s) => s.setAssetTransform);
+  const resetAssetTransform = useReviewSetupStore((s) => s.resetAssetTransform);
+
+  const isIdentity =
+    transform.position.every((v) => v === 0) &&
+    transform.rotation.every((v) => v === 0) &&
+    transform.scale === 1;
+
+  const updatePos = (axis: 0 | 1 | 2, v: number) => {
+    const next: [number, number, number] = [...transform.position] as [number, number, number];
+    next[axis] = v;
+    setAssetTransform({ position: next });
+  };
+  const updateRotDeg = (axis: 0 | 1 | 2, deg: number) => {
+    const next: [number, number, number] = [...transform.rotation] as [number, number, number];
+    next[axis] = (deg * Math.PI) / 180;
+    setAssetTransform({ rotation: next });
+  };
+  const updateScale = (v: number) => setAssetTransform({ scale: v });
+
+  return (
+    <Section label="Transform">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] text-gray-500 leading-snug max-w-[260px]">
+          Adjust the model's placement in the scene. Useful when imports come in too big, too small, or rotated.
+        </span>
+        <button
+          onClick={resetAssetTransform}
+          disabled={isIdentity}
+          className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-bold uppercase tracking-wider bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          title="Reset to identity (position 0, no rotation, scale 1)"
+        >
+          <RotateCcw size={10} /> Reset
+        </button>
+      </div>
+
+      <TransformRow label="Position" icon={<Move3D size={11} />} unit="">
+        {(['X', 'Y', 'Z'] as const).map((axis, i) => (
+          <TransformInput
+            key={axis}
+            axis={axis}
+            value={transform.position[i]}
+            step={0.1}
+            onChange={(v) => updatePos(i as 0 | 1 | 2, v)}
+          />
+        ))}
+      </TransformRow>
+
+      <TransformRow label="Rotation" icon={<RotateCcw size={11} />} unit="°">
+        {(['X', 'Y', 'Z'] as const).map((axis, i) => {
+          const deg = (transform.rotation[i] * 180) / Math.PI;
+          return (
+            <TransformInput
+              key={axis}
+              axis={axis}
+              value={Number(deg.toFixed(1))}
+              step={5}
+              onChange={(v) => updateRotDeg(i as 0 | 1 | 2, v)}
+            />
+          );
+        })}
+      </TransformRow>
+
+      <div className="mt-2">
+        <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
+          <span>Scale</span>
+          <span className="font-mono text-gray-400">{transform.scale.toFixed(2)}×</span>
+        </div>
+        <input
+          type="range"
+          min={0.01}
+          max={10}
+          step={0.01}
+          value={transform.scale}
+          onChange={(e) => updateScale(parseFloat(e.target.value))}
+          className="w-full accent-emerald-400"
+        />
+        <div className="flex gap-1 mt-1">
+          {[0.1, 0.5, 1, 2, 10].map((v) => (
+            <button
+              key={v}
+              onClick={() => updateScale(v)}
+              className={clsx(
+                'flex-1 text-[9px] font-mono py-0.5 rounded transition-colors',
+                Math.abs(transform.scale - v) < 0.001
+                  ? 'bg-emerald-500/20 text-emerald-200'
+                  : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200',
+              )}
+            >
+              {v}×
+            </button>
+          ))}
+        </div>
+      </div>
+    </Section>
+  );
+};
+
+const TransformRow: React.FC<{
+  label: string;
+  icon: React.ReactNode;
+  unit: string;
+  children: React.ReactNode;
+}> = ({ label, icon, unit, children }) => (
+  <div className="mb-2">
+    <div className="flex items-center gap-1 text-[10px] text-gray-500 mb-1">
+      {icon}
+      <span>{label}</span>
+      {unit && <span className="font-mono text-gray-600 ml-auto">{unit}</span>}
+    </div>
+    <div className="grid grid-cols-3 gap-1.5">{children}</div>
+  </div>
+);
+
+const TransformInput: React.FC<{
+  axis: 'X' | 'Y' | 'Z';
+  value: number;
+  step: number;
+  onChange: (v: number) => void;
+}> = ({ axis, value, step, onChange }) => {
+  const axisColor = axis === 'X' ? 'text-red-400' : axis === 'Y' ? 'text-emerald-400' : 'text-blue-400';
+  return (
+    <div className="flex items-center gap-1 bg-white/5 rounded border border-white/10 px-1.5 py-1 focus-within:border-emerald-400/40">
+      <span className={clsx('text-[10px] font-bold font-mono', axisColor)}>{axis}</span>
+      <input
+        type="number"
+        value={value}
+        step={step}
+        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+        className="w-full bg-transparent text-[11px] font-mono outline-none text-white tabular-nums"
+      />
+    </div>
+  );
+};
 
 const PresenceStack: React.FC<{ peers: CurationPresence[] }> = ({ peers }) => {
   if (peers.length === 0) {
