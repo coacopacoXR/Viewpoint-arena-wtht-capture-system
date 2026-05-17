@@ -6,7 +6,7 @@ import {
 import {
   getCurrentOnshapeUser, listOnshapeDocuments, listOnshapeElements,
   fetchOnshapeGltf, startOnshapeSignIn, signOutOnshape,
-  type OnshapeUser, type OnshapeDocument, type OnshapeElement,
+  type OnshapeUser, type OnshapeDocument, type OnshapeElement, type OnshapeDocFilter,
 } from '../../lib/onshape';
 
 interface Props {
@@ -20,7 +20,9 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
   const [user, setUser] = useState<OnshapeUser | null | undefined>(undefined);
   const [step, setStep] = useState<Step>('auth');
   const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<OnshapeDocFilter>('recent');
   const [documents, setDocuments] = useState<OnshapeDocument[] | null>(null);
+  const [docsError, setDocsError] = useState<string | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<OnshapeDocument | null>(null);
   const [elements, setElements] = useState<OnshapeElement[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,17 +40,20 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
     return () => { cancelled = true; };
   }, []);
 
-  // Load documents on first entry / search change.
+  // Load documents on first entry / search / filter change.
   useEffect(() => {
     if (step !== 'documents') return;
     let cancelled = false;
     setDocuments(null);
+    setDocsError(null);
     const handle = setTimeout(async () => {
-      const docs = await listOnshapeDocuments(query);
-      if (!cancelled) setDocuments(docs);
+      const { items, error } = await listOnshapeDocuments(query, filter);
+      if (cancelled) return;
+      setDocuments(items);
+      setDocsError(error ?? null);
     }, query ? 300 : 0);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [step, query]);
+  }, [step, query, filter]);
 
   const openDocument = async (doc: OnshapeDocument) => {
     if (!doc.defaultWorkspaceId) {
@@ -149,15 +154,33 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
 
           {step === 'documents' && (
             <div className="flex flex-col">
-              <div className="px-4 py-2.5 border-b border-white/5 sticky top-0 bg-[#0f0f10]/95 backdrop-blur-sm z-10 flex items-center gap-2">
-                <Search size={13} className="text-white/40" />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search your documents…"
-                  autoFocus
-                  className="flex-1 bg-transparent text-[12px] outline-none placeholder:text-white/30"
-                />
+              <div className="px-4 py-2.5 border-b border-white/5 sticky top-0 bg-[#0f0f10]/95 backdrop-blur-sm z-10 flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <Search size={13} className="text-white/40" />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search your documents…"
+                    autoFocus
+                    className="flex-1 bg-transparent text-[12px] outline-none placeholder:text-white/30"
+                  />
+                </div>
+                <div className="flex gap-0.5 text-[10px] font-bold uppercase tracking-wider">
+                  {(['recent', 'mine', 'shared', 'public'] as OnshapeDocFilter[]).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setFilter(f)}
+                      className={clsx(
+                        'px-2.5 py-1 rounded transition-colors',
+                        filter === f
+                          ? 'bg-emerald-500/20 text-emerald-200'
+                          : 'text-white/40 hover:text-white/80 hover:bg-white/5'
+                      )}
+                    >
+                      {f === 'mine' ? 'My docs' : f === 'shared' ? 'Shared' : f}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="px-2 py-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                 {documents === null && (
@@ -166,9 +189,22 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
                     Loading documents…
                   </div>
                 )}
-                {documents && documents.length === 0 && (
+                {docsError && (
+                  <div className="col-span-full py-6 text-center text-red-300 text-[11px]">
+                    Failed to load documents: {docsError}
+                  </div>
+                )}
+                {documents && documents.length === 0 && !docsError && (
                   <div className="col-span-full py-10 text-center text-white/40 text-[11px] italic">
-                    {query ? 'No matches' : 'No documents in your Onshape account yet.'}
+                    {query
+                      ? 'No matches'
+                      : filter === 'shared'
+                        ? 'No documents have been shared with you.'
+                        : filter === 'mine'
+                          ? 'No documents owned by you yet.'
+                          : filter === 'public'
+                            ? 'No public documents found.'
+                            : 'No recent documents.'}
                   </div>
                 )}
                 {documents?.map((d) => (

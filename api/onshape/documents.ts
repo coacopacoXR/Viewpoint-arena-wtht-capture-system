@@ -19,7 +19,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   await withAuth(res, async () => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
-    const params = new URLSearchParams({ limit: String(limit), filter: '0' /* my documents */ });
+    // filter: 0 = my own, 2 = shared with me, 4 = public, 5 = recent.
+    // We default to 5 (recent) which gives users what they were last working
+    // on — usually the doc they want. Frontend lets them switch to 0/2.
+    const filter = typeof req.query.filter === 'string' ? req.query.filter : '5';
+    const params = new URLSearchParams({ limit: String(limit), filter });
     if (q) params.set('q', q);
     const path = `/api/v9/documents?${params.toString()}`;
 

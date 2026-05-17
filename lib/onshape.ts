@@ -43,11 +43,24 @@ export async function getCurrentOnshapeUser(): Promise<OnshapeUser | null> {
   return result;
 }
 
-export async function listOnshapeDocuments(query?: string): Promise<OnshapeDocument[]> {
-  const qs = query ? `?q=${encodeURIComponent(query)}` : '';
-  const result = await api<{ items: OnshapeDocument[] }>(`/api/onshape/documents${qs}`);
-  if ('error' in result) return [];
-  return result.items;
+export type OnshapeDocFilter = 'recent' | 'mine' | 'shared' | 'public';
+
+const FILTER_VALUES: Record<OnshapeDocFilter, string> = {
+  recent: '5',
+  mine: '0',
+  shared: '2',
+  public: '4',
+};
+
+export async function listOnshapeDocuments(
+  query?: string,
+  filter: OnshapeDocFilter = 'recent',
+): Promise<{ items: OnshapeDocument[]; error?: string }> {
+  const params = new URLSearchParams({ filter: FILTER_VALUES[filter] });
+  if (query) params.set('q', query);
+  const result = await api<{ items: OnshapeDocument[] }>(`/api/onshape/documents?${params.toString()}`);
+  if ('error' in result) return { items: [], error: result.error };
+  return { items: result.items };
 }
 
 export async function listOnshapeElements(documentId: string, workspaceId: string): Promise<OnshapeElement[]> {
