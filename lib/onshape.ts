@@ -98,7 +98,20 @@ export async function fetchOnshapeGltf(
   const resp = await fetch(url, { credentials: 'include' });
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Onshape GLTF fetch failed (${resp.status}): ${text.slice(0, 200)}`);
+    // Surface Onshape's "no visible parts" as a friendly message instead of a
+    // raw JSON blob. Same for permission and rate-limit errors.
+    let friendly = '';
+    if (text.includes('No visible parts')) {
+      friendly = type === 'ASSEMBLY'
+        ? "This assembly has no visible instances. Add some parts to the assembly in Onshape, then try again."
+        : "This part studio is empty (or all parts are hidden). Model a part or unhide what's there, then try again.";
+    } else if (resp.status === 401 || resp.status === 403) {
+      friendly = 'Your Onshape session expired or the document moved. Reopen the picker to refresh.';
+    } else if (resp.status === 504) {
+      friendly = 'Onshape took too long to translate this model. Try a smaller/simpler one.';
+    }
+    if (friendly) throw new Error(friendly);
+    throw new Error(`Onshape import failed (${resp.status}). ${text.slice(0, 200)}`);
   }
   const blob = await resp.blob();
   const filename = `onshape-${elementId}.glb`;
