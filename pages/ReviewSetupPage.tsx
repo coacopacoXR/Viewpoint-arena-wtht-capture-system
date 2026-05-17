@@ -1082,11 +1082,23 @@ const OnshapeStatusPill: React.FC = () => {
   const draft = useReviewSetupStore((s) => s.draft);
   const setImportedFile = useReviewSetupStore((s) => s.setImportedFile);
   const [user, setUser] = useState<import('../lib/onshape').OnshapeUser | null | undefined>(undefined);
+  const [diag, setDiag] = useState<{ status: number; error: string } | null>(null);
   const [open, setOpen] = useState(false);
 
   const refresh = React.useCallback(async () => {
-    const { getCurrentOnshapeUser } = await import('../lib/onshape');
-    setUser(await getCurrentOnshapeUser());
+    const { getCurrentOnshapeUserWithStatus } = await import('../lib/onshape');
+    const result = await getCurrentOnshapeUserWithStatus();
+    // TS narrowing on the tagged union is being odd in this project's tsconfig;
+    // pull both possible shapes via a small assertion so the success/error
+    // paths compile cleanly.
+    const r = result as { ok: true; user: import('../lib/onshape').OnshapeUser } | { ok: false; status: number; error: string };
+    if (r.ok === true) {
+      setUser(r.user);
+      setDiag(null);
+    } else {
+      setUser(null);
+      setDiag({ status: r.status, error: r.error });
+    }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -1123,13 +1135,20 @@ const OnshapeStatusPill: React.FC = () => {
             ? 'bg-emerald-500/15 border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/25'
             : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10 hover:border-white/20',
         )}
-        title={user ? `Onshape · ${user.name || user.email || 'connected'}` : 'Connect Onshape to import models'}
+        title={
+          user
+            ? `Onshape · ${user.name || user.email || 'connected'}`
+            : diag
+              ? `Not connected — /api/onshape/me returned ${diag.status} ${diag.error}`
+              : 'Connect Onshape to import models'
+        }
       >
         <span className="w-4 h-4 rounded flex items-center justify-center text-[7px] font-bold text-black bg-gradient-to-br from-emerald-300 to-emerald-500">OS</span>
         {user ? (
-          <>
-            <span className="truncate max-w-[100px] normal-case font-normal">{user.name || user.email || 'Connected'}</span>
-          </>
+          <span className="truncate max-w-[100px] normal-case font-normal">{user.name || user.email || 'Connected'}</span>
+        ) : diag && diag.status !== 401 ? (
+          // Non-401 error — surface it so we can see what's failing
+          <span className="normal-case font-normal text-red-300">err {diag.status}</span>
         ) : (
           <span>Connect</span>
         )}

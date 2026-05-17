@@ -102,12 +102,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const refreshMaxAge = 60 * 60 * 24 * 30;
   const cookieAttrs = 'Path=/; HttpOnly; Secure; SameSite=Lax';
 
+  // URL-encode the values: Onshape access tokens can include '=' padding or
+  // other characters that, while technically allowed in cookie values per
+  // RFC 6265, sometimes get mangled by proxies or specific parsers.
   const setCookies = [
     `vp_onshape_oauth=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`, // clear state
-    `vp_onshape_at=${tokens.access_token}; Max-Age=${accessMaxAge}; ${cookieAttrs}`,
+    `vp_onshape_at=${encodeURIComponent(tokens.access_token)}; Max-Age=${accessMaxAge}; ${cookieAttrs}`,
   ];
   if (tokens.refresh_token) {
-    setCookies.push(`vp_onshape_rt=${tokens.refresh_token}; Max-Age=${refreshMaxAge}; ${cookieAttrs}`);
+    setCookies.push(`vp_onshape_rt=${encodeURIComponent(tokens.refresh_token)}; Max-Age=${refreshMaxAge}; ${cookieAttrs}`);
   }
   res.setHeader('Set-Cookie', setCookies);
 

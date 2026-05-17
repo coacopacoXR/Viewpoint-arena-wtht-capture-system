@@ -43,6 +43,20 @@ export async function getCurrentOnshapeUser(): Promise<OnshapeUser | null> {
   return result;
 }
 
+/**
+ * Like getCurrentOnshapeUser but exposes the failure reason for diagnostic UI.
+ * Tagged union so callers can narrow safely on `ok`.
+ */
+export type OnshapeUserResult =
+  | { ok: true; user: OnshapeUser }
+  | { ok: false; status: number; error: string };
+
+export async function getCurrentOnshapeUserWithStatus(): Promise<OnshapeUserResult> {
+  const result = await api<OnshapeUser>('/api/onshape/me');
+  if ('error' in result) return { ok: false as const, status: result.status, error: result.error };
+  return { ok: true as const, user: result };
+}
+
 export type OnshapeDocFilter = 'recent' | 'mine' | 'shared' | 'public';
 
 const FILTER_VALUES: Record<OnshapeDocFilter, string> = {

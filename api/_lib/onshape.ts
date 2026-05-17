@@ -73,9 +73,9 @@ export async function getAuthedToken(req: VercelRequest): Promise<AuthedCall> {
   if (!refreshed.ok) throw new OnshapeAuthError('refresh_failed');
 
   const accessMaxAge = Math.max(60, refreshed.expires_in - 60);
-  const cookies_out = [`vp_onshape_at=${refreshed.access_token}; Max-Age=${accessMaxAge}; ${COOKIE_ATTRS}`];
+  const cookies_out = [`vp_onshape_at=${encodeURIComponent(refreshed.access_token)}; Max-Age=${accessMaxAge}; ${COOKIE_ATTRS}`];
   if (refreshed.refresh_token) {
-    cookies_out.push(`vp_onshape_rt=${refreshed.refresh_token}; Max-Age=${60 * 60 * 24 * 30}; ${COOKIE_ATTRS}`);
+    cookies_out.push(`vp_onshape_rt=${encodeURIComponent(refreshed.refresh_token)}; Max-Age=${60 * 60 * 24 * 30}; ${COOKIE_ATTRS}`);
   }
   return { accessToken: refreshed.access_token, refreshedCookies: cookies_out };
 }
