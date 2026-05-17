@@ -25,10 +25,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? `/api/v9/assemblies/d/${d}/w/${w}/e/${e}/translations`
       : `/api/v9/partstudios/d/${d}/w/${w}/e/${e}/translations`;
 
+    // Onshape's GLTF translator picks default mesh tolerances per element, and
+    // for some geometries those defaults are invalid (we get "Invalid GLTF
+    // detail parameters were specified" after the translation starts). Setting
+    // sane tolerances explicitly bypasses the picker — values are sensible
+    // mid-quality defaults that work for both small parts and full assemblies.
+    const body: Record<string, unknown> = {
+      formatName: 'GLTF',
+      storeInDocument: false,
+      angleTolerance: 0.1745,   // ~10° — controls curvature faceting
+      chordTolerance: 0.06,     // distance from mesh edge to true surface (mm)
+      maxFacetWidth: 0.5,       // upper bound on facet size (mm)
+    };
+
     const { response, refreshedCookies } = await callOnshape(req, path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ formatName: 'GLTF', storeInDocument: false }),
+      body: JSON.stringify(body),
     });
     applyRefreshedCookies(res, refreshedCookies);
     if (!response.ok) {
