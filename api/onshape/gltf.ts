@@ -74,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? `/api/v9/assemblies/d/${d}/w/${w}/e/${e}/translations`
       : `/api/v9/partstudios/d/${d}/w/${w}/e/${e}/translations`;
     const body: Record<string, unknown> = {
-      formatName: 'GLB',
+      formatName: 'GLTF',
       storeInDocument: false,
     };
     const start = await callOnshape(req, translationsPath, {
