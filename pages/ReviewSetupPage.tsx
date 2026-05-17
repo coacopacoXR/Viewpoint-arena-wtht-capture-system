@@ -228,6 +228,7 @@ const ReviewSetupPage: React.FC = () => {
           <span>{draft.agenda.length} AGENDA</span>
         </div>
         <PresenceStack peers={otherPeers} />
+        <OnshapeStatusPill />
         <ShareButton reviewId={draft.reviewId} peerCount={otherPeers.length} />
         <button
           onClick={() => {
@@ -1069,6 +1070,74 @@ const ShareButton: React.FC<{ reviewId: string; peerCount: number }> = ({ review
         </>
       )}
     </div>
+  );
+};
+
+// Persistent Onshape connection indicator. Polls /api/onshape/me once on mount
+// (cookies handle re-auth transparently via the refresh-token flow), and
+// re-checks whenever the modal closes (so signing in / out is reflected). The
+// pill opens the browser modal directly — if you're already signed in it jumps
+// straight to the document list, no re-login.
+const OnshapeStatusPill: React.FC = () => {
+  const draft = useReviewSetupStore((s) => s.draft);
+  const setImportedFile = useReviewSetupStore((s) => s.setImportedFile);
+  const [user, setUser] = useState<import('../lib/onshape').OnshapeUser | null | undefined>(undefined);
+  const [open, setOpen] = useState(false);
+
+  const refresh = React.useCallback(async () => {
+    const { getCurrentOnshapeUser } = await import('../lib/onshape');
+    setUser(await getCurrentOnshapeUser());
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const handleImported = async (file: File) => {
+    const buf = await file.arrayBuffer();
+    let binary = '';
+    const bytes = new Uint8Array(buf);
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+    }
+    setImportedFile(file.name, btoa(binary));
+  };
+
+  const onClose = () => { setOpen(false); refresh(); };
+
+  // Loading skeleton
+  if (user === undefined) {
+    return (
+      <div className="flex items-center gap-1.5 px-2.5 py-2 rounded bg-white/5 border border-white/10 text-[10px] font-mono uppercase text-gray-500">
+        <span className="w-2 h-2 rounded-full bg-gray-600 animate-pulse" /> Onshape
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className={clsx(
+          'flex items-center gap-1.5 px-2.5 py-2 rounded border text-[10px] font-bold uppercase tracking-wider transition-colors',
+          user
+            ? 'bg-emerald-500/15 border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/25'
+            : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10 hover:border-white/20',
+        )}
+        title={user ? `Onshape · ${user.name || user.email || 'connected'}` : 'Connect Onshape to import models'}
+      >
+        <span className="w-4 h-4 rounded flex items-center justify-center text-[7px] font-bold text-black bg-gradient-to-br from-emerald-300 to-emerald-500">OS</span>
+        {user ? (
+          <>
+            <span className="truncate max-w-[100px] normal-case font-normal">{user.name || user.email || 'Connected'}</span>
+          </>
+        ) : (
+          <span>Connect</span>
+        )}
+      </button>
+      {open && draft && (
+        <OnshapeBrowser onClose={onClose} onImported={handleImported} />
+      )}
+    </>
   );
 };
 
