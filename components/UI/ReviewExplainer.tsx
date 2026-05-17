@@ -66,12 +66,12 @@ const FEATURES: FeatureDetails[] = [
     id: 'agenda',
     label: 'Agenda',
     icon: ListOrdered,
-    shortDesc: 'Ordered sequence of viewpoints + topics',
+    shortDesc: 'Slide deck of viewpoints, pins, and speaker notes',
     fullDesc:
-      "A linear walkthrough plan composed at setup time. Each agenda item can reference a viewpoint, a pin, or be a free topic. During the review the host steps through items in order — the camera auto-jumps for viewpoint-referencing items and highlights pins for pin-referencing ones. The agenda itself is metadata; the room UI exposes it as a checklist surface.",
+      "A linear deck composed at setup time. Each slide has a title, optional speaker notes, and any number of attached viewpoints and pins. During the review the host steps through slides in order — the camera auto-jumps to attached viewpoints and the room highlights attached pins. The agenda is metadata; the room UI surfaces it as a step-through deck.",
     techSpecs: [
       'Composition: drag-reorder at setup',
-      'Items: viewpoint | pin | topic',
+      'Per slide: title + notes + N viewpoints + N pins',
       'Step: next/prev controls in the panel',
       'Sync: broadcast with the rest of the config',
     ],

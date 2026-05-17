@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import {
   ChevronLeft, Camera, MapPin, ListOrdered, Box, Trash2,
   Play, Plus, GripVertical, X, AlertTriangle, Info, ShieldAlert,
-  FileBox
+  FileBox, Layers, Cloud, CloudOff, Check, Link2
 } from 'lucide-react';
 import ReviewSetupCanvas, { type ReviewSetupCanvasHandle } from '../components/Scene/ReviewSetupCanvas';
 import {
@@ -13,10 +13,13 @@ import {
   type ReviewPin,
   type AgendaItem,
   type PinSeverity,
+  type ReviewDraft,
 } from '../lib/reviewSetupStore';
 import { useStore } from '../store';
 import type { ModelType } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
+import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
+import { getIdentity } from '../lib/identity';
 
 type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda';
 
@@ -28,12 +31,11 @@ const ReviewSetupPage: React.FC = () => {
 
   const draft = useReviewSetupStore((s) => s.draft);
   const startNewDraft = useReviewSetupStore((s) => s.startNewDraft);
+  const hydrateDraft = useReviewSetupStore((s) => s.hydrateDraft);
   const setTitle = useReviewSetupStore((s) => s.setTitle);
 
   const setActiveModelType = useStore((s) => s.setActiveModelType);
   const setImportedModel = useStore((s) => s.setImportedModel);
-  const setHideAgents = useStore((s) => s.toggleHideAgents);
-  const hideAgents = useStore((s) => s.hideAgents);
   const setIsPlaying = useStore((s) => s.togglePlay);
   const isPlaying = useStore((s) => s.isPlaying);
 
@@ -42,18 +44,116 @@ const ReviewSetupPage: React.FC = () => {
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const canvasRef = useRef<ReviewSetupCanvasHandle>(null);
 
-  // ─── Bootstrap draft ───────────────────────────────────────────────────────
+  // Hydration + save state. `hydrated` gates the auto-save effect so we don't
+  // immediately overwrite the cloud version with the local one on first load.
+  const [hydrated, setHydrated] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // Last serialized payload we either pushed to the cloud or accepted from a
+  // remote update. Used to suppress save-loops when realtime echoes our own
+  // write back, and to skip no-op saves when realtime delivers a peer's edit.
+  const lastSyncedRef = useRef<string>('');
+
+  // Serialize a draft for the loop-detector — strip the giant base64 blob and
+  // local timestamps so equivalent content compares equal across machines.
+  const fingerprint = (d: ReviewDraft): string => {
+    const { importedFileBase64: _b, ...asset } = d.asset;
+    return JSON.stringify({
+      title: d.title, description: d.description, asset,
+      viewpoints: d.viewpoints, pins: d.pins, agenda: d.agenda,
+    });
+  };
+
+  // ─── Bootstrap draft: prefer cloud, fall back to local, then create fresh ──
+  useEffect(() => {
+    let cancelled = false;
+    if (!reviewId) return;
+    setHydrated(false);
+    (async () => {
+      const remote = await loadCuration(reviewId);
+      if (cancelled) return;
+      if (remote) {
+        lastSyncedRef.current = fingerprint(remote);
+        hydrateDraft(remote);
+      } else if (!draft || draft.reviewId !== reviewId) {
+        startNewDraft(reviewId);
+      }
+      setHydrated(true);
+    })();
+    return () => { cancelled = true; };
+    // We intentionally do NOT depend on `draft` — only the route id matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewId, hydrateDraft, startNewDraft]);
+
+  // ─── Auto-save the draft to the cloud (debounced + fingerprint) ───────────
+  useEffect(() => {
+    if (!hydrated || !draft || draft.reviewId !== reviewId) return;
+    const fp = fingerprint(draft);
+    if (fp === lastSyncedRef.current) return; // no change since last sync
+    setSaveState('saving');
+    const handle = setTimeout(async () => {
+      const res = await saveCuration(draft);
+      if (res.ok) lastSyncedRef.current = fp;
+      setSaveState(res.ok ? 'saved' : 'error');
+    }, 800);
+    return () => clearTimeout(handle);
+  }, [hydrated, draft, reviewId]);
+
+  // ─── Live multi-user sync: pull remote edits as they happen ───────────────
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('connecting');
+  useEffect(() => {
+    if (!hydrated || !reviewId) return;
+    const off = subscribeCuration(
+      reviewId,
+      (incoming) => {
+        const fp = fingerprint(incoming);
+        if (fp === lastSyncedRef.current) return; // our own echo, ignore
+        lastSyncedRef.current = fp;
+        hydrateDraft(incoming);
+      },
+      setSyncStatus,
+    );
+    return off;
+  }, [hydrated, reviewId, hydrateDraft]);
+
+  // Refetch when the user comes back to the tab — covers gaps where the
+  // browser throttled the realtime channel while the tab was hidden.
+  useEffect(() => {
+    if (!hydrated || !reviewId) return;
+    const onVisible = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const fresh = await loadCuration(reviewId);
+      if (!fresh) return;
+      const fp = fingerprint(fresh);
+      if (fp === lastSyncedRef.current) return;
+      lastSyncedRef.current = fp;
+      hydrateDraft(fresh);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [hydrated, reviewId, hydrateDraft]);
+
+  // ─── Presence: who else is editing right now ──────────────────────────────
+  const [peers, setPeers] = useState<CurationPresence[]>([]);
   useEffect(() => {
     if (!reviewId) return;
-    // If the persisted draft is for a different id, start fresh.
-    if (!draft || draft.reviewId !== reviewId) {
-      startNewDraft(reviewId);
+    const identity = getIdentity();
+    let userId = sessionStorage.getItem('vp_userId');
+    if (!userId) {
+      userId = crypto.randomUUID();
+      sessionStorage.setItem('vp_userId', userId);
     }
-  }, [reviewId, draft, startNewDraft]);
+    const off = trackCurationPresence(
+      reviewId,
+      { userId, name: identity?.name || 'Guest', color: identity?.color || '#4F8EF7' },
+      setPeers,
+    );
+    return off;
+  }, [reviewId]);
+  const selfUserId = typeof window !== 'undefined' ? sessionStorage.getItem('vp_userId') : null;
+  const otherPeers = peers.filter((p) => p.userId !== selfUserId);
 
-  // ─── Setup mode defaults: agents hidden, sim paused ────────────────────────
+  // ─── Setup mode defaults: sim paused (agents are hard-removed in the canvas) ─
   useEffect(() => {
-    if (!hideAgents) setHideAgents();
     if (isPlaying) setIsPlaying();
     // intentionally empty deps: run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -111,8 +211,12 @@ const ReviewSetupPage: React.FC = () => {
             placeholder="Review title (e.g. 'Headphones Q3 Concept Review')"
             className="w-full bg-transparent text-lg font-bold tracking-tight outline-none placeholder:text-gray-600"
           />
-          <div className="text-[10px] font-mono uppercase tracking-widest text-gray-500 mt-0.5">
-            Setup · ID {draft.reviewId.slice(0, 8)}
+          <div className="text-[10px] font-mono uppercase tracking-widest text-gray-500 mt-0.5 flex items-center gap-2">
+            <span>Setup · ID {draft.reviewId.slice(0, 8)}</span>
+            <span className="text-gray-700">·</span>
+            <SaveIndicator state={saveState} />
+            <span className="text-gray-700">·</span>
+            <SyncIndicator status={syncStatus} />
           </div>
         </div>
         <div className="flex items-center gap-3 text-[10px] font-mono uppercase text-gray-500">
@@ -122,6 +226,8 @@ const ReviewSetupPage: React.FC = () => {
           <span>·</span>
           <span>{draft.agenda.length} AGENDA</span>
         </div>
+        <PresenceStack peers={otherPeers} />
+        <ShareButton reviewId={draft.reviewId} peerCount={otherPeers.length} />
         <button
           onClick={() => {
             sessionStorage.setItem('vp_enteredRoom', draft.reviewId);
@@ -545,114 +651,240 @@ const AgendaTab: React.FC<{
   onSelectPin: (id: string) => void;
 }> = ({ agenda, viewpoints, pins, onJumpViewpoint, onSelectPin }) => {
   const addAgendaItem = useReviewSetupStore((s) => s.addAgendaItem);
-  const updateAgendaItem = useReviewSetupStore((s) => s.updateAgendaItem);
   const removeAgendaItem = useReviewSetupStore((s) => s.removeAgendaItem);
   const reorderAgenda = useReviewSetupStore((s) => s.reorderAgenda);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [topicTitle, setTopicTitle] = useState('');
 
   return (
     <div className="p-5 flex flex-col gap-3">
       <p className="text-[11px] text-gray-500 leading-relaxed">
-        Sequence the review. Drag to reorder. Items can reference saved viewpoints, pins, or be free-form topics.
+        Build the deck. Each slide has a title, speaker notes, and any number of viewpoints and pins. Drag to reorder.
       </p>
 
       {agenda.length === 0 && (
         <div className="text-center py-10 text-gray-500 text-xs italic">
-          <ListOrdered size={28} className="mx-auto mb-2 opacity-30" />
-          No agenda items yet
+          <Layers size={28} className="mx-auto mb-2 opacity-30" />
+          No slides yet
         </div>
       )}
 
-      {agenda.map((item, idx) => {
-        const vp = item.refType === 'viewpoint' ? viewpoints.find((v) => v.id === item.refId) : null;
-        const pin = item.refType === 'pin' ? pins.find((p) => p.id === item.refId) : null;
-        return (
-          <div
-            key={item.id}
-            draggable
-            onDragStart={() => setDragIdx(idx)}
-            onDragOver={(e) => { e.preventDefault(); }}
-            onDrop={() => { if (dragIdx !== null) { reorderAgenda(dragIdx, idx); setDragIdx(null); } }}
-            className="rounded border border-white/10 bg-white/5 p-2 flex items-start gap-2"
-          >
-            <div className="flex flex-col items-center pt-1">
-              <GripVertical size={12} className="text-gray-600 cursor-grab" />
-              <span className="text-[9px] font-mono text-gray-500 tabular-nums">{String(idx + 1).padStart(2, '0')}</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <input
-                value={item.title}
-                onChange={(e) => updateAgendaItem(item.id, { title: e.target.value })}
-                className="w-full bg-transparent text-xs font-bold outline-none"
-              />
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-[9px] font-mono uppercase tracking-wider text-gray-500">
-                  {item.refType === 'viewpoint' && vp && <>↻ Viewpoint: {vp.label}</>}
-                  {item.refType === 'pin' && pin && <>📍 Pin: {pin.label}</>}
-                  {item.refType === 'topic' && <>· Topic</>}
-                </span>
-                {vp && (
-                  <button onClick={() => onJumpViewpoint(vp)} className="text-[9px] font-bold uppercase text-emerald-400 hover:text-emerald-300">Jump</button>
-                )}
-                {pin && (
-                  <button onClick={() => onSelectPin(pin.id)} className="text-[9px] font-bold uppercase text-emerald-400 hover:text-emerald-300">Show</button>
-                )}
-              </div>
-            </div>
-            <button onClick={() => removeAgendaItem(item.id)} className="text-gray-500 hover:text-red-400">
-              <X size={14} />
-            </button>
-          </div>
-        );
-      })}
+      {agenda.map((item, idx) => (
+        <SlideCard
+          key={item.id}
+          item={item}
+          idx={idx}
+          viewpoints={viewpoints}
+          pins={pins}
+          onJumpViewpoint={onJumpViewpoint}
+          onSelectPin={onSelectPin}
+          onRemove={() => removeAgendaItem(item.id)}
+          onDragStart={() => setDragIdx(idx)}
+          onDrop={() => { if (dragIdx !== null) { reorderAgenda(dragIdx, idx); setDragIdx(null); } }}
+        />
+      ))}
 
-      {/* Add controls */}
-      <div className="mt-3 pt-3 border-t border-white/10 flex flex-col gap-2">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Add to agenda</div>
-        {viewpoints.length > 0 && (
-          <div className="flex flex-col gap-1">
-            <div className="text-[10px] text-gray-500">From viewpoints:</div>
-            {viewpoints.map((v) => (
+      <button
+        onClick={() => addAgendaItem({ title: `Slide ${agenda.length + 1}` })}
+        className="mt-3 flex items-center justify-center gap-2 p-3 rounded border-2 border-dashed border-white/15 hover:border-emerald-400/50 hover:bg-emerald-500/5 text-xs font-bold uppercase tracking-wide text-gray-400 hover:text-emerald-200 transition-colors"
+      >
+        <Plus size={14} /> Add blank slide
+      </button>
+    </div>
+  );
+};
+
+// ─── Slide card ─────────────────────────────────────────────────────────────
+
+const SlideCard: React.FC<{
+  item: AgendaItem;
+  idx: number;
+  viewpoints: ReviewViewpoint[];
+  pins: ReviewPin[];
+  onJumpViewpoint: (vp: ReviewViewpoint) => void;
+  onSelectPin: (id: string) => void;
+  onRemove: () => void;
+  onDragStart: () => void;
+  onDrop: () => void;
+}> = ({ item, idx, viewpoints, pins, onJumpViewpoint, onSelectPin, onRemove, onDragStart, onDrop }) => {
+  const updateAgendaItem = useReviewSetupStore((s) => s.updateAgendaItem);
+  const attachVp = useReviewSetupStore((s) => s.attachViewpointToAgendaItem);
+  const detachVp = useReviewSetupStore((s) => s.detachViewpointFromAgendaItem);
+  const attachPin = useReviewSetupStore((s) => s.attachPinToAgendaItem);
+  const detachPin = useReviewSetupStore((s) => s.detachPinFromAgendaItem);
+  const [pickerOpen, setPickerOpen] = useState<'viewpoint' | 'pin' | null>(null);
+
+  const linkedVps = item.viewpointIds
+    .map((vid) => viewpoints.find((v) => v.id === vid))
+    .filter((v): v is ReviewViewpoint => Boolean(v));
+  const linkedPins = item.pinIds
+    .map((pid) => pins.find((p) => p.id === pid))
+    .filter((p): p is ReviewPin => Boolean(p));
+
+  const availableVps = viewpoints.filter((v) => !item.viewpointIds.includes(v.id));
+  const availablePins = pins.filter((p) => !item.pinIds.includes(p.id));
+
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+      className="rounded border border-white/10 bg-white/5 overflow-hidden"
+    >
+      {/* Header */}
+      <div className="flex items-start gap-2 p-2 border-b border-white/5">
+        <div className="flex flex-col items-center pt-1">
+          <GripVertical size={12} className="text-gray-600 cursor-grab" />
+          <span className="text-[9px] font-mono text-gray-500 tabular-nums">{String(idx + 1).padStart(2, '0')}</span>
+        </div>
+        <input
+          value={item.title}
+          onChange={(e) => updateAgendaItem(item.id, { title: e.target.value })}
+          placeholder="Slide title"
+          className="flex-1 bg-transparent text-xs font-bold outline-none placeholder:text-gray-600"
+        />
+        <button onClick={onRemove} className="text-gray-500 hover:text-red-400" title="Remove slide">
+          <X size={14} />
+        </button>
+      </div>
+
+      {/* Speaker notes */}
+      <div className="px-2 pt-2">
+        <textarea
+          value={item.notes ?? ''}
+          onChange={(e) => updateAgendaItem(item.id, { notes: e.target.value })}
+          placeholder="Speaker notes — what should you say at this slide?"
+          className="w-full h-14 bg-black/30 text-[11px] rounded p-1.5 border border-white/10 outline-none focus:border-emerald-400/40 placeholder:text-gray-600 resize-none"
+        />
+      </div>
+
+      {/* Attachments */}
+      <div className="p-2 flex flex-col gap-2">
+        {/* Viewpoints */}
+        {linkedVps.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {linkedVps.map((v) => (
+              <div key={v.id} className="flex items-center gap-1 rounded bg-emerald-500/10 border border-emerald-400/30 pl-1 pr-1">
+                {v.thumbnail && (
+                  <img src={v.thumbnail} alt="" className="w-6 h-4 object-cover rounded-sm" />
+                )}
+                <button
+                  onClick={() => onJumpViewpoint(v)}
+                  className="text-[10px] font-bold text-emerald-100 hover:text-white px-1 truncate max-w-[140px]"
+                  title="Jump camera to this viewpoint"
+                >
+                  <Camera size={9} className="inline -mt-0.5 mr-0.5" />{v.label}
+                </button>
+                <button
+                  onClick={() => detachVp(item.id, v.id)}
+                  className="text-emerald-300/60 hover:text-red-300"
+                  title="Remove from slide"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Pins */}
+        {linkedPins.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {linkedPins.map((p) => {
+              const sev = SEVERITY_META[p.severity];
+              return (
+                <div
+                  key={p.id}
+                  className="flex items-center gap-1 rounded border pl-1 pr-1"
+                  style={{ background: `${sev.color}1a`, borderColor: `${sev.color}66` }}
+                >
+                  <span style={{ color: sev.color }} className="flex items-center">{sev.icon}</span>
+                  <button
+                    onClick={() => onSelectPin(p.id)}
+                    className="text-[10px] font-bold text-white hover:text-white px-1 truncate max-w-[140px]"
+                    title="Show pin in Pins tab"
+                  >
+                    {p.label}
+                  </button>
+                  <button
+                    onClick={() => detachPin(item.id, p.id)}
+                    className="text-white/40 hover:text-red-300"
+                    title="Remove from slide"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Attach buttons */}
+        <div className="flex gap-1.5 flex-wrap">
+          {availableVps.length > 0 && (
+            <button
+              onClick={() => setPickerOpen(pickerOpen === 'viewpoint' ? null : 'viewpoint')}
+              className={clsx(
+                'flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors',
+                pickerOpen === 'viewpoint'
+                  ? 'bg-emerald-500/20 text-emerald-200'
+                  : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200'
+              )}
+            >
+              <Camera size={11} /> + Viewpoint
+            </button>
+          )}
+          {availablePins.length > 0 && (
+            <button
+              onClick={() => setPickerOpen(pickerOpen === 'pin' ? null : 'pin')}
+              className={clsx(
+                'flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors',
+                pickerOpen === 'pin'
+                  ? 'bg-amber-500/20 text-amber-200'
+                  : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200'
+              )}
+            >
+              <MapPin size={11} /> + Pin
+            </button>
+          )}
+          {availableVps.length === 0 && availablePins.length === 0 && linkedVps.length === 0 && linkedPins.length === 0 && (
+            <span className="text-[10px] text-gray-600 italic">No viewpoints or pins captured yet — add them in the other tabs.</span>
+          )}
+        </div>
+
+        {/* Pickers */}
+        {pickerOpen === 'viewpoint' && availableVps.length > 0 && (
+          <div className="flex flex-col gap-0.5 rounded bg-black/40 border border-white/10 p-1 max-h-40 overflow-y-auto">
+            {availableVps.map((v) => (
               <button
                 key={v.id}
-                onClick={() => addAgendaItem({ title: v.label, refType: 'viewpoint', refId: v.id })}
-                className="text-left text-xs px-2 py-1 rounded bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-200 transition-colors"
+                onClick={() => { attachVp(item.id, v.id); setPickerOpen(null); }}
+                className="flex items-center gap-2 px-2 py-1 rounded text-left text-[11px] hover:bg-emerald-500/10 hover:text-emerald-200"
               >
-                + {v.label}
+                {v.thumbnail && <img src={v.thumbnail} alt="" className="w-8 h-5 object-cover rounded-sm" />}
+                <span className="truncate">{v.label}</span>
               </button>
             ))}
           </div>
         )}
-        {pins.length > 0 && (
-          <div className="flex flex-col gap-1 mt-1">
-            <div className="text-[10px] text-gray-500">From pins:</div>
-            {pins.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => addAgendaItem({ title: p.label, refType: 'pin', refId: p.id })}
-                className="text-left text-xs px-2 py-1 rounded bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-200 transition-colors"
-              >
-                + {p.label} {p.partName ? <span className="text-gray-500">({p.partName})</span> : null}
-              </button>
-            ))}
+        {pickerOpen === 'pin' && availablePins.length > 0 && (
+          <div className="flex flex-col gap-0.5 rounded bg-black/40 border border-white/10 p-1 max-h-40 overflow-y-auto">
+            {availablePins.map((p) => {
+              const sev = SEVERITY_META[p.severity];
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => { attachPin(item.id, p.id); setPickerOpen(null); }}
+                  className="flex items-center gap-2 px-2 py-1 rounded text-left text-[11px] hover:bg-amber-500/10 hover:text-amber-100"
+                >
+                  <span style={{ color: sev.color }} className="flex items-center">{sev.icon}</span>
+                  <span className="truncate flex-1">{p.label}</span>
+                  {p.partName && <span className="text-[9px] text-gray-500 truncate">{p.partName}</span>}
+                </button>
+              );
+            })}
           </div>
         )}
-        <div className="flex gap-2 mt-1">
-          <input
-            value={topicTitle}
-            onChange={(e) => setTopicTitle(e.target.value)}
-            placeholder="Free topic"
-            className="flex-1 bg-white/5 text-xs rounded px-2 py-1.5 border border-white/10 outline-none focus:border-emerald-400/40"
-          />
-          <button
-            disabled={!topicTitle.trim()}
-            onClick={() => { addAgendaItem({ title: topicTitle.trim(), refType: 'topic' }); setTopicTitle(''); }}
-            className="px-2 py-1.5 rounded bg-white text-black text-xs font-bold disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <Plus size={14} />
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -666,5 +898,204 @@ const Section: React.FC<{ label: string; children: React.ReactNode }> = ({ label
     {children}
   </div>
 );
+
+const PresenceStack: React.FC<{ peers: CurationPresence[] }> = ({ peers }) => {
+  if (peers.length === 0) {
+    return (
+      <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-gray-600" title="No other contributors editing right now">
+        <span className="w-1.5 h-1.5 rounded-full bg-gray-700" /> Solo
+      </div>
+    );
+  }
+  const visible = peers.slice(0, 4);
+  const extra = peers.length - visible.length;
+  return (
+    <div className="flex items-center gap-2" title={peers.map((p) => p.name).join(', ') + ' editing now'}>
+      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+      <div className="flex -space-x-1.5">
+        {visible.map((p) => (
+          <div
+            key={p.userId}
+            className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white border-2 border-[#0A0A0A]"
+            style={{ background: p.color }}
+            title={`${p.name} · editing now`}
+          >
+            {p.name.charAt(0).toUpperCase()}
+          </div>
+        ))}
+        {extra > 0 && (
+          <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-gray-300 bg-white/10 border-2 border-[#0A0A0A]">
+            +{extra}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ShareButton: React.FC<{ reviewId: string; peerCount: number }> = ({ reviewId, peerCount }) => {
+  const [copied, setCopied] = useState<'setup' | 'room' | null>(null);
+  const [open, setOpen] = useState(false);
+  const setupUrl = `${window.location.origin}/review/${reviewId}/setup`;
+  const roomUrl = `${window.location.origin}/room/${reviewId}`;
+  const draftTitle = useReviewSetupStore((s) => s.draft?.title) || 'Untitled Review';
+
+  const copy = async (kind: 'setup' | 'room', text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 1500);
+    } catch { /* clipboard unavailable */ }
+  };
+
+  const canNativeShare = typeof navigator !== 'undefined' && typeof (navigator as any).share === 'function';
+  const nativeShare = async (kind: 'setup' | 'room', url: string) => {
+    try {
+      await (navigator as any).share({
+        title: draftTitle,
+        text: kind === 'room' ? `Join the design review: ${draftTitle}` : `Help curate: ${draftTitle}`,
+        url,
+      });
+    } catch { /* user cancelled or unsupported */ }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 px-3 py-2 rounded bg-emerald-500/15 border border-emerald-400/30 hover:bg-emerald-500/25 hover:border-emerald-400/50 text-[11px] font-bold uppercase tracking-wide text-emerald-200 transition-colors relative"
+        title="Share this curation"
+      >
+        <Link2 size={13} /> Share
+        {peerCount > 0 && (
+          <span className="ml-1 min-w-[14px] h-3.5 px-1 rounded-full text-[8px] flex items-center justify-center font-bold bg-emerald-400 text-black">
+            {peerCount}
+          </span>
+        )}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[380px] bg-[#111] border border-white/10 rounded-lg shadow-2xl p-3 flex flex-col gap-3">
+            <div className="text-[10px] text-gray-400 leading-relaxed">
+              Send <span className="text-emerald-300">contributors</span> the curation link so they can add content before the meeting. On meeting day, send the <span className="text-emerald-300">room link</span> so they jump straight in.
+            </div>
+
+            <div>
+              <div className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1.5">Invite contributors (curation)</div>
+              <div className="flex gap-1.5">
+                <input
+                  readOnly
+                  value={setupUrl}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="flex-1 bg-black/40 text-[11px] font-mono text-gray-300 rounded px-2 py-1.5 border border-white/10 outline-none"
+                />
+                <button
+                  onClick={() => copy('setup', setupUrl)}
+                  className={clsx(
+                    'px-2 rounded text-[10px] font-bold uppercase tracking-wider transition-colors',
+                    copied === 'setup' ? 'bg-emerald-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white',
+                  )}
+                >
+                  {copied === 'setup' ? <Check size={12} /> : 'Copy'}
+                </button>
+                {canNativeShare && (
+                  <button
+                    onClick={() => nativeShare('setup', setupUrl)}
+                    className="px-2 rounded text-[10px] font-bold uppercase tracking-wider bg-white/10 hover:bg-white/20 text-white transition-colors"
+                    title="Send via your device's share sheet (email, Slack, Messages…)"
+                  >
+                    Send…
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="h-px bg-white/5" />
+
+            <div>
+              <div className="text-[9px] font-bold uppercase tracking-widest text-gray-500 mb-1.5">Meeting-day link (room)</div>
+              <div className="flex gap-1.5">
+                <input
+                  readOnly
+                  value={roomUrl}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="flex-1 bg-black/40 text-[11px] font-mono text-gray-300 rounded px-2 py-1.5 border border-white/10 outline-none"
+                />
+                <button
+                  onClick={() => copy('room', roomUrl)}
+                  className={clsx(
+                    'px-2 rounded text-[10px] font-bold uppercase tracking-wider transition-colors',
+                    copied === 'room' ? 'bg-emerald-500 text-black' : 'bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-200',
+                  )}
+                >
+                  {copied === 'room' ? <Check size={12} /> : 'Copy'}
+                </button>
+                {canNativeShare && (
+                  <button
+                    onClick={() => nativeShare('room', roomUrl)}
+                    className="px-2 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-200 transition-colors"
+                    title="Send via your device's share sheet"
+                  >
+                    Send…
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {peerCount > 0 && (
+              <div className="text-[10px] text-emerald-400/80 flex items-center gap-1.5 pt-1 border-t border-white/5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                {peerCount} other {peerCount === 1 ? 'person is' : 'people are'} editing right now
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const SyncIndicator: React.FC<{ status: SyncStatus }> = ({ status }) => {
+  if (status === 'live') return (
+    <span className="inline-flex items-center gap-1 text-emerald-400/80 normal-case" title="Realtime sync active — peers see your edits instantly">
+      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live sync
+    </span>
+  );
+  if (status === 'polling') return (
+    <span className="inline-flex items-center gap-1 text-amber-400/80 normal-case" title="Realtime not available — falling back to polling every 5s">
+      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" /> Polling
+    </span>
+  );
+  if (status === 'offline') return (
+    <span className="inline-flex items-center gap-1 text-red-400/80 normal-case" title="Sync stopped">
+      <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> Offline
+    </span>
+  );
+  return (
+    <span className="inline-flex items-center gap-1 text-gray-500 normal-case">
+      <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-pulse" /> Connecting…
+    </span>
+  );
+};
+
+const SaveIndicator: React.FC<{ state: 'idle' | 'saving' | 'saved' | 'error' }> = ({ state }) => {
+  if (state === 'saving') return (
+    <span className="inline-flex items-center gap-1 text-amber-400/80 normal-case">
+      <Cloud size={11} className="animate-pulse" /> Saving…
+    </span>
+  );
+  if (state === 'saved') return (
+    <span className="inline-flex items-center gap-1 text-emerald-400/80 normal-case">
+      <Check size={11} /> Saved
+    </span>
+  );
+  if (state === 'error') return (
+    <span className="inline-flex items-center gap-1 text-red-400/80 normal-case" title="Failed to save to cloud — your edits stay in this browser">
+      <CloudOff size={11} /> Local only
+    </span>
+  );
+  return <span className="inline-flex items-center gap-1 text-gray-600 normal-case"><Cloud size={11} /> Idle</span>;
+};
 
 export default ReviewSetupPage;

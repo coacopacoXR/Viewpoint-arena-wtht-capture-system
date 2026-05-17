@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase, TrackerSession } from '../lib/supabase';
 import { useIdentity, saveIdentity, AVATAR_COLORS, UserIdentity } from '../lib/identity';
+import { listRecentCurations, deleteCuration, getCurationSummary, type CurationSummary } from '../lib/curationsRepo';
+import { Camera, MapPin, Layers, Play, Pencil, Trash2 } from 'lucide-react';
 
 const ROLES = ['Engineer', 'Designer', 'Systems Architect', 'Reviewer', 'Observer'];
 
@@ -45,10 +47,42 @@ const LobbyPage: React.FC = () => {
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [curations, setCurations] = useState<CurationSummary[]>([]);
+  const [invitedPreview, setInvitedPreview] = useState<CurationSummary | null | undefined>(
+    joinRoomId ? undefined : null,
+  );
 
   useEffect(() => {
     fetchStats().then(s => { setStats(s); setLoadingStats(false); });
   }, []);
+
+  useEffect(() => {
+    listRecentCurations(8).then(setCurations);
+  }, []);
+
+  // If the user arrived via a room URL, fetch the curation summary so we can
+  // show a preview card — they know exactly what they're walking into.
+  useEffect(() => {
+    if (!joinRoomId) { setInvitedPreview(null); return; }
+    getCurationSummary(joinRoomId).then(setInvitedPreview);
+  }, [joinRoomId]);
+
+  function resumeCuration(id: string, mode: 'setup' | 'room') {
+    const ident = name.trim() ? buildIdentity() : identity;
+    if (ident) setIdentity(ident);
+    if (mode === 'room') {
+      sessionStorage.setItem('vp_enteredRoom', id);
+      navigate(`/room/${id}`, { state: { fromLobby: true } });
+    } else {
+      navigate(`/review/${id}/setup`);
+    }
+  }
+
+  async function handleDeleteCuration(id: string) {
+    if (!confirm('Delete this curation? It will be gone for everyone with the link.')) return;
+    const ok = await deleteCuration(id);
+    if (ok) setCurations((cs) => cs.filter((c) => c.id !== id));
+  }
 
   function buildIdentity(): UserIdentity {
     return { name: name.trim(), color, role: role || undefined };
@@ -173,8 +207,30 @@ const LobbyPage: React.FC = () => {
             ) : joinRoomId ? (
               <>
                 <p className="text-gray-600 text-xs font-mono uppercase tracking-widest mb-1">You've been invited</p>
-                <h1 className="text-white text-2xl font-bold">Join a session</h1>
-                <p className="text-gray-600 text-sm mt-1">Identify yourself to continue.</p>
+                <h1 className="text-white text-2xl font-bold">
+                  {invitedPreview ? invitedPreview.title : 'Join a session'}
+                </h1>
+                {invitedPreview === undefined && (
+                  <p className="text-gray-600 text-sm mt-1">Loading preview…</p>
+                )}
+                {invitedPreview === null && (
+                  <p className="text-gray-600 text-sm mt-1">Identify yourself to continue.</p>
+                )}
+                {invitedPreview && (
+                  <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+                    {invitedPreview.description && (
+                      <p className="text-[12px] text-gray-300 leading-snug line-clamp-2 mb-2">{invitedPreview.description}</p>
+                    )}
+                    <div className="flex items-center gap-3 text-[11px] font-mono">
+                      <span className="inline-flex items-center gap-1 text-emerald-300"><Layers size={10} />{invitedPreview.slide_count} slides</span>
+                      <span className="inline-flex items-center gap-1 text-gray-400"><Camera size={10} />{invitedPreview.viewpoint_count} viewpoints</span>
+                      <span className="inline-flex items-center gap-1 text-gray-400"><MapPin size={10} />{invitedPreview.pin_count} pins</span>
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-2">
+                      Last updated {fmtShort(invitedPreview.updated_at)} · ID {invitedPreview.id.slice(0, 8)}
+                    </p>
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -261,6 +317,73 @@ const LobbyPage: React.FC = () => {
 
             {error && <p className="text-red-400 text-xs font-mono">{error}</p>}
           </div>
+
+          {/* Saved curations */}
+          <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-white/5" />
+                <span className="text-[10px] font-mono uppercase tracking-widest text-gray-600">
+                  Saved Reviews{curations.length > 0 ? ` · ${curations.length}` : ''}
+                </span>
+                <div className="flex-1 h-px bg-white/5" />
+              </div>
+              {curations.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/10 px-4 py-5 text-center">
+                  <p className="text-[11px] text-gray-500">No saved reviews yet.</p>
+                  <p className="text-[10px] text-gray-600 mt-1">
+                    Click <span className="text-emerald-400">Curate a design review</span> to start one — it'll save automatically and appear here for anyone you share the link with.
+                  </p>
+                </div>
+              ) : (
+              <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1 custom-scrollbar">
+                {curations.map((c) => (
+                  <div
+                    key={c.id}
+                    className="group rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-emerald-500/30 transition-colors"
+                  >
+                    <button
+                      onClick={() => resumeCuration(c.id, 'room')}
+                      className="w-full text-left px-3 py-2"
+                      title="Open the review room"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-white truncate">{c.title || 'Untitled review'}</span>
+                        <span className="text-[9px] font-mono text-gray-600 shrink-0">{fmtShort(c.updated_at)}</span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-gray-500">
+                        <span className="inline-flex items-center gap-1"><Layers size={9} />{c.slide_count}</span>
+                        <span className="inline-flex items-center gap-1"><Camera size={9} />{c.viewpoint_count}</span>
+                        <span className="inline-flex items-center gap-1"><MapPin size={9} />{c.pin_count}</span>
+                        <span className="ml-auto text-gray-700 font-mono truncate">{c.id.slice(0, 8)}</span>
+                      </div>
+                    </button>
+                    <div className="px-3 pb-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => resumeCuration(c.id, 'room')}
+                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-200 text-[10px] font-bold uppercase tracking-wider transition-colors"
+                      >
+                        <Play size={10} /> Open Room
+                      </button>
+                      <button
+                        onClick={() => resumeCuration(c.id, 'setup')}
+                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/15 text-gray-300 text-[10px] font-bold uppercase tracking-wider transition-colors"
+                        title="Resume editing"
+                      >
+                        <Pencil size={10} /> Edit
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCuration(c.id)}
+                        className="px-2 py-1 rounded bg-white/5 hover:bg-red-500/20 hover:text-red-300 text-gray-500 transition-colors"
+                        title="Delete curation"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              )}
+            </div>
 
           {/* Divider + Tracker link */}
           <div className="flex items-center gap-3">

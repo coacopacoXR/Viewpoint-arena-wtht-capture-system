@@ -19,6 +19,7 @@ import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
 import CommentsPanel from './CommentsPanel';
 import ChatPanel from './ChatPanel';
+import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import FingerPointerHost from './FingerPointerHost';
 import ReviewViewpointsDock from './ReviewViewpointsDock';
 import SceneTree from './SceneTree';
@@ -220,6 +221,9 @@ const Interface: React.FC = () => {
   const [isSessionSyncExpanded, setIsSessionSyncExpanded] = useState(true);
   const [isFollowersExpanded, setIsFollowersExpanded] = useState(true);
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
+  // When the host enters split-screen Manager mode, the right side-panel is
+  // redundant (its tabs are absorbed into the workspace). Hide it entirely.
+  const managerMode = useActiveReviewStore((s) => s.managerMode);
 
   const unresolvedComments = comments.filter(c => !c.resolved).length;
   const liveChat = useStore(state => state.liveChat);
@@ -703,7 +707,9 @@ const Interface: React.FC = () => {
           </div>
       )}
 
-      {/* RIGHT PANEL: Mode Switcher + Content */}
+      {/* RIGHT PANEL: Mode Switcher + Content. Hidden while the host is in
+          split-screen Manager mode (its tabs live there instead). */}
+      {!managerMode && (
       <div className={clsx(
         "absolute right-6 top-20 bottom-20 flex flex-col pointer-events-none z-[40] transition-all duration-300",
         isRightPanelCollapsed ? "w-12" : "w-[320px]"
@@ -836,6 +842,7 @@ const Interface: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* Comment Mode Indicator */}
       {(commentMode === 'placing-comment' || commentMode === 'placing-drawing') && (

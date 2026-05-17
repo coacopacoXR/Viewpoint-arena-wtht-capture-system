@@ -77,6 +77,11 @@ interface ActiveReviewState {
   jumpTarget: { position: [number, number, number]; lookAt: [number, number, number] } | null;
   activeViewpointIdx: number;
   agendaIdx: number;
+  // Host-only split-screen manager workspace (action triage + follow-up notes).
+  managerMode: boolean;
+  // Free-form session-wide notes the manager keeps during the meeting (local to
+  // each participant — the host's copy is what matters; not synced in v1).
+  sessionNotes: string;
 
   setConfig: (c: ReviewDraft | null) => void;
   jumpToViewpoint: (id: string) => void;
@@ -89,6 +94,7 @@ interface ActiveReviewState {
 
   updateViewpoint: (id: string, patch: Partial<ReviewViewpoint>) => ReviewDraft | null;
   updatePin: (id: string, patch: Partial<ReviewPin>) => ReviewDraft | null;
+  updateAgendaItem: (id: string, patch: Partial<import('./reviewSetupStore').AgendaItem>) => ReviewDraft | null;
 
   // Called by CommentsPanel when the user edits a pre-review comment.
   // Translates the comment patch back into a viewpoint/pin patch and returns
@@ -96,6 +102,12 @@ interface ActiveReviewState {
   applyCommentEdit: (commentId: string, patch: Partial<SpatialComment>) => ReviewDraft | null;
 
   setAgendaIdx: (idx: number) => void;
+  nextSlide: () => void;
+  prevSlide: () => void;
+  jumpToSlide: (idx: number) => void;
+
+  setManagerMode: (open: boolean) => void;
+  setSessionNotes: (notes: string) => void;
 }
 
 export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
@@ -103,6 +115,8 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
   jumpTarget: null,
   activeViewpointIdx: 0,
   agendaIdx: 0,
+  managerMode: false,
+  sessionNotes: '',
 
   setConfig: (config) => {
     set({
@@ -193,4 +207,41 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
   },
 
   setAgendaIdx: (agendaIdx) => set({ agendaIdx }),
+
+  jumpToSlide: (idx) => {
+    const cfg = get().config;
+    if (!cfg || cfg.agenda.length === 0) return;
+    const safeIdx = Math.max(0, Math.min(cfg.agenda.length - 1, idx));
+    set({ agendaIdx: safeIdx });
+    // Auto-jump camera to the first attached viewpoint, if any.
+    const firstVpId = cfg.agenda[safeIdx].viewpointIds[0];
+    if (firstVpId) get().jumpToViewpoint(firstVpId);
+  },
+
+  nextSlide: () => {
+    const { config, agendaIdx } = get();
+    if (!config || config.agenda.length === 0) return;
+    get().jumpToSlide((agendaIdx + 1) % config.agenda.length);
+  },
+
+  prevSlide: () => {
+    const { config, agendaIdx } = get();
+    if (!config || config.agenda.length === 0) return;
+    get().jumpToSlide((agendaIdx - 1 + config.agenda.length) % config.agenda.length);
+  },
+
+  updateAgendaItem: (id, patch) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next: ReviewDraft = {
+      ...cfg,
+      agenda: cfg.agenda.map((a) => a.id === id ? { ...a, ...patch } : a),
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    return next;
+  },
+
+  setManagerMode: (managerMode) => set({ managerMode }),
+  setSessionNotes: (sessionNotes) => set({ sessionNotes }),
 }));
