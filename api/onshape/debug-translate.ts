@@ -15,16 +15,17 @@ interface Attempt {
   body: Record<string, unknown>;
 }
 
+// Round 2: focus on the variations that got past the POST validation
+// (200 OK) but never got polled, plus a few new combos using Onshape's
+// full visualization-tessellation param set.
 const ATTEMPTS: Attempt[] = [
-  { label: 'A: bare-minimum',          body: { formatName: 'GLTF' } },
-  { label: 'B: bare + storeFalse',     body: { formatName: 'GLTF', storeInDocument: false } },
-  { label: 'C: tolerances',            body: { formatName: 'GLTF', storeInDocument: false, angleTolerance: 0.1745, chordTolerance: 0.06 } },
-  { label: 'D: maxFacet only',         body: { formatName: 'GLTF', storeInDocument: false, maxFacetWidth: 1.0 } },
-  { label: 'E: storeTrue',             body: { formatName: 'GLTF', storeInDocument: true } },
-  { label: 'F: flatten + storeFalse',  body: { formatName: 'GLTF', storeInDocument: false, flattenAssemblies: false } },
-  { label: 'G: visualization',         body: { formatName: 'GLTF', storeInDocument: false, outputFormat: 'binary', glTFVersion: '2.0' } },
-  { label: 'H: GLB (binary)',          body: { formatName: 'GLB' } },
-  { label: 'I: gltf lowercase',        body: { formatName: 'gltf', storeInDocument: false } },
+  { label: 'D: maxFacet only',        body: { formatName: 'GLTF', storeInDocument: false, maxFacetWidth: 1.0 } },
+  { label: 'F: flattenAssemblies',    body: { formatName: 'GLTF', storeInDocument: false, flattenAssemblies: false } },
+  { label: 'G: outputFormat+version', body: { formatName: 'GLTF', storeInDocument: false, outputFormat: 'binary', glTFVersion: '2.0' } },
+  { label: 'J: full tessellation',    body: { formatName: 'GLTF', storeInDocument: false, angleTolerance: 0.1745, chordTolerance: 0.06, maxFacetWidth: 0.5, minimumFacetWidth: 0.01 } },
+  { label: 'K: explicit unitSystem',  body: { formatName: 'GLTF', storeInDocument: false, unit: 'millimeter' } },
+  { label: 'L: triangulationFalse',   body: { formatName: 'GLTF', storeInDocument: false, triangulate: true } },
+  { label: 'M: assembly-format-only', body: { formatName: 'GLTF', storeInDocument: false, includeNonSolids: false, expandSubassemblies: true } },
 ];
 
 async function pollOnce(req: VercelRequest, res: VercelResponse, translationId: string): Promise<{ state: string; reason?: string; dataId?: string; documentId?: string }> {
@@ -55,13 +56,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? `/api/v9/assemblies/d/${d}/w/${w}/e/${e}/translations`
       : `/api/v9/partstudios/d/${d}/w/${w}/e/${e}/translations`;
 
-    const results: any[] = [];
-
-    // We only have ~55s total on Vercel — try the first 3 with full polling,
-    // the rest with just the start-call (often Onshape's body validation
-    // happens before processing, so 400 vs 200 on POST is already informative).
-    for (let i = 0; i < ATTEMPTS.length; i++) {
-      const attempt = ATTEMPTS[i];
+    // Kick off all translations in parallel — POSTs return immediately with
+    // a translation id. Then poll them in parallel too. Total wall time is
+    // bounded by the slowest individual translation, not the sum, so we can
+    // fit everything in Vercel's 60s budget.
+    const startResults = await Promise.all(ATTEMPTS.map(async (attempt) => {
       const start = await callOnshape(req, path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -70,22 +69,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       applyRefreshedCookies(res, start.refreshedCookies);
       const startStatus = start.response.status;
       const startBody = await start.response.text();
-      const entry: any = { label: attempt.label, body: attempt.body, startStatus, startBody: startBody.slice(0, 200) };
-
-      if (start.response.ok && i < 3) {
-        // For top-3, poll to find out if processing succeeds.
-        try {
-          const handle = JSON.parse(startBody) as { id?: string };
-          if (handle.id) {
-            const poll = await pollOnce(req, res, handle.id);
-            entry.pollResult = poll;
-          }
-        } catch (err) {
-          entry.pollError = (err as Error).message;
-        }
+      let translationId: string | null = null;
+      if (start.response.ok) {
+        try { translationId = (JSON.parse(startBody) as { id?: string }).id ?? null; } catch { /* */ }
       }
-      results.push(entry);
-    }
-    res.status(200).json({ tested: ATTEMPTS.length, results });
+      return { attempt, startStatus, startBody: startBody.slice(0, 200), translationId };
+    }));
+
+    const polled = await Promise.all(startResults.map(async (r) => {
+      if (!r.translationId) {
+        return { label: r.attempt.label, body: r.attempt.body, startStatus: r.startStatus, startBody: r.startBody };
+      }
+      const poll = await pollOnce(req, res, r.translationId);
+      return { label: r.attempt.label, body: r.attempt.body, startStatus: r.startStatus, pollResult: poll };
+    }));
+
+    res.status(200).json({ tested: ATTEMPTS.length, results: polled });
   });
 }
