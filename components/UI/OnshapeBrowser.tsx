@@ -269,25 +269,40 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
                   </div>
                 )}
                 {elements?.map((el) => (
-                  <button
+                  <div
                     key={el.id}
-                    onClick={() => importElement(el)}
-                    className="text-left rounded border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-emerald-400/40 transition-all p-2 flex items-center gap-2"
+                    className="group flex items-center rounded border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-emerald-400/40 transition-all"
                   >
-                    {el.thumbnail ? (
-                      <img src={el.thumbnail} alt="" className="w-10 h-10 rounded object-cover bg-black/40" loading="lazy" />
-                    ) : (
-                      <div className="w-10 h-10 rounded bg-white/5 flex items-center justify-center">
-                        {el.type === 'ASSEMBLY' ? <Layers size={16} className="text-emerald-400" /> : <Box size={16} className="text-blue-400" />}
+                    <button
+                      onClick={() => importElement(el)}
+                      className="text-left p-2 flex items-center gap-2 flex-1 min-w-0"
+                    >
+                      {el.thumbnail ? (
+                        <img src={el.thumbnail} alt="" className="w-10 h-10 rounded object-cover bg-black/40" loading="lazy" />
+                      ) : (
+                        <div className="w-10 h-10 rounded bg-white/5 flex items-center justify-center">
+                          {el.type === 'ASSEMBLY' ? <Layers size={16} className="text-emerald-400" /> : <Box size={16} className="text-blue-400" />}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[12px] font-bold text-white truncate">{el.name}</div>
+                        <div className="text-[10px] text-white/40 uppercase tracking-wider">
+                          {el.type === 'ASSEMBLY' ? 'Assembly' : 'Part Studio'}
+                        </div>
                       </div>
+                    </button>
+                    {selectedDoc?.defaultWorkspaceId && (
+                      <a
+                        href={`/api/onshape/debug-translate?d=${selectedDoc.id}&w=${selectedDoc.defaultWorkspaceId}&e=${el.id}&type=${el.type}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Diagnostic: try 9 different translation bodies and report which work (opens in new tab, takes ~30s)"
+                        className="opacity-0 group-hover:opacity-100 text-[9px] font-bold uppercase tracking-wider text-amber-300/80 hover:text-amber-200 hover:bg-amber-500/10 px-2 py-1 mr-2 rounded transition-all"
+                      >
+                        debug
+                      </a>
                     )}
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[12px] font-bold text-white truncate">{el.name}</div>
-                      <div className="text-[10px] text-white/40 uppercase tracking-wider">
-                        {el.type === 'ASSEMBLY' ? 'Assembly' : 'Part Studio'}
-                      </div>
-                    </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             </div>
