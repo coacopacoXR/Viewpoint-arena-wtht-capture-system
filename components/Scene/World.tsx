@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Grid, Environment, ContactShadows } from '@react-three/drei';
+import type * as THREE from 'three';
 
 class EnvErrorBoundary extends React.Component<{ children: React.ReactNode }> {
   state = { failed: false };
@@ -18,9 +19,12 @@ import { ViewMode } from '../../types';
 
 interface WorldProps {
   hideAgents?: boolean;
+  /** When provided, the inner model-transform group attaches to this ref so
+   * the setup canvas can drive it with TransformControls. */
+  modelGroupRef?: React.MutableRefObject<THREE.Group | null>;
 }
 
-const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride }) => {
+const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGroupRef }) => {
   // Use selectors to improve performance and prevent re-renders
   const isPlaying = useStore(state => state.isPlaying);
   const setTime = useStore(state => state.setTime);
@@ -88,6 +92,7 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride }) => {
         {/* Inner group applies the curator's transform — affects only the
             model itself, not contact shadows / heatmap / etc. */}
         <group
+          ref={modelGroupRef as React.RefObject<THREE.Group>}
           position={modelTransform.position}
           rotation={modelTransform.rotation}
           scale={modelTransform.scale}

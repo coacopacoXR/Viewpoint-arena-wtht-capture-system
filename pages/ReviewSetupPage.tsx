@@ -6,7 +6,7 @@ import {
   Play, Plus, GripVertical, X, AlertTriangle, Info, ShieldAlert,
   FileBox, Layers, Cloud, CloudOff, Check, Link2, Move3D, RotateCcw
 } from 'lucide-react';
-import ReviewSetupCanvas, { type ReviewSetupCanvasHandle } from '../components/Scene/ReviewSetupCanvas';
+import ReviewSetupCanvas, { type ReviewSetupCanvasHandle, type GizmoMode } from '../components/Scene/ReviewSetupCanvas';
 import {
   useReviewSetupStore,
   type ReviewViewpoint,
@@ -43,6 +43,7 @@ const ReviewSetupPage: React.FC = () => {
 
   const [tab, setTab] = useState<TabId>('asset');
   const [pinMode, setPinMode] = useState(false);
+  const [gizmoMode, setGizmoMode] = useState<GizmoMode>(null);
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const canvasRef = useRef<ReviewSetupCanvasHandle>(null);
 
@@ -259,12 +260,16 @@ const ReviewSetupPage: React.FC = () => {
             pinMode={pinMode}
             selectedPinId={selectedPinId}
             onSelectPin={setSelectedPinId}
+            gizmoMode={gizmoMode}
           />
           {pinMode && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-amber-500/95 text-black text-xs font-bold uppercase tracking-widest pointer-events-none shadow-lg">
               Pin mode · Click on a part
             </div>
           )}
+
+          {/* Gizmo mode toolbar — top-right floats over the canvas */}
+          <GizmoToolbar mode={gizmoMode} onChange={setGizmoMode} />
           <button
             onClick={() => {
               const vp = canvasRef.current?.captureViewpoint();
@@ -991,6 +996,10 @@ const TransformSection: React.FC = () => {
               value={Number(deg.toFixed(1))}
               step={5}
               onChange={(v) => updateRotDeg(i as 0 | 1 | 2, v)}
+              quickAction={{
+                label: '+90',
+                onClick: () => updateRotDeg(i as 0 | 1 | 2, deg + 90),
+              }}
             />
           );
         })}
@@ -1052,18 +1061,62 @@ const TransformInput: React.FC<{
   value: number;
   step: number;
   onChange: (v: number) => void;
-}> = ({ axis, value, step, onChange }) => {
+  /** Optional quick-action button shown after the input (e.g., +90° for rotations). */
+  quickAction?: { label: string; onClick: () => void };
+}> = ({ axis, value, step, onChange, quickAction }) => {
   const axisColor = axis === 'X' ? 'text-red-400' : axis === 'Y' ? 'text-emerald-400' : 'text-blue-400';
   return (
-    <div className="flex items-center gap-1 bg-white/5 rounded border border-white/10 px-1.5 py-1 focus-within:border-emerald-400/40">
+    <div className="flex items-center gap-1 bg-white/5 rounded border border-white/10 pl-1.5 pr-0.5 py-0.5 focus-within:border-emerald-400/40">
       <span className={clsx('text-[10px] font-bold font-mono', axisColor)}>{axis}</span>
       <input
         type="number"
         value={value}
         step={step}
         onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-        className="w-full bg-transparent text-[11px] font-mono outline-none text-white tabular-nums"
+        className="w-full min-w-0 bg-transparent text-[11px] font-mono outline-none text-white tabular-nums py-0.5"
       />
+      {quickAction && (
+        <button
+          onClick={quickAction.onClick}
+          className="shrink-0 px-1 py-0.5 rounded bg-white/5 hover:bg-emerald-500/20 hover:text-emerald-200 text-[9px] font-bold font-mono text-gray-400 transition-colors"
+          title={`Snap to nearest 90° and add ${quickAction.label}`}
+        >
+          {quickAction.label}
+        </button>
+      )}
+    </div>
+  );
+};
+
+// Top-right floating toolbar for switching the canvas TransformControls mode.
+// Three icons: translate / rotate / scale. Clicking the active one toggles off.
+const GizmoToolbar: React.FC<{ mode: GizmoMode; onChange: (m: GizmoMode) => void }> = ({ mode, onChange }) => {
+  const toggle = (m: NonNullable<GizmoMode>) => onChange(mode === m ? null : m);
+  return (
+    <div className="absolute top-4 right-4 flex items-center gap-1 bg-black/70 backdrop-blur-md p-1 rounded border border-white/10 shadow-lg pointer-events-auto z-10">
+      {(['translate', 'rotate', 'scale'] as const).map((m) => {
+        const active = mode === m;
+        return (
+          <button
+            key={m}
+            onClick={() => toggle(m)}
+            className={clsx(
+              'w-8 h-8 rounded flex items-center justify-center transition-colors',
+              active ? 'bg-emerald-500 text-black' : 'text-white/70 hover:text-white hover:bg-white/10',
+            )}
+            title={`${m[0].toUpperCase() + m.slice(1)} (click model after enabling)`}
+          >
+            {m === 'translate' && <Move3D size={14} />}
+            {m === 'rotate' && <RotateCcw size={14} />}
+            {m === 'scale' && <span className="text-[11px] font-bold font-mono">⤡</span>}
+          </button>
+        );
+      })}
+      {mode && (
+        <div className="ml-1 pl-2 border-l border-white/10 text-[9px] font-bold uppercase tracking-wider text-emerald-300 pr-1">
+          {mode}
+        </div>
+      )}
     </div>
   );
 };
