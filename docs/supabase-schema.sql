@@ -64,6 +64,7 @@ begin
 end;
 $$ language plpgsql;
 
+drop trigger if exists tracker_items_updated_at on tracker_items;
 create trigger tracker_items_updated_at
   before update on tracker_items
   for each row execute function update_updated_at();
@@ -74,17 +75,80 @@ alter table tracker_items enable row level security;
 alter table tracker_comments enable row level security;
 alter table tracker_status_history enable row level security;
 
-create policy "public read sessions" on tracker_sessions for select using (true);
+drop policy if exists "public read sessions" on tracker_sessions;
+drop policy if exists "public insert sessions" on tracker_sessions;
+drop policy if exists "public update sessions" on tracker_sessions;
+create policy "public read sessions"   on tracker_sessions for select using (true);
 create policy "public insert sessions" on tracker_sessions for insert with check (true);
 create policy "public update sessions" on tracker_sessions for update using (true);
 
-create policy "public read items" on tracker_items for select using (true);
+drop policy if exists "public read items" on tracker_items;
+drop policy if exists "public insert items" on tracker_items;
+drop policy if exists "public update items" on tracker_items;
+drop policy if exists "public delete items" on tracker_items;
+create policy "public read items"   on tracker_items for select using (true);
 create policy "public insert items" on tracker_items for insert with check (true);
 create policy "public update items" on tracker_items for update using (true);
 create policy "public delete items" on tracker_items for delete using (true);
 
-create policy "public read comments" on tracker_comments for select using (true);
+drop policy if exists "public read comments" on tracker_comments;
+drop policy if exists "public insert comments" on tracker_comments;
+create policy "public read comments"   on tracker_comments for select using (true);
 create policy "public insert comments" on tracker_comments for insert with check (true);
 
-create policy "public read history" on tracker_status_history for select using (true);
+drop policy if exists "public read history" on tracker_status_history;
+drop policy if exists "public insert history" on tracker_status_history;
+create policy "public read history"   on tracker_status_history for select using (true);
 create policy "public insert history" on tracker_status_history for insert with check (true);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Review curations (the pre-meeting curated content: title, description,
+-- model, viewpoints, pins, agenda slides). Whole nested structure is stored
+-- as jsonb to mirror the TypeScript ReviewDraft type. Multi-user editable;
+-- the URL /review/:id/setup is the share key.
+--
+-- NOTE: imported GLB/OBJ files are NOT persisted server-side in v1 — only
+-- the preset model TYPE survives across sessions. TODO: move imported files
+-- to a Supabase Storage bucket ('review-models' with public read) and store
+-- the file's URL instead of base64.
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists review_curations (
+  id text primary key,
+  title text not null default 'Untitled Review',
+  description text not null default '',
+  asset jsonb not null default '{}'::jsonb,
+  viewpoints jsonb not null default '[]'::jsonb,
+  pins jsonb not null default '[]'::jsonb,
+  agenda jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists review_curations_updated_at_idx
+  on review_curations (updated_at desc);
+
+drop trigger if exists review_curations_updated_at on review_curations;
+create trigger review_curations_updated_at
+  before update on review_curations
+  for each row execute function update_updated_at();
+
+alter table review_curations enable row level security;
+
+drop policy if exists "public read curations" on review_curations;
+drop policy if exists "public insert curations" on review_curations;
+drop policy if exists "public update curations" on review_curations;
+drop policy if exists "public delete curations" on review_curations;
+create policy "public read curations"   on review_curations for select using (true);
+create policy "public insert curations" on review_curations for insert with check (true);
+create policy "public update curations" on review_curations for update using (true);
+create policy "public delete curations" on review_curations for delete using (true);
+
+-- Enable Supabase Realtime so multiple curators editing the same review see
+-- each other's changes live (used by the setup page to merge concurrent
+-- contributions before the meeting). Wrapped in a DO block to ignore the
+-- "already member of publication" error on re-runs.
+do $$
+begin
+  alter publication supabase_realtime add table review_curations;
+exception when duplicate_object then null;
+end $$;

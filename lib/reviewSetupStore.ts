@@ -28,13 +28,13 @@ export interface ReviewPin {
   createdAt: number;
 }
 
-export type AgendaRefType = 'viewpoint' | 'pin' | 'topic';
-
 export interface AgendaItem {
   id: string;
   title: string;
-  refType: AgendaRefType;
-  refId?: string;        // viewpointId or pinId; undefined for free topics
+  notes?: string;        // speaker notes written at curation time
+  followUp?: string;     // notes added live during the meeting by the manager
+  viewpointIds: string[];
+  pinIds: string[];
   durationMinutes?: number;
 }
 
@@ -72,6 +72,7 @@ interface ReviewSetupState {
   // Lifecycle
   startNewDraft: (reviewId: string) => void;
   loadDraft: (reviewId: string) => boolean; // returns true if a draft was loaded
+  hydrateDraft: (draft: ReviewDraft) => void; // adopt a remote/loaded draft
   discardDraft: () => void;
 
   // Title / description
@@ -96,10 +97,14 @@ interface ReviewSetupState {
   removePin: (id: string) => void;
 
   // Agenda
-  addAgendaItem: (item: Omit<AgendaItem, 'id'>) => string;
+  addAgendaItem: (item: Omit<AgendaItem, 'id' | 'viewpointIds' | 'pinIds'> & Partial<Pick<AgendaItem, 'viewpointIds' | 'pinIds'>>) => string;
   updateAgendaItem: (id: string, patch: Partial<AgendaItem>) => void;
   removeAgendaItem: (id: string) => void;
   reorderAgenda: (fromIdx: number, toIdx: number) => void;
+  attachViewpointToAgendaItem: (itemId: string, viewpointId: string) => void;
+  detachViewpointFromAgendaItem: (itemId: string, viewpointId: string) => void;
+  attachPinToAgendaItem: (itemId: string, pinId: string) => void;
+  detachPinFromAgendaItem: (itemId: string, pinId: string) => void;
 }
 
 const uid = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
@@ -136,6 +141,17 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         // No draft cached for this id — caller should call startNewDraft.
         return false;
       },
+
+      // Adopt a draft loaded from the cloud. Preserves any local
+      // importedFileBase64 if the same id is already in memory (the cloud
+      // copy strips the blob — see curationsRepo for context).
+      hydrateDraft: (incoming) => set((s) => {
+        const local = s.draft && s.draft.reviewId === incoming.reviewId ? s.draft : null;
+        const preservedAsset = local?.asset.importedFileBase64
+          ? { ...incoming.asset, importedFileBase64: local.asset.importedFileBase64, importedFileName: local.asset.importedFileName }
+          : incoming.asset;
+        return { draft: { ...incoming, asset: preservedAsset } };
+      }),
 
       discardDraft: () => set({ draft: null }),
 
@@ -228,8 +244,11 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         const next: ReviewDraft = {
           ...s.draft,
           viewpoints: s.draft.viewpoints.filter((v) => v.id !== id),
-          // Cascade: drop agenda items pointing at the deleted viewpoint.
-          agenda: s.draft.agenda.filter((a) => !(a.refType === 'viewpoint' && a.refId === id)),
+          // Cascade: drop the viewpoint reference from every slide that linked it.
+          agenda: s.draft.agenda.map((a) => ({
+            ...a,
+            viewpointIds: a.viewpointIds.filter((vid) => vid !== id),
+          })),
         };
         return { draft: touch(next) };
       }),
@@ -261,7 +280,10 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         const next: ReviewDraft = {
           ...s.draft,
           pins: s.draft.pins.filter((p) => p.id !== id),
-          agenda: s.draft.agenda.filter((a) => !(a.refType === 'pin' && a.refId === id)),
+          agenda: s.draft.agenda.map((a) => ({
+            ...a,
+            pinIds: a.pinIds.filter((pid) => pid !== id),
+          })),
         };
         return { draft: touch(next) };
       }),
@@ -272,7 +294,10 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
           if (!s.draft) return s;
           const next: ReviewDraft = {
             ...s.draft,
-            agenda: [...s.draft.agenda, { id, ...item }],
+            agenda: [
+              ...s.draft.agenda,
+              { id, viewpointIds: [], pinIds: [], ...item },
+            ],
           };
           return { draft: touch(next) };
         });
@@ -305,9 +330,75 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         arr.splice(toIdx, 0, moved);
         return { draft: touch({ ...s.draft, agenda: arr }) };
       }),
+
+      attachViewpointToAgendaItem: (itemId, viewpointId) => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          agenda: s.draft.agenda.map((a) =>
+            a.id === itemId && !a.viewpointIds.includes(viewpointId)
+              ? { ...a, viewpointIds: [...a.viewpointIds, viewpointId] }
+              : a,
+          ),
+        };
+        return { draft: touch(next) };
+      }),
+
+      detachViewpointFromAgendaItem: (itemId, viewpointId) => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          agenda: s.draft.agenda.map((a) =>
+            a.id === itemId
+              ? { ...a, viewpointIds: a.viewpointIds.filter((id) => id !== viewpointId) }
+              : a,
+          ),
+        };
+        return { draft: touch(next) };
+      }),
+
+      attachPinToAgendaItem: (itemId, pinId) => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          agenda: s.draft.agenda.map((a) =>
+            a.id === itemId && !a.pinIds.includes(pinId)
+              ? { ...a, pinIds: [...a.pinIds, pinId] }
+              : a,
+          ),
+        };
+        return { draft: touch(next) };
+      }),
+
+      detachPinFromAgendaItem: (itemId, pinId) => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          agenda: s.draft.agenda.map((a) =>
+            a.id === itemId
+              ? { ...a, pinIds: a.pinIds.filter((id) => id !== pinId) }
+              : a,
+          ),
+        };
+        return { draft: touch(next) };
+      }),
     }),
     {
       name: 'vp_review_draft',
+      version: 1,
+      // v0 → v1: agenda items moved from { refType, refId } to { viewpointIds, pinIds }.
+      // Old single-ref items become slides with that one item attached.
+      migrate: (persisted: any, fromVersion: number) => {
+        if (!persisted?.draft || fromVersion >= 1) return persisted;
+        const agenda = (persisted.draft.agenda ?? []).map((raw: any) => {
+          if (Array.isArray(raw?.viewpointIds) && Array.isArray(raw?.pinIds)) return raw;
+          const viewpointIds = raw?.refType === 'viewpoint' && raw?.refId ? [raw.refId] : [];
+          const pinIds = raw?.refType === 'pin' && raw?.refId ? [raw.refId] : [];
+          const { refType: _rt, refId: _ri, ...rest } = raw ?? {};
+          return { ...rest, viewpointIds, pinIds };
+        });
+        return { ...persisted, draft: { ...persisted.draft, agenda } };
+      },
     },
   ),
 );

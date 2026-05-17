@@ -268,7 +268,7 @@ const ReviewSetupCanvas = React.forwardRef<ReviewSetupCanvasHandle, Props>(({ pi
       <JumpAnimator target={jumpTarget} controlsRef={controlsRef} onDone={() => setJumpTarget(null)} />
 
       <Suspense fallback={null}>
-        <World />
+        <World hideAgents />
       </Suspense>
 
       {pins.map((p) => (

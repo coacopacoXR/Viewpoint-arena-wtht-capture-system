@@ -1,11 +1,13 @@
 import React from 'react';
 import {
   Camera, MapPin, AlertTriangle, Info, ShieldAlert,
-  ChevronLeft, ChevronRight, FileText, Image as ImageIcon,
+  ChevronLeft, ChevronRight, FileText, Image as ImageIcon, Layers,
+  ClipboardList,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { usePresence } from '../../lib/PresenceContext';
+import { useStore } from '../../store';
 import type { PinSeverity } from '../../lib/reviewSetupStore';
 
 const PIN_COLOR: Record<PinSeverity, string> = {
@@ -38,32 +40,58 @@ interface Props {
   // floating panel). When false, renders against the lighter chrome used by
   // the bottom-dock expansion.
   theme?: 'light' | 'dark';
+  // When true, hides the agenda/slide navigator section AND the host-only
+  // "Open Manager view" trigger. Used when this component is embedded inside
+  // the Manager workspace, which has its own persistent slide context header.
+  embedded?: boolean;
 }
 
 // Editor view for an active review — viewpoint navigator + pins-as-comments
 // stream. Reused by ReviewViewpointsDock (light) and the boardroom Review
 // floating panel (dark). Returns null when no review config is active.
-const ReviewPanelContent: React.FC<Props> = ({ theme = 'light' }) => {
+const ReviewPanelContent: React.FC<Props> = ({ theme = 'light', embedded = false }) => {
   const config = useActiveReviewStore((s) => s.config);
   const activeIdx = useActiveReviewStore((s) => s.activeViewpointIdx);
   const nextVp = useActiveReviewStore((s) => s.nextViewpoint);
   const prevVp = useActiveReviewStore((s) => s.prevViewpoint);
   const jumpAtIdx = useActiveReviewStore((s) => s.jumpToViewpointAtIdx);
+  const jumpToViewpoint = useActiveReviewStore((s) => s.jumpToViewpoint);
   const updateViewpoint = useActiveReviewStore((s) => s.updateViewpoint);
   const updatePin = useActiveReviewStore((s) => s.updatePin);
-  const { broadcastReviewConfig } = usePresence();
+  const agendaIdx = useActiveReviewStore((s) => s.agendaIdx);
+  const nextSlide = useActiveReviewStore((s) => s.nextSlide);
+  const prevSlide = useActiveReviewStore((s) => s.prevSlide);
+  const jumpToSlide = useActiveReviewStore((s) => s.jumpToSlide);
+  const setManagerMode = useActiveReviewStore((s) => s.setManagerMode);
+  const sessionHostId = useStore((s) => s.sessionHostId);
+  const { broadcastReviewConfig, localUserId } = usePresence();
+  const isHost = sessionHostId === localUserId || sessionHostId === null;
 
   if (!config) return null;
-  const { viewpoints, pins } = config;
-  if (viewpoints.length === 0 && pins.length === 0) {
+  const { viewpoints, pins, agenda } = config;
+  if (viewpoints.length === 0 && pins.length === 0 && agenda.length === 0) {
     return (
       <div className="p-4 text-center text-[11px] italic" style={{ color: theme === 'dark' ? 'rgba(255,255,255,0.4)' : '#9ca3af' }}>
-        No curated viewpoints or pins
+        No curated viewpoints, pins, or slides
       </div>
     );
   }
 
-  const currentVp = viewpoints[Math.max(0, Math.min(activeIdx, viewpoints.length - 1))];
+  const currentVp = viewpoints.length > 0
+    ? viewpoints[Math.max(0, Math.min(activeIdx, viewpoints.length - 1))]
+    : null;
+  const currentSlide = agenda.length > 0
+    ? agenda[Math.max(0, Math.min(agendaIdx, agenda.length - 1))]
+    : null;
+
+  const scrollToPinCard = (pinId: string) => {
+    const el = document.getElementById(`review-pin-card-${pinId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('ring-2', 'ring-emerald-400');
+      setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1500);
+    }
+  };
 
   const sync = (next: ReturnType<typeof updateViewpoint>) => {
     if (next) broadcastReviewConfig(next);
@@ -100,6 +128,108 @@ const ReviewPanelContent: React.FC<Props> = ({ theme = 'light' }) => {
 
   return (
     <div className={t.panelBg}>
+      {/* Agenda / slide-deck navigator */}
+      {currentSlide && !embedded && (
+        <div className={clsx('p-3 border-b', t.sectionBorder)}>
+          <div className="flex items-center justify-between mb-2">
+            <div className={clsx('text-[9px] font-bold uppercase tracking-widest flex items-center gap-1', t.dimText)}>
+              <Layers size={10} /> Agenda
+            </div>
+            <div className={clsx('text-[10px] font-mono tabular-nums', t.dimText)}>
+              Slide {agendaIdx + 1} / {agenda.length}
+            </div>
+          </div>
+
+          <div className={clsx('text-sm font-bold', t.titleText)}>{currentSlide.title || 'Untitled slide'}</div>
+          {currentSlide.notes && (
+            <div className={clsx('text-[11px] mt-1 whitespace-pre-wrap leading-snug', t.noteText)}>
+              {currentSlide.notes}
+            </div>
+          )}
+
+          {/* Attached viewpoints + pins */}
+          {(currentSlide.viewpointIds.length > 0 || currentSlide.pinIds.length > 0) && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {currentSlide.viewpointIds.map((vid) => {
+                const v = viewpoints.find((x) => x.id === vid);
+                if (!v) return null;
+                return (
+                  <button
+                    key={vid}
+                    onClick={() => jumpToViewpoint(vid)}
+                    className={clsx(
+                      'flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors',
+                      theme === 'dark'
+                        ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-100 hover:bg-emerald-500/25'
+                        : 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+                    )}
+                    title="Jump camera to this viewpoint"
+                  >
+                    {v.thumbnail && <img src={v.thumbnail} alt="" className="w-6 h-4 object-cover rounded-sm" />}
+                    <Camera size={9} />
+                    <span className="truncate max-w-[120px]">{v.label}</span>
+                  </button>
+                );
+              })}
+              {currentSlide.pinIds.map((pid) => {
+                const p = pins.find((x) => x.id === pid);
+                if (!p) return null;
+                const color = PIN_COLOR[p.severity];
+                return (
+                  <button
+                    key={pid}
+                    onClick={() => scrollToPinCard(pid)}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors"
+                    style={{
+                      background: `${color}1a`,
+                      borderColor: `${color}66`,
+                      color: theme === 'dark' ? '#fff' : '#111',
+                    }}
+                    title="Show this pin"
+                  >
+                    <span style={{ color }} className="flex items-center">{PIN_ICON[p.severity]}</span>
+                    <span className="truncate max-w-[120px]">{p.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Slide nav */}
+          <div className="mt-3 flex items-center justify-between gap-1">
+            <button
+              onClick={prevSlide}
+              disabled={agenda.length < 2}
+              className={clsx('flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide disabled:opacity-40 disabled:cursor-not-allowed transition-colors', t.navBtnBg)}
+            >
+              <ChevronLeft size={12} /> Prev
+            </button>
+
+            <div className="flex items-center gap-1 overflow-x-auto max-w-[140px]">
+              {agenda.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => jumpToSlide(i)}
+                  title={`Slide ${i + 1}`}
+                  className={clsx(
+                    'w-1.5 h-1.5 rounded-full shrink-0 transition-all',
+                    i === agendaIdx ? 'bg-emerald-500 scale-125' : t.navDot
+                  )}
+                />
+              ))}
+            </div>
+
+            <button
+              onClick={nextSlide}
+              disabled={agenda.length < 2}
+              className={clsx('flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide disabled:opacity-40 disabled:cursor-not-allowed transition-colors', t.navBtnBg)}
+            >
+              Next <ChevronRight size={12} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Viewpoint navigator */}
       {currentVp && (
         <div className={clsx('p-3 border-b', t.sectionBorder)}>
@@ -185,7 +315,8 @@ const ReviewPanelContent: React.FC<Props> = ({ theme = 'light' }) => {
           {pins.map((p) => (
             <div
               key={p.id}
-              className={clsx('rounded border p-2 flex flex-col gap-1.5', t.pinCardBg)}
+              id={`review-pin-card-${p.id}`}
+              className={clsx('rounded border p-2 flex flex-col gap-1.5 transition-shadow', t.pinCardBg)}
               style={{ borderColor: `${PIN_COLOR[p.severity]}55` }}
             >
               <div className="flex items-center justify-between gap-2">
@@ -217,6 +348,28 @@ const ReviewPanelContent: React.FC<Props> = ({ theme = 'light' }) => {
               />
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Host-only manager-mode trigger */}
+      {isHost && !embedded && (
+        <div className={clsx('p-3 border-t', t.sectionBorder)}>
+          <button
+            onClick={() => setManagerMode(true)}
+            className={clsx(
+              'w-full flex items-center justify-center gap-2 px-3 py-2 rounded text-[11px] font-bold uppercase tracking-wide transition-colors',
+              theme === 'dark'
+                ? 'bg-emerald-500/15 border border-emerald-400/40 text-emerald-100 hover:bg-emerald-500/25'
+                : 'bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100',
+            )}
+            title="Split-screen workspace: triage action cards and write follow-ups"
+          >
+            <ClipboardList size={13} />
+            Open Manager view
+          </button>
+          <div className={clsx('text-[9px] text-center mt-1 italic', t.dimText)}>
+            Host-only · split-screen meeting workspace
+          </div>
         </div>
       )}
     </div>

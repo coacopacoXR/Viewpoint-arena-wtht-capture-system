@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Camera, MapPin, ChevronDown, HelpCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Camera, MapPin, ChevronDown, HelpCircle, Layers } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import ReviewExplainer from './ReviewExplainer';
@@ -10,12 +10,19 @@ import ReviewPanelContent from './ReviewPanelContent';
 //   expanded — pops upward with the shared ReviewPanelContent editor
 const ReviewViewpointsDock: React.FC = () => {
   const config = useActiveReviewStore((s) => s.config);
+  const managerMode = useActiveReviewStore((s) => s.managerMode);
   const [open, setOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
 
+  // Auto-close the popup when the host enters manager mode (the split-screen
+  // workspace replaces the popup's purpose for the host).
+  useEffect(() => {
+    if (managerMode) setOpen(false);
+  }, [managerMode]);
+
   if (!config) return null;
-  const { viewpoints, pins, title } = config;
-  if (viewpoints.length === 0 && pins.length === 0) return null;
+  const { viewpoints, pins, agenda, title } = config;
+  if (viewpoints.length === 0 && pins.length === 0 && agenda.length === 0) return null;
 
   return (
     <div className="flex flex-col items-center gap-2 pointer-events-auto relative">
@@ -28,10 +35,14 @@ const ReviewViewpointsDock: React.FC = () => {
         <HelpCircle size={10} className="text-gray-400" />
       </button>
 
-      <div className="flex items-center gap-1 bg-white/90 backdrop-blur-md p-1.5 px-3 rounded-md border border-gray-200 shadow-sm h-[44px] max-w-[280px]">
+      <div className="flex items-center gap-1 bg-white/90 backdrop-blur-md p-1.5 px-3 rounded-md border border-gray-200 shadow-sm h-[44px] max-w-[320px]">
         <Camera size={14} className="text-emerald-500 shrink-0" />
-        <span className="text-[11px] font-bold text-gray-800 truncate max-w-[120px]">{title}</span>
+        <span className="text-[11px] font-bold text-gray-800 truncate max-w-[100px]">{title}</span>
         <div className="w-px h-6 bg-gray-200" />
+        <div className="flex items-center gap-1 text-[10px] font-mono text-gray-500 tabular-nums" title="Slides">
+          <Layers size={11} className="text-gray-400" />
+          {agenda.length}
+        </div>
         <div className="flex items-center gap-1 text-[10px] font-mono text-gray-500 tabular-nums" title="Viewpoints">
           <Camera size={11} className="text-gray-400" />
           {viewpoints.length}

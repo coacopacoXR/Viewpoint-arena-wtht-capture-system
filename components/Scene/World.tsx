@@ -16,14 +16,19 @@ import HeatmapOverlay from './HeatmapOverlay';
 import { useStore } from '../../store';
 import { ViewMode } from '../../types';
 
-const World: React.FC = () => {
+interface WorldProps {
+  hideAgents?: boolean;
+}
+
+const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride }) => {
   // Use selectors to improve performance and prevent re-renders
   const isPlaying = useStore(state => state.isPlaying);
   const setTime = useStore(state => state.setTime);
   const viewMode = useStore(state => state.viewMode);
   const setUserInteractionPoint = useStore(state => state.setUserInteractionPoint);
   const agents = useStore(state => state.agents);
-  const hideAgents = useStore(state => state.hideAgents);
+  const storeHideAgents = useStore(state => state.hideAgents);
+  const hideAgents = hideAgentsOverride ?? storeHideAgents;
   const activeModelType = useStore(state => state.activeModelType);
   
   // Ref to track throttle
