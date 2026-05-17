@@ -2,7 +2,7 @@
 // the user can re-authenticate via auth-start any time.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { clearAuthCookies } from '../_lib/onshape';
+import { clearAuthCookies } from '../_lib/onshape.js';
 
 export default function handler(_req: VercelRequest, res: VercelResponse) {
   clearAuthCookies(res);

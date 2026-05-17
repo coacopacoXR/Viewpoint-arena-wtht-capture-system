@@ -3,7 +3,7 @@
 // vs "Logged in as Paco · Sign out".
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape';
+import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   await withAuth(res, async () => {

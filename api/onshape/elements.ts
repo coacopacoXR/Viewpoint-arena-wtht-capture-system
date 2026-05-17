@@ -4,7 +4,7 @@
 // GET /api/onshape/elements?d=<documentId>&w=<workspaceId>
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape';
+import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape.js';
 
 interface OnshapeElement {
   id: string;

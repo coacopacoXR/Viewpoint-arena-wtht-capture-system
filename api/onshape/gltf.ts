@@ -5,7 +5,7 @@
 // GET /api/onshape/gltf?d=<documentId>&w=<workspaceId>&e=<elementId>&type=ASSEMBLY|PARTSTUDIO
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape';
+import { callOnshape, applyRefreshedCookies, withAuth } from '../_lib/onshape.js';
 
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 55_000; // Vercel functions max out at 60s.
