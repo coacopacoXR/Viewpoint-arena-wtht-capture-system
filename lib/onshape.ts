@@ -88,35 +88,103 @@ export async function listOnshapeElements(
   return { items: result.items, allTypes: result.allTypes ?? [] };
 }
 
-export async function fetchOnshapeGltf(
+/**
+ * Imports an Onshape element as a GLB File. Orchestrates the three-step
+ * translation flow in the browser so each underlying serverless function
+ * stays well under Vercel's 60s ceiling — works even for large assemblies
+ * that take minutes to translate.
+ *
+ * Calls `onProgress(state)` at each phase so the UI can show what's
+ * happening: 'starting' → 'translating' → 'downloading'.
+ */
+export async function importOnshapeModel(
   documentId: string,
   workspaceId: string,
   elementId: string,
   type: 'ASSEMBLY' | 'PARTSTUDIO',
+  onProgress?: (state: 'starting' | 'translating' | 'downloading', elapsedSec: number) => void,
 ): Promise<File> {
-  const url = `/api/onshape/gltf?d=${documentId}&w=${workspaceId}&e=${elementId}&type=${type}`;
-  const resp = await fetch(url, { credentials: 'include' });
-  if (!resp.ok) {
-    const text = await resp.text();
-    // Surface Onshape's "no visible parts" as a friendly message instead of a
-    // raw JSON blob. Same for permission and rate-limit errors.
-    let friendly = '';
+  const startedAt = Date.now();
+  const elapsed = () => Math.round((Date.now() - startedAt) / 1000);
+
+  // 1) Kick off translation.
+  onProgress?.('starting', elapsed());
+  const startResp = await fetch(
+    `/api/onshape/translate?d=${documentId}&w=${workspaceId}&e=${elementId}&type=${type}`,
+    { credentials: 'include' },
+  );
+  if (!startResp.ok) {
+    const text = await startResp.text();
     if (text.includes('No visible parts')) {
-      friendly = type === 'ASSEMBLY'
-        ? "This assembly has no visible instances. Add some parts to the assembly in Onshape, then try again."
-        : "This part studio is empty (or all parts are hidden). Model a part or unhide what's there, then try again.";
-    } else if (resp.status === 401 || resp.status === 403) {
-      friendly = 'Your Onshape session expired or the document moved. Reopen the picker to refresh.';
-    } else if (resp.status === 504) {
-      friendly = 'Onshape took too long to translate this model. Try a smaller/simpler one.';
+      throw new Error(
+        type === 'ASSEMBLY'
+          ? 'This assembly has no visible instances. Add some parts to the assembly in Onshape, then try again.'
+          : "This part studio is empty (or all parts are hidden). Model a part or unhide what's there, then try again.",
+      );
     }
-    if (friendly) throw new Error(friendly);
-    throw new Error(`Onshape import failed (${resp.status}). ${text.slice(0, 200)}`);
+    if (startResp.status === 401 || startResp.status === 403) {
+      throw new Error('Your Onshape session expired or the document moved. Reopen the picker to refresh.');
+    }
+    throw new Error(`Onshape import failed (${startResp.status}). ${text.slice(0, 200)}`);
   }
-  const blob = await resp.blob();
-  const filename = `onshape-${elementId}.glb`;
-  return new File([blob], filename, { type: 'model/gltf-binary' });
+  const { id: translationId } = await startResp.json() as { id: string };
+
+  // 2) Poll status. Backoff a bit: fast at first, then slower for big jobs.
+  let documentIdOut = '';
+  let dataId = '';
+  const POLL_INTERVALS = [800, 1500, 1500, 2500, 2500, 4000]; // becomes 5000 thereafter
+  let pollIdx = 0;
+  // Cap at 10 minutes of polling — covers very large assemblies. Onshape
+  // will eventually return FAILED on its own; this is just a guard.
+  const POLL_DEADLINE_MS = 10 * 60 * 1000;
+  while (true) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVALS[pollIdx] ?? 5000));
+    pollIdx++;
+    onProgress?.('translating', elapsed());
+    const sResp = await fetch(`/api/onshape/translate-status?id=${translationId}`, { credentials: 'include' });
+    if (!sResp.ok) {
+      const text = await sResp.text();
+      throw new Error(`Onshape status check failed: ${text.slice(0, 200)}`);
+    }
+    const status = await sResp.json() as { state: string; documentId?: string; dataId?: string; failureReason?: string };
+    if (status.state === 'DONE') {
+      if (!status.documentId || !status.dataId) throw new Error('Translation finished but no file id returned');
+      documentIdOut = status.documentId;
+      dataId = status.dataId;
+      break;
+    }
+    if (status.state === 'FAILED') {
+      const reason = status.failureReason || 'Unknown failure';
+      if (reason.includes('No visible parts')) {
+        throw new Error(
+          type === 'ASSEMBLY'
+            ? 'This assembly has no visible instances. Add some parts to the assembly in Onshape, then try again.'
+            : "This part studio is empty (or all parts are hidden). Model a part or unhide what's there, then try again.",
+        );
+      }
+      throw new Error(reason);
+    }
+    if (Date.now() - startedAt > POLL_DEADLINE_MS) {
+      throw new Error('Onshape translation took longer than 10 minutes — try a smaller model.');
+    }
+  }
+
+  // 3) Download the GLB.
+  onProgress?.('downloading', elapsed());
+  const dlResp = await fetch(
+    `/api/onshape/translate-download?did=${documentIdOut}&dataId=${dataId}`,
+    { credentials: 'include' },
+  );
+  if (!dlResp.ok) {
+    const text = await dlResp.text();
+    throw new Error(`Onshape download failed (${dlResp.status}). ${text.slice(0, 200)}`);
+  }
+  const blob = await dlResp.blob();
+  return new File([blob], `onshape-${elementId}.glb`, { type: 'model/gltf-binary' });
 }
+
+/** @deprecated kept for compatibility — use importOnshapeModel */
+export const fetchOnshapeGltf = importOnshapeModel;
 
 export function startOnshapeSignIn(returnTo: string = window.location.pathname + window.location.search) {
   const url = `/api/onshape/auth-start?return=${encodeURIComponent(returnTo)}`;
