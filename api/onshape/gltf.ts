@@ -66,16 +66,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    // 1) Kick off the translation. GLTF accepts a very narrow set of params —
-    // any extras (yAxisIsUp, flattenAssemblies, includeExportIds, etc. — all
-    // of which work for STL/STEP) cause Onshape to reject the request with
-    // "Invalid GLTF detail parameters". Keep this minimal.
+    // 1) Kick off the translation. GLTF requires very specific params or it
+    // bails with "Invalid GLTF detail parameters". Smallest viable payload
+    // tested in Onshape's API explorer:
+    //   formatName: 'GLTF'
+    //   storeInDocument: true  (false triggers the GLTF detail rejection)
+    // The translation result is still downloadable via externaldata even
+    // with storeInDocument:true — Onshape stages the file regardless.
     const translationsPath = type === 'ASSEMBLY'
       ? `/api/v9/assemblies/d/${d}/w/${w}/e/${e}/translations`
       : `/api/v9/partstudios/d/${d}/w/${w}/e/${e}/translations`;
     const body: Record<string, unknown> = {
       formatName: 'GLTF',
-      storeInDocument: false,
+      storeInDocument: true,
     };
     const start = await callOnshape(req, translationsPath, {
       method: 'POST',
