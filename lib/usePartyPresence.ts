@@ -222,28 +222,11 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
             .catch(err => console.error('[MODEL_CHANGE] Parse error:', err));
         }
       } else if (msg.type === 'REVIEW_CONFIG') {
-        // Store the curated review config and ensure the asset matches.
-        // The host sets its own draft locally before broadcasting; receivers
-        // (including late joiners via on-connect replay) update through here.
-        const cfg = msg.payload.config;
-        useActiveReviewStore.getState().setConfig(cfg);
-        const { setActiveModelType, setImportedModel } = useStore.getState();
-        const a = cfg.asset;
-        if (a.modelType === 'synth' || a.modelType === 'bicycle' || a.modelType === 'headphones') {
-          setActiveModelType(a.modelType);
-        } else if (a.modelType === 'imported' && a.importedFileBase64 && a.importedFileName) {
-          const ext = a.importedFileName.split('.').pop()?.toLowerCase() || 'glb';
-          const mimeMap: Record<string, string> = {
-            glb: 'model/gltf-binary', gltf: 'model/gltf+json',
-            obj: 'text/plain', fbx: 'application/octet-stream', stl: 'application/octet-stream',
-          };
-          const mime = mimeMap[ext] || 'application/octet-stream';
-          const bytes = Uint8Array.from(atob(a.importedFileBase64), (c) => c.charCodeAt(0));
-          const file = new File([bytes], a.importedFileName, { type: mime });
-          parseModelFile(file)
-            .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
-            .catch((err) => console.error('[REVIEW_CONFIG] parse error:', err));
-        }
+        // Store the curated review config — setConfig syncs the main store's
+        // model type and comments automatically. The host sets its own draft
+        // locally before broadcasting; receivers (including late joiners via
+        // on-connect replay) update through here.
+        useActiveReviewStore.getState().setConfig(msg.payload.config);
       } else if (msg.type === 'HOST_CHANGE') {
         setSessionHostId(msg.payload.hostId);
         // If I just became the host (e.g. previous host left), update local state

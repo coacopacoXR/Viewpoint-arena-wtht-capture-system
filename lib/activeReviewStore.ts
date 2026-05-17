@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore';
 import type { SpatialComment } from '../types';
 import { useStore } from '../store';
+import { parseModelFile } from '../utils/modelLoader';
 
 // Room-time view of the curated review. Distinct from the host's local draft:
 // this is the config currently in effect in the live session (received from the
@@ -72,6 +73,42 @@ function syncMainComments(config: ReviewDraft | null) {
   main.setAllComments([...live, ...synthesized]);
 }
 
+// Make sure the World renders the curation's model. World reads
+// `activeModelType` from the main store, so loading a curation that
+// specifies e.g. 'bicycle' has to push that onto the main store too —
+// otherwise the room loads with whatever default (`headphones`) was
+// already there. Imported files require parsing + setImportedModel;
+// preset types just need the active type set. Fire-and-forget for the
+// async parse — failures are logged but don't block setConfig.
+function syncMainModel(config: ReviewDraft | null) {
+  if (!config) return;
+  const { setActiveModelType, setImportedModel } = useStore.getState();
+  const a = config.asset;
+  if (!a?.modelType) return;
+  if (a.modelType === 'imported') {
+    if (!a.importedFileBase64 || !a.importedFileName) {
+      // Cloud-hydrated curations strip the base64 blob (see curationsRepo).
+      // We can't render the import — leave whatever model was already there
+      // so the scene isn't empty, and warn so the issue is visible.
+      console.warn('[activeReviewStore] curation uses imported model but the file is not in this payload — keeping current model');
+      return;
+    }
+    const ext = a.importedFileName.split('.').pop()?.toLowerCase() || 'glb';
+    const mimeMap: Record<string, string> = {
+      glb: 'model/gltf-binary', gltf: 'model/gltf+json',
+      obj: 'text/plain', fbx: 'application/octet-stream', stl: 'application/octet-stream',
+    };
+    const mime = mimeMap[ext] || 'application/octet-stream';
+    const bytes = Uint8Array.from(atob(a.importedFileBase64), (c) => c.charCodeAt(0));
+    const file = new File([bytes], a.importedFileName, { type: mime });
+    parseModelFile(file)
+      .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
+      .catch((err) => console.error('[activeReviewStore] failed to parse imported model:', err));
+  } else {
+    setActiveModelType(a.modelType);
+  }
+}
+
 interface ActiveReviewState {
   config: ReviewDraft | null;
   jumpTarget: { position: [number, number, number]; lookAt: [number, number, number] } | null;
@@ -124,6 +161,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       activeViewpointIdx: Math.min(get().activeViewpointIdx, Math.max(0, (config?.viewpoints.length ?? 1) - 1)),
     });
     syncMainComments(config);
+    syncMainModel(config);
   },
 
   jumpToViewpoint: (id) => {
