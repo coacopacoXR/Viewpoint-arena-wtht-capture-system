@@ -1,9 +1,11 @@
 import React, { Suspense, useImperativeHandle, useRef, useEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Html } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, Html, TransformControls } from '@react-three/drei';
 import * as THREE from 'three';
 import World from './World';
 import { useReviewSetupStore, type ReviewPin, type ReviewViewpoint, type PinSeverity } from '../../lib/reviewSetupStore';
+
+export type GizmoMode = 'translate' | 'rotate' | 'scale' | null;
 
 // ─── Imperative API exposed to the setup page ───────────────────────────────
 export interface ReviewSetupCanvasHandle {
@@ -15,6 +17,7 @@ interface Props {
   pinMode: boolean;
   selectedPinId: string | null;
   onSelectPin: (id: string | null) => void;
+  gizmoMode: GizmoMode;
 }
 
 const PIN_COLOR: Record<PinSeverity, string> = {
@@ -214,9 +217,50 @@ const JumpAnimator: React.FC<{
   return null;
 };
 
-const ReviewSetupCanvas = React.forwardRef<ReviewSetupCanvasHandle, Props>(({ pinMode, selectedPinId, onSelectPin }, ref) => {
+// Drives the in-canvas transform gizmo. Attaches drei's TransformControls to
+// the inner model group exposed by World, writes back to the curation store
+// on every change (debounced auto-save handles persistence), and disables
+// OrbitControls while the user is dragging the gizmo so the camera doesn't
+// orbit underneath the manipulation.
+const ModelGizmo: React.FC<{
+  objectRef: React.MutableRefObject<THREE.Group | null>;
+  mode: GizmoMode;
+  orbitRef: React.MutableRefObject<any>;
+}> = ({ objectRef, mode, orbitRef }) => {
+  const setAssetTransform = useReviewSetupStore((s) => s.setAssetTransform);
+  const [ready, setReady] = React.useState(false);
+  // Wait one frame so the inner group ref is populated by R3F.
+  React.useEffect(() => {
+    const id = requestAnimationFrame(() => setReady(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  if (!mode || !ready || !objectRef.current) return null;
+
+  return (
+    <TransformControls
+      object={objectRef.current as unknown as THREE.Object3D}
+      mode={mode}
+      size={0.8}
+      onMouseDown={() => { if (orbitRef.current) orbitRef.current.enabled = false; }}
+      onMouseUp={() => { if (orbitRef.current) orbitRef.current.enabled = true; }}
+      onObjectChange={() => {
+        const obj = objectRef.current;
+        if (!obj) return;
+        setAssetTransform({
+          position: [obj.position.x, obj.position.y, obj.position.z],
+          rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z],
+          scale: obj.scale.x, // we treat scale as uniform throughout the app
+        });
+      }}
+    />
+  );
+};
+
+const ReviewSetupCanvas = React.forwardRef<ReviewSetupCanvasHandle, Props>(({ pinMode, selectedPinId, onSelectPin, gizmoMode }, ref) => {
   const stateRef = useRef<InnerState>({ camera: null, controls: null, gl: null, scene: null });
   const controlsRef = useRef<any>(null);
+  const modelGroupRef = useRef<THREE.Group | null>(null);
   const pins = useReviewSetupStore((s) => s.draft?.pins ?? []);
   const viewpoints = useReviewSetupStore((s) => s.draft?.viewpoints ?? []);
   const [jumpTarget, setJumpTarget] = React.useState<{ position: [number, number, number]; lookAt: [number, number, number] } | null>(null);
@@ -268,8 +312,10 @@ const ReviewSetupCanvas = React.forwardRef<ReviewSetupCanvasHandle, Props>(({ pi
       <JumpAnimator target={jumpTarget} controlsRef={controlsRef} onDone={() => setJumpTarget(null)} />
 
       <Suspense fallback={null}>
-        <World hideAgents />
+        <World hideAgents modelGroupRef={modelGroupRef} />
       </Suspense>
+
+      <ModelGizmo objectRef={modelGroupRef} mode={gizmoMode} orbitRef={controlsRef} />
 
       {pins.map((p) => (
         <PinMarker
