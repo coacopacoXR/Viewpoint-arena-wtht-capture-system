@@ -174,6 +174,19 @@ const countParts = (node: SceneNode): number => {
     return count;
 };
 
+// Seed POIs from a scene tree so agents always have targets to inspect, even
+// for models whose 3D component doesn't call registerPOI (bicycle, headphones,
+// fresh imports before mesh traversal runs). Positions default to origin;
+// per-mesh components later upsert real world positions via registerPOI.
+const derivePoisFromSceneTree = (node: SceneNode, out: PointOfInterest[] = []): PointOfInterest[] => {
+    const isLeaf = !node.children || node.children.length === 0;
+    if (isLeaf) {
+        out.push({ id: node.id, position: new Vector3(0, 0, 0), label: node.name, type: 'GENERAL' });
+    }
+    node.children?.forEach(child => derivePoisFromSceneTree(child, out));
+    return out;
+};
+
 
 interface AppState {
   viewMode: ViewMode;
@@ -406,7 +419,7 @@ export const useStore = create<AppState>((set, get) => ({
   agents: INITIAL_AGENTS,
   agentStyle: AgentStyle.BOX,
   agentWeights: INITIAL_WEIGHTS,
-  pois: [],
+  pois: derivePoisFromSceneTree(HEADPHONES_SCENE_TREE),
   activeAgentId: null,
   leaderId: null,
   followingRemoteUserId: null,
@@ -488,8 +501,13 @@ export const useStore = create<AppState>((set, get) => ({
   resetTime: () => set({ time: 0, heatmapValues: {}, chatHistory: [], insightCards: [] }),
   
   registerPOI: (poi) => set((state) => {
-    if (state.pois.find(p => p.id === poi.id)) return state;
-    return { pois: [...state.pois, poi] };
+    const existingIdx = state.pois.findIndex(p => p.id === poi.id);
+    if (existingIdx === -1) return { pois: [...state.pois, poi] };
+    // Upsert so per-mesh components can overwrite seeded origin positions
+    // with the real world-space center once meshes mount.
+    const next = state.pois.slice();
+    next[existingIdx] = poi;
+    return { pois: next };
   }),
   setActiveAgent: (id) => set({ activeAgentId: id }),
   setLeader: (id) => set({ leaderId: id, followingRemoteUserId: null }),
@@ -603,7 +621,7 @@ export const useStore = create<AppState>((set, get) => ({
       return {
           activeModelType: type,
           objectStates: initObjectStates(tree),
-          pois: [], // Clear POIs for new model
+          pois: derivePoisFromSceneTree(tree),
           comments: [], // Clear comments for new model
           chatHistory: [], // Clear chat for fresh start
           insightCards: [], // Clear insights
@@ -630,7 +648,7 @@ export const useStore = create<AppState>((set, get) => ({
           importedBaseScale: baseScale,
           importedBasePosition: basePosition,
           objectStates: initObjectStates(sceneTree),
-          pois: [],
+          pois: derivePoisFromSceneTree(sceneTree),
           comments: [],
           chatHistory: [],
           insightCards: [],

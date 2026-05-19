@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
   Play, Pause, RefreshCw, Eye, EyeOff,
-  Video, User, Map, Activity, Flame, Footprints,
-  SplitSquareHorizontal, Sparkles, Users, ArrowRight, Box,
+  User, Map, Activity, Flame,
+  SplitSquareHorizontal, Sparkles, Users, ArrowRight,
   CheckCircle2, Power, Layers, Network, Link, BellRing, X,
   ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic,
   ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight,
@@ -12,7 +12,7 @@ import SharePanel from './SharePanel';
 import XRButton from './XRButton';
 import { useParams } from 'react-router-dom';
 import { useStore } from '../../store';
-import { ViewMode, AgentStyle } from '../../types';
+import { ViewMode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
 import { useFingerPointerStore } from '../../lib/fingerPointerStore';
 import { clsx } from 'clsx';
@@ -167,16 +167,12 @@ const HoverPointerPill: React.FC = () => {
 const Interface: React.FC = () => {
   const {
     viewMode, setViewMode, followingRemoteUserId, setFollowingRemoteUser,
-    showFrustums, toggleFrustums,
-    showGaze, toggleGaze,
-    showTrails, toggleTrails,
     isPlaying, togglePlay,
     resetTime, time,
     activeAgentId, setActiveAgent,
     leaderId, setLeader,
     splitScreenTargetId, setSplitScreenTarget,
     agents,
-    agentStyle, setAgentStyle,
     agentWeights, setAgentWeight,
     endMeeting,
     followRequest, setFollowRequest,
@@ -259,12 +255,6 @@ const Interface: React.FC = () => {
       }
   };
   
-  const toggleAgentStyle = () => {
-      const styles = [AgentStyle.BOX, AgentStyle.CAPSULE, AgentStyle.ROBOT];
-      const next = styles[(styles.indexOf(agentStyle) + 1) % styles.length];
-      setAgentStyle(next);
-  };
-
   const handleAcceptFollow = () => {
       if (followRequest) {
           setActiveAgent(followRequest.agentId);
@@ -917,21 +907,6 @@ const Interface: React.FC = () => {
               <span className="text-[10px] font-bold uppercase tracking-wide">Data Flow</span>
           </button>
 
-          {/* Visual aids — relocated here so the bottom dock has room for the review pane */}
-          <div className="flex gap-1 bg-white/90 backdrop-blur p-1.5 rounded-full border border-gray-200 shadow-sm">
-              <Button onClick={toggleAgentStyle} title="Cycle Agent Style">
-                  <Box size={16} className={agentStyle === AgentStyle.BOX ? 'fill-black' : ''} />
-              </Button>
-              <Button active={showFrustums} onClick={toggleFrustums} title="Toggle Frustums">
-                  <Video size={16} />
-              </Button>
-              <Button active={showGaze} onClick={toggleGaze} title="Visual Grounding (Gaze)">
-                  {showGaze ? <Eye size={16} /> : <EyeOff size={16} />}
-              </Button>
-              <Button active={showTrails} onClick={toggleTrails} title="Movement Trails">
-                  <Footprints size={16} />
-              </Button>
-          </div>
       </div>
 
       {/* Bottom Controls Panel (Centered Dock) */}
