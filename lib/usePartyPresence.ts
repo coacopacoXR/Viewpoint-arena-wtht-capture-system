@@ -20,7 +20,7 @@ type RoomMessage =
   | { type: 'INSIGHT_CARD'; payload: InsightCard }
   | { type: 'LEADER_CHANGE'; payload: { userId: string | null } }
   | { type: 'BOARDROOM_COUNTDOWN'; payload: Record<string, never> }
-  | { type: 'BOARDROOM_STATE'; payload: { active: boolean } }
+  | { type: 'BOARDROOM_STATE'; payload: { active: boolean; leaderId: string | null; takeover: { enabled: boolean; approvedUserIds: string[] } } }
   | { type: 'ARENA_ENTRY'; payload: Record<string, never> }
   | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null; targetId?: string | null; targetMeshName?: string | null; targetPartName?: string | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
@@ -32,6 +32,7 @@ type RoomMessage =
   | { type: 'MEETING_END'; payload: Record<string, never> }
   | { type: 'TAKEOVER_SYNC'; payload: { enabled: boolean; approvedUserIds: string[] } }
   | { type: 'PRESENTER_REQUEST'; payload: { fromUserId: string; fromName: string } }
+  | { type: 'PRESENTER_REQUEST_DENIED'; payload: { fromUserId: string } }
   | { type: 'TAKEOVER_ATTEMPT'; payload: { userId: string } }
   | { type: 'PRESENTER_CHANGED'; payload: { userId: string } }
   | { type: 'COMMENT_ADD'; payload: { comment: any } }
@@ -93,6 +94,7 @@ export interface UsePartyPresenceReturn {
   broadcastTakeoverSync: (enabled: boolean, approvedUserIds: string[]) => void;
   broadcastHostTransfer: (toUserId: string) => void;
   broadcastPresenterRequest: (fromUserId: string, fromName: string) => void;
+  broadcastPresenterRequestDenied: (fromUserId: string) => void;
   broadcastTakeoverAttempt: (userId: string) => void;
   broadcastCommentAdd: (comment: any) => void;
   broadcastCommentUpdate: (id: string, updates: Record<string, any>) => void;
@@ -114,7 +116,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   const {
     addInsightCard, setActiveAgent, setViewMode, setFollowingRemoteUser,
     triggerBoardroomEntry, setPrivacyMode, setBoardroomLeaderId, setSessionHostId,
-    setPendingPresenterRequest,
+    setPendingPresenterRequest, setTakeoverModeEnabled, setTakeoverApprovedUserIds,
+    setPresenterRequestStatus,
   } = useStore.getState();
 
   function syncList() {
@@ -137,6 +140,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         return;
       }
 
+      try {
       if (msg.type === 'ROSTER') {
         remoteParticipants.current.clear();
         for (const p of msg.payload) {
@@ -160,6 +164,16 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         remoteLaserMeshNames.delete(leavingId);
         remoteLaserPartNames.delete(leavingId);
         remoteLaserLastUpdate.delete(leavingId);
+        // If the leaving user was the active boardroom presenter on our local
+        // state, snap to the host immediately. The server also broadcasts an
+        // authoritative LEADER_TAKEOVER right after LEAVE, but we don't want
+        // a stale leaderId pointing at a ghost in the interim.
+        {
+          const { boardroomLeaderId, sessionHostId } = useStore.getState();
+          if (boardroomLeaderId === leavingId) {
+            setBoardroomLeaderId(sessionHostId);
+          }
+        }
         syncList();
       } else if (msg.type === 'PRESENTER_CHANGE') {
         const { agentId } = msg.payload;
@@ -172,10 +186,24 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         if (leaderId === 'USER' && !followingRemoteUserId) return;
         setFollowingRemoteUser(msg.payload.userId);
       } else if (msg.type === 'BOARDROOM_STATE') {
-        // Late-joiner sync: enter boardroom directly without countdown if room is already in it
+        // Late-joiner sync. Tolerant of the legacy `{ active }` shape so a
+        // stale partykit dev server can't crash this handler and break the
+        // rest of the message loop (incl. ROSTER/PRESENCE for participants).
+        const payload = msg.payload as Partial<{
+          active: boolean;
+          leaderId: string | null;
+          takeover: { enabled: boolean; approvedUserIds: string[] };
+        }>;
         const { isBoardroomMode, toggleBoardroomMode } = useStore.getState();
-        if (msg.payload.active && !isBoardroomMode) {
+        if (payload.active && !isBoardroomMode) {
           toggleBoardroomMode();
+        }
+        if (payload.active && payload.leaderId !== undefined) {
+          setBoardroomLeaderId(payload.leaderId);
+        }
+        if (payload.takeover) {
+          setTakeoverModeEnabled(!!payload.takeover.enabled);
+          setTakeoverApprovedUserIds(payload.takeover.approvedUserIds ?? []);
         }
       } else if (msg.type === 'BOARDROOM_COUNTDOWN') {
         triggerBoardroomEntry();
@@ -196,12 +224,17 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       } else if (msg.type === 'PRIVACY_MODE') {
         setPrivacyMode(msg.payload.enabled);
       } else if (msg.type === 'LEADER_TAKEOVER') {
+        // Server-authoritative: apply on every client (including sender) and
+        // let BoardroomPresenterSync wire up followingRemoteUserId based on the
+        // new leaderId. Also clear any local detach so the new presenter pin
+        // takes effect immediately.
         const newLeaderId = msg.payload.userId;
+        const { resumeBoardroomPresenter } = useStore.getState();
         setBoardroomLeaderId(newLeaderId);
-        if (newLeaderId !== userRef.current.userId) {
-          setFollowingRemoteUser(newLeaderId);
-        } else {
-          setFollowingRemoteUser(null);
+        resumeBoardroomPresenter();
+        // If this user just got accepted as presenter, clear any pending request UI
+        if (newLeaderId === userRef.current.userId) {
+          setPresenterRequestStatus(null);
         }
       } else if (msg.type === 'MODEL_CHANGE') {
         const { modelType, fileBase64, fileName } = msg.payload;
@@ -237,7 +270,6 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         const { endMeeting } = useStore.getState();
         endMeeting(true);
       } else if (msg.type === 'TAKEOVER_SYNC') {
-        const { setTakeoverModeEnabled, setTakeoverApprovedUserIds } = useStore.getState();
         setTakeoverModeEnabled(msg.payload.enabled);
         setTakeoverApprovedUserIds(msg.payload.approvedUserIds);
       } else if (msg.type === 'PRESENTER_REQUEST') {
@@ -246,10 +278,15 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         if (sessionHostId === userRef.current.userId) {
           setPendingPresenterRequest(msg.payload);
         }
+      } else if (msg.type === 'PRESENTER_REQUEST_DENIED') {
+        // Only the requestor cares — show "denied" toast briefly
+        if (msg.payload.fromUserId === userRef.current.userId) {
+          setPresenterRequestStatus('denied');
+        }
       } else if (msg.type === 'PRESENTER_CHANGED') {
         // Server-authoritative presenter change (takeover mode)
         const newUserId = msg.payload.userId;
-        const { setBoardroomLeaderId, resumeBoardroomPresenter } = useStore.getState();
+        const { resumeBoardroomPresenter } = useStore.getState();
         setBoardroomLeaderId(newUserId);
         resumeBoardroomPresenter(); // clear local detach state; BoardroomPresenterSync will update followingRemoteUserId
       } else if (msg.type === 'COMMENT_ROSTER') {
@@ -277,6 +314,14 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         }
       } else if (msg.type === 'WEBRTC_SIGNAL') {
         webRTCSignalHandlerRef.current?.(msg.payload);
+      }
+      } catch (err) {
+        // One malformed/unexpected message must NOT take down the whole
+        // message loop — especially the path that adds remote participants.
+        // Most common cause: a stale partykit dev server emitting an older
+        // payload shape than the client expects (e.g. BOARDROOM_STATE before
+        // the takeover fields were added).
+        console.error('[partypresence] error handling message', (msg as any)?.type, err);
       }
     });
 
@@ -351,6 +396,10 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   }
 
   function broadcastLeaderTakeover(userId: string) {
+    // Optimistic local apply so the host's own UI is instant — the server's
+    // echo to all clients (including the sender) then keeps everyone in sync.
+    setBoardroomLeaderId(userId);
+    useStore.getState().resumeBoardroomPresenter();
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ type: 'LEADER_TAKEOVER', payload: { userId } }));
@@ -388,9 +437,18 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   }
 
   function broadcastPresenterRequest(fromUserId: string, fromName: string) {
+    // Mark the request as pending locally — UI shows a "requested…" badge until
+    // accepted (LEADER_TAKEOVER arrives) or denied (PRESENTER_REQUEST_DENIED).
+    useStore.getState().setPresenterRequestStatus('pending');
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ type: 'PRESENTER_REQUEST', payload: { fromUserId, fromName } }));
+  }
+
+  function broadcastPresenterRequestDenied(fromUserId: string) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'PRESENTER_REQUEST_DENIED', payload: { fromUserId } }));
   }
 
   function broadcastTakeoverAttempt(userId: string) {
@@ -472,6 +530,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastTakeoverSync,
     broadcastHostTransfer,
     broadcastPresenterRequest,
+    broadcastPresenterRequestDenied,
     broadcastTakeoverAttempt,
     broadcastCommentAdd,
     broadcastCommentUpdate,

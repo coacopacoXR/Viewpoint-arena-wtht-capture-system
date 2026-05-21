@@ -40,22 +40,28 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
     { userId: localUserId, name: 'You' },
     ...remoteParticipantList,
   ];
+  const activeUserIds = new Set(allParticipants.map(p => p.userId));
 
-  // Helper: toggle takeover enabled and broadcast
+  // Drop approvals for users who have since left so the host doesn't carry
+  // ghosts around. The server also prunes on disconnect, but pre-filtering
+  // here avoids a flicker in the UI list.
+  const liveApprovedUserIds = takeoverApprovedUserIds.filter(id => activeUserIds.has(id));
+
+  // Helper: toggle takeover enabled and broadcast (pre-pruned)
   const handleTakeoverToggle = () => {
     if (!isHost) return;
     const newEnabled = !takeoverModeEnabled;
     setTakeoverModeEnabled(newEnabled);
-    broadcastTakeoverSync(newEnabled, takeoverApprovedUserIds);
+    broadcastTakeoverSync(newEnabled, liveApprovedUserIds);
   };
 
-  // Helper: toggle approval and broadcast
+  // Helper: toggle approval and broadcast (pre-pruned)
   const handleApprovalToggle = (userId: string) => {
     if (!isHost) return;
     toggleTakeoverApproval(userId);
-    const newApproved = takeoverApprovedUserIds.includes(userId)
-      ? takeoverApprovedUserIds.filter(id => id !== userId)
-      : [...takeoverApprovedUserIds, userId];
+    const newApproved = liveApprovedUserIds.includes(userId)
+      ? liveApprovedUserIds.filter(id => id !== userId)
+      : [...liveApprovedUserIds, userId];
     broadcastTakeoverSync(takeoverModeEnabled, newApproved);
   };
 
@@ -221,7 +227,7 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
         {takeoverModeEnabled && (
           <div className="flex flex-col gap-1">
             {allParticipants.map(p => {
-              const isApproved = takeoverApprovedUserIds.includes(p.userId);
+              const isApproved = liveApprovedUserIds.includes(p.userId);
               const isCameraLeader = boardroomLeaderId === p.userId;
               return (
                 <button

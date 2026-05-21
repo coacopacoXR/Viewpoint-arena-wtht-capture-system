@@ -24,6 +24,7 @@ import HumanParticipantTile from './HumanParticipantTile';
 import MobileBoardroomLayout from './layouts/MobileBoardroomLayout';
 import { useActiveReviewStore } from '../../../lib/activeReviewStore';
 import ReviewPanelContent from '../ReviewPanelContent';
+import { useIsMobile } from '../../../lib/useIsMobile';
 
 // Thin collapsable floating panel wrapper used for tree and comments
 const FloatingPanel: React.FC<{
@@ -77,10 +78,13 @@ const BoardroomShell: React.FC = () => {
     endMeeting,
     boardroomLeaderId,
     takeoverModeEnabled,
+    takeoverApprovedUserIds,
     boardroomPresenterDetachedId,
     resumeBoardroomPresenter,
     pendingPresenterRequest,
     setPendingPresenterRequest,
+    presenterRequestStatus,
+    setPresenterRequestStatus,
     sessionHostId,
   } = useStore(useShallow(state => ({
     agents: state.agents,
@@ -95,24 +99,43 @@ const BoardroomShell: React.FC = () => {
     endMeeting: state.endMeeting,
     boardroomLeaderId: state.boardroomLeaderId,
     takeoverModeEnabled: state.takeoverModeEnabled,
+    takeoverApprovedUserIds: state.takeoverApprovedUserIds,
     boardroomPresenterDetachedId: state.boardroomPresenterDetachedId,
     resumeBoardroomPresenter: state.resumeBoardroomPresenter,
     pendingPresenterRequest: state.pendingPresenterRequest,
     setPendingPresenterRequest: state.setPendingPresenterRequest,
+    presenterRequestStatus: state.presenterRequestStatus,
+    setPresenterRequestStatus: state.setPresenterRequestStatus,
     sessionHostId: state.sessionHostId,
   })));
 
-  const { localUserId, remoteParticipantList, broadcastArenaEntry, broadcastMeetingEnd, broadcastLeaderTakeover, broadcastPresenterRequest } = usePresence();
+  const { localUserId, remoteParticipantList, broadcastArenaEntry, broadcastMeetingEnd, broadcastLeaderTakeover, broadcastPresenterRequest, broadcastPresenterRequestDenied } = usePresence();
   const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam } = useWebRTCContext();
   const isHost = sessionHostId === localUserId || sessionHostId === null;
   const isPresenter = boardroomLeaderId === localUserId;
+  // A non-approved participant in takeover mode can't grab the camera by dragging,
+  // so they still need the explicit "Request to Present" button. Approved
+  // takeover users get the button hidden because they can just drag to take over.
+  const canSelfTakeover = takeoverModeEnabled && takeoverApprovedUserIds.includes(localUserId);
 
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  // Auto-clear a "denied" toast after a few seconds so it doesn't linger.
   useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
-  }, []);
+    if (presenterRequestStatus !== 'denied') return;
+    const t = setTimeout(() => setPresenterRequestStatus(null), 4000);
+    return () => clearTimeout(t);
+  }, [presenterRequestStatus, setPresenterRequestStatus]);
+
+  // If the request becomes irrelevant (I became host, became presenter, or left
+  // boardroom mode), drop it.
+  useEffect(() => {
+    if (isHost || isPresenter) {
+      if (presenterRequestStatus) setPresenterRequestStatus(null);
+    }
+  }, [isHost, isPresenter, presenterRequestStatus, setPresenterRequestStatus]);
+
+  // Stable mobile detection (UA + pointer capability). Resizing the window
+  // must not toggle the user into the mobile layout mid-session.
+  const isMobile = useIsMobile();
 
   // Presenter label based on the real person driving the camera
   const leaderName = boardroomLeaderId === localUserId
@@ -556,13 +579,19 @@ const BoardroomShell: React.FC = () => {
                 <span className="text-white font-bold">{pendingPresenterRequest.fromName}</span> wants to present
               </span>
               <button
-                onClick={() => { broadcastLeaderTakeover(pendingPresenterRequest.fromUserId); setPendingPresenterRequest(null); }}
+                onClick={() => {
+                  broadcastLeaderTakeover(pendingPresenterRequest.fromUserId);
+                  setPendingPresenterRequest(null);
+                }}
                 className="flex items-center gap-1 bg-green-500/20 border border-green-500/40 text-green-300 px-2 py-0.5 rounded hover:bg-green-500/40 transition-colors"
               >
                 <CheckCircle size={9} /> Allow
               </button>
               <button
-                onClick={() => setPendingPresenterRequest(null)}
+                onClick={() => {
+                  broadcastPresenterRequestDenied(pendingPresenterRequest.fromUserId);
+                  setPendingPresenterRequest(null);
+                }}
                 className="flex items-center gap-1 bg-white/5 border border-white/15 text-white/40 px-2 py-0.5 rounded hover:bg-white/15 transition-colors"
               >
                 <XCircle size={9} /> Deny
@@ -571,20 +600,40 @@ const BoardroomShell: React.FC = () => {
           </div>
         )}
 
-        {/* Non-host: request to present button (only when not in takeover mode and not already presenter) */}
-        {!isHost && !isPresenter && !takeoverModeEnabled && (
+        {/* Non-host, non-presenter: explicit request flow.
+            Hidden for approved-in-takeover users (they grab via drag). */}
+        {!isHost && !isPresenter && !canSelfTakeover && (
           <div className="absolute bottom-16 right-3 z-20 pointer-events-auto">
-            <button
-              onClick={() => {
-                const stored = localStorage.getItem('vp_user');
-                const name = stored ? JSON.parse(stored).name || 'Guest' : 'Guest';
-                broadcastPresenterRequest(localUserId, name);
-              }}
-              className="flex items-center gap-1.5 bg-[#1a1a1a]/80 border border-white/20 backdrop-blur-sm text-white/60 hover:text-white hover:border-white/40 text-[9px] font-mono px-2.5 py-1.5 rounded-full transition-all"
-            >
-              <Mic2 size={10} />
-              Request to Present
-            </button>
+            {presenterRequestStatus === 'pending' ? (
+              <div className="flex items-center gap-1.5 bg-yellow-500/15 border border-yellow-500/40 backdrop-blur-sm text-yellow-200 text-[9px] font-mono px-2.5 py-1.5 rounded-full">
+                <div className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                Request sent — waiting for host…
+                <button
+                  onClick={() => setPresenterRequestStatus(null)}
+                  className="ml-1 text-yellow-200/70 hover:text-white text-[10px]"
+                  title="Cancel"
+                >
+                  ×
+                </button>
+              </div>
+            ) : presenterRequestStatus === 'denied' ? (
+              <div className="flex items-center gap-1.5 bg-red-500/15 border border-red-500/40 backdrop-blur-sm text-red-300 text-[9px] font-mono px-2.5 py-1.5 rounded-full">
+                <XCircle size={10} />
+                Request denied
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  const stored = localStorage.getItem('vp_user');
+                  const name = stored ? JSON.parse(stored).name || 'Guest' : 'Guest';
+                  broadcastPresenterRequest(localUserId, name);
+                }}
+                className="flex items-center gap-1.5 bg-[#1a1a1a]/80 border border-white/20 backdrop-blur-sm text-white/60 hover:text-white hover:border-white/40 text-[9px] font-mono px-2.5 py-1.5 rounded-full transition-all"
+              >
+                <Mic2 size={10} />
+                Request to Present
+              </button>
+            )}
           </div>
         )}
 

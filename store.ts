@@ -208,7 +208,12 @@ interface AppState {
   // Advanced Collaboration Features
   leaderId: string | 'USER' | null;
   followingRemoteUserId: string | null; // camera + agents locked to a remote participant
-  splitScreenTargetId: string | null;
+  // Split screen can follow either an AI agent or a real participant.
+  // Discriminated by `kind` so the renderer knows which lookup path to use.
+  splitScreenTarget:
+    | { kind: 'agent'; id: string }
+    | { kind: 'user'; userId: string }
+    | null;
   userInteractionPoint: Vector3;
   isLaserActive: boolean;
   laserHighlightGranularity: 'model' | 'part';
@@ -303,7 +308,7 @@ interface AppState {
   setActiveAgent: (id: string | null) => void;
   setLeader: (id: string | 'USER' | null) => void;
   setFollowingRemoteUser: (userId: string | null) => void;
-  setSplitScreenTarget: (id: string | null) => void;
+  setSplitScreenTarget: (target: AppState['splitScreenTarget']) => void;
   setUserInteractionPoint: (pos: Vector3) => void;
   setLaserActive: (active: boolean) => void;
   setLaserHighlightGranularity: (g: 'model' | 'part') => void;
@@ -402,6 +407,10 @@ interface AppState {
   pendingPresenterRequest: { fromUserId: string; fromName: string } | null;
   setPendingPresenterRequest: (req: { fromUserId: string; fromName: string } | null) => void;
 
+  // Requestor's local view of their pending/denied presenter request
+  presenterRequestStatus: 'pending' | 'denied' | null;
+  setPresenterRequestStatus: (status: 'pending' | 'denied' | null) => void;
+
   // --- SESSION HOST ---
   sessionHostId: string | null; // Zoom-style host: first to join, controls view transitions
   setSessionHostId: (id: string | null) => void;
@@ -423,7 +432,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeAgentId: null,
   leaderId: null,
   followingRemoteUserId: null,
-  splitScreenTargetId: null,
+  splitScreenTarget: null,
   userInteractionPoint: new Vector3(),
   isLaserActive: false,
   laserHighlightGranularity: 'part',
@@ -517,7 +526,7 @@ export const useStore = create<AppState>((set, get) => ({
       ? { followingRemoteUserId: userId, leaderId: 'USER', viewMode: ViewMode.FREE, activeAgentId: null }
       : { followingRemoteUserId: null, leaderId: null }
   ),
-  setSplitScreenTarget: (id) => set({ splitScreenTargetId: id }),
+  setSplitScreenTarget: (target) => set({ splitScreenTarget: target }),
   setUserInteractionPoint: (pos) => set({ userInteractionPoint: pos }),
   setLaserActive: (active) => set({ isLaserActive: active }),
   setLaserHighlightGranularity: (g) => set({ laserHighlightGranularity: g }),
@@ -659,7 +668,7 @@ export const useStore = create<AppState>((set, get) => ({
           // Reset any active selections
           activeAgentId: null,
           leaderId: null,
-          splitScreenTargetId: null,
+          splitScreenTarget: null,
           isMeetingEnded: false,
           time: 0,
           // Reset comment mode
@@ -734,6 +743,7 @@ export const useStore = create<AppState>((set, get) => ({
   boardroomPendingEntry: false,
   boardroomPresenterDetachedId: null,
   pendingPresenterRequest: null,
+  presenterRequestStatus: null,
   isBoardroomMode: false,
   boardroomLayout: 'focus' as BoardroomLayout,
   boardroomInteractionEnabled: false,
@@ -755,9 +765,15 @@ export const useStore = create<AppState>((set, get) => ({
         viewMode: ViewMode.FREE,
         activeAgentId: null,
         temporarilyDisengagedFromAgentId: null,
-        // Host is presenter by default; BoardroomPresenterSync will set followingRemoteUserId for non-hosts
+        // Host is presenter by default; BoardroomPresenterSync will set followingRemoteUserId for non-hosts.
+        // Late joiners overwrite this from BOARDROOM_STATE's authoritative leaderId.
         boardroomLeaderId: state.sessionHostId,
         boardroomPresenterDetachedId: null,
+        // Clean slate for boardroom policy each entry — host re-enables explicitly
+        takeoverModeEnabled: false,
+        takeoverApprovedUserIds: [],
+        pendingPresenterRequest: null,
+        presenterRequestStatus: null,
       };
     }
     return {
@@ -769,6 +785,10 @@ export const useStore = create<AppState>((set, get) => ({
       activeAgentId: null,
       temporarilyDisengagedFromAgentId: null,
       boardroomPresenterDetachedId: null,
+      takeoverModeEnabled: false,
+      takeoverApprovedUserIds: [],
+      pendingPresenterRequest: null,
+      presenterRequestStatus: null,
     };
   }),
   setBoardroomLayout: (layout) => set({ boardroomLayout: layout }),
@@ -802,6 +822,7 @@ export const useStore = create<AppState>((set, get) => ({
   }),
   resumeBoardroomPresenter: () => set({ boardroomPresenterDetachedId: null }),
   setPendingPresenterRequest: (req) => set({ pendingPresenterRequest: req }),
+  setPresenterRequestStatus: (status) => set({ presenterRequestStatus: status }),
 
 }));
 

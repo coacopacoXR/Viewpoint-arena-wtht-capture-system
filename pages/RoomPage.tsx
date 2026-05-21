@@ -12,6 +12,7 @@ import { WebRTCContext } from '../lib/WebRTCContext';
 import { useReviewSetupStore } from '../lib/reviewSetupStore';
 import { useActiveReviewStore } from '../lib/activeReviewStore';
 import { loadCuration, saveCuration } from '../lib/curationsRepo';
+import { useIsMobile } from '../lib/useIsMobile';
 
 function getMobileUserName(): string {
   try {
@@ -29,7 +30,9 @@ const RoomPage: React.FC = () => {
   const isMeetingEnded = useStore(state => state.isMeetingEnded);
   const isBoardroomMode = useStore(state => state.isBoardroomMode);
 
-  const isMobile = window.innerWidth < 768 || /Mobi|Android/i.test(navigator.userAgent);
+  // Stable mobile detection: keyed off UA + pointer capability rather than viewport
+  // width, so a narrow desktop window never flips into the mobile UI mid-session.
+  const isMobile = useIsMobile();
 
   // Guard: if arriving directly (not from lobby), redirect to lobby to set identity
   useEffect(() => {

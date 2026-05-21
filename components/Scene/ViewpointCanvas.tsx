@@ -134,7 +134,7 @@ const SceneRenderer = () => {
   const followingRemoteUserId = useStore(state => state.followingRemoteUserId);
   const { remoteParticipants } = usePresence();
   const activeAgentId = useStore(state => state.activeAgentId);
-  const splitScreenTargetId = useStore(state => state.splitScreenTargetId);
+  const splitScreenTarget = useStore(state => state.splitScreenTarget);
   const agents = useStore(state => state.agents);
   const agentWeights = useStore(state => state.agentWeights);
   const isLaserActive = useStore(state => state.isLaserActive);
@@ -349,45 +349,59 @@ const SceneRenderer = () => {
         mainCam.aspect = size.width / size.height;
         mainCam.updateProjectionMatrix();
 
-        // 2. Render Right Panel (Agent View)
-        let agentFound = false;
-        if (splitScreenTargetId && agentCamRef.current) {
-            const agentObj = scene.getObjectByName(`Agent-${splitScreenTargetId}`);
-            if (agentObj) {
-                agentFound = true;
-                const p = new THREE.Vector3();
-                p.setFromMatrixPosition(agentObj.matrixWorld);
-                p.y += 0.6; // Eye/Screen level
+        // 2. Render Right Panel — POV of an agent or a remote participant
+        let targetFound = false;
+        if (splitScreenTarget && agentCamRef.current) {
+            const cam = agentCamRef.current;
+            // Shared camera setup for both kinds
+            cam.aspect = (size.width / 2) / size.height;
 
-                agentCamRef.current.position.copy(p);
+            if (splitScreenTarget.kind === 'agent') {
+                const agentObj = scene.getObjectByName(`Agent-${splitScreenTarget.id}`);
+                if (agentObj) {
+                    targetFound = true;
+                    const p = new THREE.Vector3();
+                    p.setFromMatrixPosition(agentObj.matrixWorld);
+                    p.y += 0.6; // Eye/Screen level
+                    cam.position.copy(p);
 
-                // Use the agent's rotation exactly
-                const q = new THREE.Quaternion();
-                agentObj.getWorldQuaternion(q);
-                agentCamRef.current.quaternion.copy(q);
-                // FIX: Objects look at +Z, Cameras look down -Z. We must rotate 180 deg around Y.
-                agentCamRef.current.rotateY(Math.PI);
+                    // Use the agent's rotation exactly. Objects look at +Z, cameras
+                    // down -Z, so we rotate 180° around Y.
+                    const q = new THREE.Quaternion();
+                    agentObj.getWorldQuaternion(q);
+                    cam.quaternion.copy(q);
+                    cam.rotateY(Math.PI);
+                    cam.updateProjectionMatrix();
+                    cam.updateMatrixWorld();
 
-                // Adjust agent cam aspect
-                agentCamRef.current.aspect = (size.width / 2) / size.height;
-                agentCamRef.current.updateProjectionMatrix();
-                agentCamRef.current.updateMatrixWorld();
+                    // Hide the agent so they don't block their own view
+                    const wasVisible = agentObj.visible;
+                    agentObj.visible = false;
 
-                // IMPORTANT: Hide the agent itself so they don't block their own view
-                const wasVisible = agentObj.visible;
-                agentObj.visible = false;
+                    gl.setViewport(halfWidth, 0, halfWidth, h);
+                    gl.setScissor(halfWidth, 0, halfWidth, h);
+                    gl.render(scene, cam);
 
-                gl.setViewport(halfWidth, 0, halfWidth, h);
-                gl.setScissor(halfWidth, 0, halfWidth, h);
-                gl.render(scene, agentCamRef.current);
+                    agentObj.visible = wasVisible;
+                }
+            } else if (splitScreenTarget.kind === 'user') {
+                const remote = remoteParticipants.current.get(splitScreenTarget.userId);
+                if (remote) {
+                    targetFound = true;
+                    cam.position.set(remote.position[0], remote.position[1], remote.position[2]);
+                    cam.lookAt(remote.lookAt[0], remote.lookAt[1], remote.lookAt[2]);
+                    cam.updateProjectionMatrix();
+                    cam.updateMatrixWorld();
 
-                // Restore visibility
-                agentObj.visible = wasVisible;
+                    gl.setViewport(halfWidth, 0, halfWidth, h);
+                    gl.setScissor(halfWidth, 0, halfWidth, h);
+                    gl.render(scene, cam);
+                }
             }
         }
 
-        // Fallback if no agent selected or not found: Clear/Black
-        if (!agentFound) {
+        // Fallback if no target selected or target gone: render an empty pane
+        if (!targetFound) {
              gl.setViewport(halfWidth, 0, halfWidth, h);
              gl.setScissor(halfWidth, 0, halfWidth, h);
              gl.setClearColor(new THREE.Color('#111'));
