@@ -3,18 +3,34 @@ import type { RemoteParticipantInfo } from './usePartyPresence';
 
 // STUN + public TURN for production NAT traversal.
 // STUN alone fails when either peer is behind symmetric NAT (common on 4G/corporate).
+//
+// If VITE_TURN_URL / USERNAME / CREDENTIAL env vars are set, the TURN block
+// is replaced with those — same shape as the openrelay block, just credentials
+// the provider actually honors. With env vars unset, behavior is exactly the
+// original (openrelay public pool — works until it doesn't).
+const env: any = typeof import.meta !== 'undefined' ? (import.meta as any).env : {};
+const TURN_URL = env?.VITE_TURN_URL as string | undefined;
+const TURN_USERNAME = env?.VITE_TURN_USERNAME as string | undefined;
+const TURN_CREDENTIAL = env?.VITE_TURN_CREDENTIAL as string | undefined;
+
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-      'turns:openrelay.metered.ca:443',
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
+  TURN_URL && TURN_USERNAME && TURN_CREDENTIAL
+    ? {
+        urls: TURN_URL.split(',').map(s => s.trim()).filter(Boolean),
+        username: TURN_USERNAME,
+        credential: TURN_CREDENTIAL,
+      }
+    : {
+        urls: [
+          'turn:openrelay.metered.ca:80',
+          'turn:openrelay.metered.ca:443',
+          'turns:openrelay.metered.ca:443',
+        ],
+        username: 'openrelayproject',
+        credential: 'openrelayproject',
+      },
 ];
 
 export interface UseWebRTCReturn {
