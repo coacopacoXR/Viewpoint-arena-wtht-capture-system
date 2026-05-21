@@ -110,7 +110,7 @@ const BoardroomShell: React.FC = () => {
   })));
 
   const { localUserId, remoteParticipantList, broadcastArenaEntry, broadcastMeetingEnd, broadcastLeaderTakeover, broadcastPresenterRequest, broadcastPresenterRequestDenied } = usePresence();
-  const { localStream, remoteStreams, peerStates, isMicOn, isCamOn, toggleMic, toggleCam } = useWebRTCContext();
+  const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam } = useWebRTCContext();
   const isHost = sessionHostId === localUserId || sessionHostId === null;
   const isPresenter = boardroomLeaderId === localUserId;
   // A non-approved participant in takeover mode can't grab the camera by dragging,
@@ -208,7 +208,6 @@ const BoardroomShell: React.FC = () => {
           isCamOn={p.isYou ? isCamOn : true}
           isYou={p.isYou}
           isPresenter={boardroomLeaderId === p.userId}
-          connectionState={p.isYou ? undefined : peerStates.get(p.userId)}
         />
       ))}
     </>
@@ -242,7 +241,6 @@ const BoardroomShell: React.FC = () => {
         onEnd={() => { endMeeting(true); broadcastMeetingEnd(); }}
         isHost={isHost}
         boardroomLeaderId={boardroomLeaderId}
-        peerStates={peerStates}
       />
     );
   }
