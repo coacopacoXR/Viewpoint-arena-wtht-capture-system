@@ -16,6 +16,7 @@ interface MobileBoardroomLayoutProps {
   onEnd: () => void;
   isHost: boolean;
   boardroomLeaderId: string | null;
+  peerStates?: Map<string, RTCPeerConnectionState>;
 }
 
 const MobileBoardroomLayout: React.FC<MobileBoardroomLayoutProps> = ({
@@ -30,6 +31,7 @@ const MobileBoardroomLayout: React.FC<MobileBoardroomLayoutProps> = ({
   onEnd,
   isHost,
   boardroomLeaderId,
+  peerStates,
 }) => {
   const localUserName = (() => {
     try {
@@ -62,6 +64,7 @@ const MobileBoardroomLayout: React.FC<MobileBoardroomLayoutProps> = ({
               isYou={p.isYou}
               isPresenter={boardroomLeaderId === p.userId}
               size="fill"
+              connectionState={p.isYou ? undefined : peerStates?.get(p.userId)}
             />
           </div>
         ))}
