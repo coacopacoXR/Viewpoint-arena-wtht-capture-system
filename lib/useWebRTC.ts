@@ -66,6 +66,10 @@ export function useWebRTC({
   const makingOffer = useRef<Map<string, boolean>>(new Map());
   const broadcastRef = useRef(broadcastWebRTCSignal);
   const localUserIdRef = useRef(localUserId);
+  // Holds the ICE servers used for every new RTCPeerConnection. Starts at the
+  // static fallback; overwritten with Cloudflare's ephemeral list when the
+  // /api/turn-credentials fetch resolves (once per boardroom activation).
+  const iceServersRef = useRef<RTCIceServer[]>(ICE_SERVERS);
 
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
@@ -103,7 +107,7 @@ export function useWebRTC({
       return existing;
     }
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
 
     // Add sendrecv transceivers so ICE gathers candidates immediately, even before local
     // tracks exist. addTrack() later reuses these transceivers without direction conflicts.
@@ -228,12 +232,28 @@ export function useWebRTC({
     }
 
     setIsStarting(true);
+
+    // Fetch fresh Cloudflare TURN credentials in parallel with getUserMedia.
+    // If the fetch succeeds, iceServersRef.current is upgraded BEFORE we
+    // create any peer connections (getUserMedia is slower than the fetch in
+    // practice). If it fails, the ref keeps its static fallback so behavior
+    // degrades gracefully back to the original openrelay path.
+    const fetchTurn = fetch('/api/turn-credentials')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.iceServers && Array.isArray(data.iceServers)) {
+          iceServersRef.current = data.iceServers;
+        }
+      })
+      .catch(() => { /* keep fallback */ });
+
     const tryMedia = (video: boolean) =>
       navigator.mediaDevices.getUserMedia({ video, audio: true });
 
-    tryMedia(true)
-      .catch(() => tryMedia(false))
-      .then(stream => {
+    const media = tryMedia(true).catch(() => tryMedia(false));
+
+    Promise.all([fetchTurn, media])
+      .then(([, stream]) => {
         localStreamRef.current = stream;
         setLocalStream(stream);
         setHasPermission(true);
