@@ -3,37 +3,18 @@ import type { RemoteParticipantInfo } from './usePartyPresence';
 
 // STUN + public TURN for production NAT traversal.
 // STUN alone fails when either peer is behind symmetric NAT (common on 4G /
-// corporate). The free public TURN endpoints below are inherently best-effort
-// — they're rate-limited and frequently slow. If "checking → failed" persists
-// in production, the real fix is to point these at a paid/owned TURN service.
-//
-// We list multiple host:port combinations so that if one DNS / network path
-// is blocked, the others may still resolve. TCP/443 + TLS/443 (the `turns:`
-// scheme) are the variants most likely to survive corporate firewalls.
+// corporate). Cloudflare's free STUN is fronted by their global edge and is
+// significantly more reliable in production than google.l alone — keep both
+// for redundancy. openrelay TURN is a last-resort fallback (rate-limited).
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.cloudflare.com:3478' },
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
   {
     urls: [
       'turn:openrelay.metered.ca:80',
       'turn:openrelay.metered.ca:443',
-      'turn:openrelay.metered.ca:443?transport=tcp',
       'turns:openrelay.metered.ca:443',
-    ],
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  // Second free pool — different host, same credentials shape. If openrelay's
-  // node is overloaded but global.relay is fine (or vice versa), having both
-  // listed gives ICE another path to try.
-  {
-    urls: [
-      'turn:global.relay.metered.ca:80',
-      'turn:global.relay.metered.ca:80?transport=tcp',
-      'turn:global.relay.metered.ca:443',
-      'turns:global.relay.metered.ca:443?transport=tcp',
     ],
     username: 'openrelayproject',
     credential: 'openrelayproject',
@@ -116,12 +97,7 @@ export function useWebRTC({
       return existing;
     }
 
-    const pc = new RTCPeerConnection({
-      iceServers: ICE_SERVERS,
-      // Pre-gather candidates from all listed servers so the offer/answer ships
-      // with a fuller candidate set instead of trickling slowly through STUN.
-      iceCandidatePoolSize: 4,
-    });
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
     // Add sendrecv transceivers so ICE gathers candidates immediately, even before local
     // tracks exist. addTrack() later reuses these transceivers without direction conflicts.
@@ -142,14 +118,7 @@ export function useWebRTC({
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        // Log candidate type so the debug pane shows whether TURN ('relay')
-        // candidates are actually being gathered — if only 'host' and 'srflx'
-        // show up but no 'relay', the TURN servers are unreachable from this
-        // peer (not just slow).
-        log(remoteUserId, 'local candidate', e.candidate.type, e.candidate.protocol, e.candidate.address || '?');
         broadcastRef.current(remoteUserId, { type: 'ice', candidate: e.candidate.toJSON() });
-      } else {
-        log(remoteUserId, 'local ICE gathering complete');
       }
     };
 
