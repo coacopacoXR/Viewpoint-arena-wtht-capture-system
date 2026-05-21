@@ -2,12 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type { RemoteParticipantInfo } from './usePartyPresence';
 
 // STUN + public TURN for production NAT traversal.
-// STUN alone fails when either peer is behind symmetric NAT (common on 4G /
-// corporate). Cloudflare's free STUN is fronted by their global edge and is
-// significantly more reliable in production than google.l alone — keep both
-// for redundancy. openrelay TURN is a last-resort fallback (rate-limited).
+// STUN alone fails when either peer is behind symmetric NAT (common on 4G/corporate).
 const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.cloudflare.com:3478' },
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   {
@@ -20,12 +16,6 @@ const ICE_SERVERS: RTCIceServer[] = [
     credential: 'openrelayproject',
   },
 ];
-
-// Toggle verbose connection logging via localStorage so production users can
-// help diagnose by running `localStorage.setItem('vp_webrtc_debug', '1')` and
-// reloading. Off by default to keep the console quiet.
-const DEBUG = typeof localStorage !== 'undefined' && localStorage.getItem('vp_webrtc_debug') === '1';
-function log(...args: any[]) { if (DEBUG) console.log('[WebRTC]', ...args); }
 
 export interface UseWebRTCReturn {
   localStream: MediaStream | null;
@@ -122,19 +112,7 @@ export function useWebRTC({
       }
     };
 
-    // Surface ICE failures explicitly — peer connection states sometimes get
-    // stuck in 'checking' when STUN/TURN can't establish a path, which is the
-    // most common production failure that looks like "tiles are blank".
-    pc.oniceconnectionstatechange = () => {
-      log(remoteUserId, 'iceConnectionState →', pc.iceConnectionState);
-      if (pc.iceConnectionState === 'failed') {
-        console.warn('[WebRTC] ICE failed for peer', remoteUserId, '— attempting restartIce()');
-        try { pc.restartIce(); } catch (e) { console.warn('[WebRTC] restartIce error', e); }
-      }
-    };
-
     pc.onconnectionstatechange = () => {
-      log(remoteUserId, 'connectionState →', pc.connectionState);
       updatePeerState(remoteUserId, pc.connectionState);
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         peerConnections.current.delete(remoteUserId);
@@ -238,12 +216,8 @@ export function useWebRTC({
       navigator.mediaDevices.getUserMedia({ video, audio: true });
 
     tryMedia(true)
-      .catch((err) => {
-        log('getUserMedia(video+audio) failed, retrying audio-only:', err?.name, err?.message);
-        return tryMedia(false);
-      })
+      .catch(() => tryMedia(false))
       .then(stream => {
-        log('getUserMedia success — tracks:', stream.getTracks().map(t => `${t.kind}:${t.label}`));
         localStreamRef.current = stream;
         setLocalStream(stream);
         setHasPermission(true);
@@ -257,12 +231,9 @@ export function useWebRTC({
           }
         }
       })
-      .catch((err) => {
-        // Both attempts failed — surface the cause and leave hasPermission
-        // false so the UI can show "Allow camera/microphone" guidance.
-        console.error('[WebRTC] getUserMedia denied or unavailable:', err?.name, err?.message);
+      .catch(() => {
         setIsStarting(false);
-        setHasPermission(false);
+        setHasPermission(true);
       });
 
     return () => {
