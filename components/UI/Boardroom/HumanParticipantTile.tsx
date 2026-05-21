@@ -9,6 +9,11 @@ interface HumanParticipantTileProps {
   isYou?: boolean;
   isPresenter?: boolean;
   size?: 'sm' | 'md' | 'fill';
+  // Remote peer's WebRTC connection state. Undefined for the local "You" tile.
+  // Surfaced as a small badge so a stuck "connecting" tile is visible at a
+  // glance — that's the common production failure when STUN/TURN can't
+  // establish a path.
+  connectionState?: RTCPeerConnectionState;
 }
 
 const HumanParticipantTile: React.FC<HumanParticipantTileProps> = ({
@@ -20,17 +25,30 @@ const HumanParticipantTile: React.FC<HumanParticipantTileProps> = ({
   isYou = false,
   isPresenter = false,
   size = 'md',
+  connectionState,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
 
-  // Attach stream to video element
+  // Attach stream to video element and force play(). Some browsers (notably
+  // Safari and Chrome with autoplay-with-sound restrictions) silently leave
+  // remote video paused — calling play() explicitly and catching the rejection
+  // lets us flip a "click to play" badge instead of showing a black tile.
   useEffect(() => {
-    if (!videoRef.current) return;
+    const v = videoRef.current;
+    if (!v) return;
     if (stream) {
-      videoRef.current.srcObject = stream;
+      v.srcObject = stream;
+      v.play()
+        .then(() => setAutoplayBlocked(false))
+        .catch((err) => {
+          console.warn('[HumanParticipantTile] play() rejected:', err?.name, err?.message);
+          setAutoplayBlocked(true);
+        });
     } else {
-      videoRef.current.srcObject = null;
+      v.srcObject = null;
+      setAutoplayBlocked(false);
     }
   }, [stream]);
 
@@ -137,11 +155,53 @@ const HumanParticipantTile: React.FC<HumanParticipantTileProps> = ({
       )}
 
       {/* Live indicator */}
-      {hasActiveVideo && (
+      {hasActiveVideo && !autoplayBlocked && (
         <div className="absolute top-1.5 left-1.5 flex items-center gap-1 bg-black/50 px-1.5 py-0.5 rounded z-20">
           <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
           <span className="text-[7px] font-mono text-green-400">LIVE</span>
         </div>
+      )}
+
+      {/* Connection-state badge for remote tiles. Hidden once connected so
+          the tile chrome stays clean — only visible while connecting/failed
+          so the user can spot a stuck peer at a glance. */}
+      {!isYou && connectionState && connectionState !== 'connected' && (
+        <div
+          className={`absolute top-1.5 left-1.5 flex items-center gap-1 bg-black/60 px-1.5 py-0.5 rounded z-20 ${
+            connectionState === 'failed' || connectionState === 'closed'
+              ? 'text-red-400'
+              : connectionState === 'disconnected'
+              ? 'text-amber-400'
+              : 'text-blue-300'
+          }`}
+        >
+          <div className={`w-1.5 h-1.5 rounded-full ${
+            connectionState === 'failed' || connectionState === 'closed'
+              ? 'bg-red-400'
+              : connectionState === 'disconnected'
+              ? 'bg-amber-400'
+              : 'bg-blue-300 animate-pulse'
+          }`} />
+          <span className="text-[7px] font-mono uppercase tracking-widest">
+            {connectionState}
+          </span>
+        </div>
+      )}
+
+      {/* Autoplay-blocked overlay: click to start playback. Required when
+          remote audio tracks are unmuted and the user hasn't gestured on the
+          page yet (some browsers gate cross-origin audio behind a click). */}
+      {autoplayBlocked && stream && (
+        <button
+          onClick={() => {
+            videoRef.current?.play().then(() => setAutoplayBlocked(false)).catch(() => {});
+          }}
+          className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 hover:bg-black/70 transition-colors"
+        >
+          <div className="text-white text-[9px] font-mono uppercase tracking-widest bg-black/70 px-2 py-1 rounded border border-white/30">
+            ▶ Click to play
+          </div>
+        </button>
       )}
 
       {/* Mic muted indicator */}
