@@ -16,7 +16,7 @@ type RoomMessage =
   | { type: 'INSIGHT_CARD'; payload: any }
   | { type: 'LEADER_CHANGE'; payload: { userId: string | null } }
   | { type: 'BOARDROOM_COUNTDOWN'; payload: Record<string, never> }
-  | { type: 'BOARDROOM_STATE'; payload: { active: boolean } }
+  | { type: 'BOARDROOM_STATE'; payload: { active: boolean; leaderId: string | null; takeover: { enabled: boolean; approvedUserIds: string[] } } }
   | { type: 'ARENA_ENTRY'; payload: Record<string, never> }
   | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null; targetId?: string | null; targetMeshName?: string | null; targetPartName?: string | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
@@ -28,6 +28,7 @@ type RoomMessage =
   | { type: 'MEETING_END'; payload: Record<string, never> }
   | { type: 'TAKEOVER_SYNC'; payload: { enabled: boolean; approvedUserIds: string[] } }
   | { type: 'PRESENTER_REQUEST'; payload: { fromUserId: string; fromName: string } }
+  | { type: 'PRESENTER_REQUEST_DENIED'; payload: { fromUserId: string } }
   | { type: 'TAKEOVER_ATTEMPT'; payload: { userId: string } }
   | { type: 'PRESENTER_CHANGED'; payload: { userId: string } }
   | { type: 'COMMENT_ADD'; payload: { comment: any } }
@@ -47,9 +48,12 @@ export default class RoomServer implements Party.Server {
   joinOrder: string[] = [];
   // Maps PartyKit connection ID → app userId (populated on first PRESENCE from that conn)
   connToUser = new Map<string, string>();
-  // Server-authoritative presenter tracking for takeover mode
-  currentPresenter: string | null = null;
+  // Server-authoritative presenter tracking (boardroom)
+  boardroomLeaderId: string | null = null;
   lastPresenterChange = 0;
+  // Takeover-mode policy — held server-side so late joiners get a consistent view
+  takeoverModeEnabled = false;
+  takeoverApprovedUserIds: string[] = [];
   // Persisted model state for late joiners
   currentModel: { modelType: string; fileBase64?: string; fileName?: string } | null = null;
   // Persisted curated review config (viewpoints, pins, agenda…)
@@ -63,6 +67,25 @@ export default class RoomServer implements Party.Server {
 
   private computeHost(): string | null {
     return this.joinOrder[0] ?? null;
+  }
+
+  private boardroomStatePayload() {
+    return {
+      active: this.isBoardroomMode,
+      leaderId: this.boardroomLeaderId,
+      takeover: {
+        enabled: this.takeoverModeEnabled,
+        approvedUserIds: this.takeoverApprovedUserIds,
+      },
+    };
+  }
+
+  private resetBoardroomState() {
+    this.isBoardroomMode = false;
+    this.boardroomLeaderId = null;
+    this.takeoverModeEnabled = false;
+    this.takeoverApprovedUserIds = [];
+    this.lastPresenterChange = 0;
   }
 
   onConnect(conn: Party.Connection) {
@@ -82,7 +105,10 @@ export default class RoomServer implements Party.Server {
       conn.send(JSON.stringify({ type: 'REVIEW_CONFIG', payload: { config: this.reviewConfig } } as RoomMessage));
     }
     conn.send(JSON.stringify({ type: 'COMMENT_ROSTER', payload: { comments: this.comments } } as RoomMessage));
-    conn.send(JSON.stringify({ type: 'BOARDROOM_STATE', payload: { active: this.isBoardroomMode } } as RoomMessage));
+    conn.send(JSON.stringify({
+      type: 'BOARDROOM_STATE',
+      payload: this.boardroomStatePayload(),
+    } as RoomMessage));
   }
 
   onMessage(message: string, sender: Party.Connection) {
@@ -119,23 +145,50 @@ export default class RoomServer implements Party.Server {
         payload: { hostId: this.computeHost() },
       } as RoomMessage));
 
+    } else if (msg.type === 'LEADER_TAKEOVER') {
+      // Host-initiated presenter change (or accepted request). Authoritative on the
+      // server so the sender + every other client end up agreeing on the leader.
+      const { userId } = msg.payload;
+      // Allow only if the requested user is actually a known participant — guards
+      // against stale UI clicks for users who just left.
+      if (!this.participants.has(userId)) return;
+      this.boardroomLeaderId = userId;
+      this.lastPresenterChange = Date.now();
+      // Broadcast to ALL connections (no exclude) so the sender's UI updates too.
+      this.room.broadcast(JSON.stringify(msg));
+
     } else if (msg.type === 'TAKEOVER_ATTEMPT') {
-      // Server validates cooldown and broadcasts authoritative PRESENTER_CHANGED to ALL clients
+      // Server validates cooldown + approval and broadcasts authoritative
+      // PRESENTER_CHANGED to ALL clients (including the attempter).
       const now = Date.now();
       const { userId } = msg.payload;
       if (
-        userId !== this.currentPresenter &&
+        this.takeoverModeEnabled &&
+        this.takeoverApprovedUserIds.includes(userId) &&
+        this.participants.has(userId) &&
+        userId !== this.boardroomLeaderId &&
         now - this.lastPresenterChange > PRESENTER_COOLDOWN
       ) {
-        this.currentPresenter = userId;
+        this.boardroomLeaderId = userId;
         this.lastPresenterChange = now;
-        // Broadcast to ALL — including sender — so everyone updates atomically
         this.room.broadcast(JSON.stringify({
           type: 'PRESENTER_CHANGED',
           payload: { userId },
         } as RoomMessage));
       }
-      // If cooldown active or already presenter, silently ignore
+      // If gated out (cooldown, not approved, already presenter), silently ignore
+
+    } else if (msg.type === 'TAKEOVER_SYNC') {
+      // Host-driven policy update. Persist on the server so late joiners and
+      // re-entries see a consistent state, and prune stale userIds.
+      const { enabled, approvedUserIds } = msg.payload;
+      this.takeoverModeEnabled = enabled;
+      this.takeoverApprovedUserIds = approvedUserIds.filter(id => this.participants.has(id));
+      // Echo the pruned list to everyone so clients stay in lock-step
+      this.room.broadcast(JSON.stringify({
+        type: 'TAKEOVER_SYNC',
+        payload: { enabled: this.takeoverModeEnabled, approvedUserIds: this.takeoverApprovedUserIds },
+      } as RoomMessage));
 
     } else if (msg.type === 'MODEL_CHANGE') {
       this.currentModel = msg.payload;
@@ -173,11 +226,19 @@ export default class RoomServer implements Party.Server {
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'BOARDROOM_COUNTDOWN') {
+      // Seed boardroom state. Leader defaults to the current host until someone
+      // is explicitly promoted via LEADER_TAKEOVER or TAKEOVER_ATTEMPT.
       this.isBoardroomMode = true;
+      this.boardroomLeaderId = this.computeHost();
+      // Clean slate for takeover policy each entry — host re-enables explicitly
+      this.takeoverModeEnabled = false;
+      this.takeoverApprovedUserIds = [];
+      this.lastPresenterChange = Date.now();
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'ARENA_ENTRY') {
-      this.isBoardroomMode = false;
+      // Leaving boardroom — wipe all boardroom state so the next entry is clean
+      this.resetBoardroomState();
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
 
     } else if (
@@ -186,10 +247,9 @@ export default class RoomServer implements Party.Server {
       msg.type === 'LEADER_CHANGE' ||
       msg.type === 'LASER_MOVE' ||
       msg.type === 'PRIVACY_MODE' ||
-      msg.type === 'LEADER_TAKEOVER' ||
       msg.type === 'MEETING_END' ||
-      msg.type === 'TAKEOVER_SYNC' ||
       msg.type === 'PRESENTER_REQUEST' ||
+      msg.type === 'PRESENTER_REQUEST_DENIED' ||
       msg.type === 'LIVE_CHAT' ||
       msg.type === 'XR_PRESENCE'
     ) {
@@ -206,6 +266,21 @@ export default class RoomServer implements Party.Server {
     this.participants.delete(userId);
     this.joinOrder = this.joinOrder.filter(id => id !== userId);
 
+    // Prune the leaving user out of any boardroom approvals/leadership so the
+    // remaining room doesn't chase a ghost.
+    let takeoverChanged = false;
+    if (this.takeoverApprovedUserIds.includes(userId)) {
+      this.takeoverApprovedUserIds = this.takeoverApprovedUserIds.filter(id => id !== userId);
+      takeoverChanged = true;
+    }
+
+    let leaderChanged = false;
+    if (this.boardroomLeaderId === userId) {
+      this.boardroomLeaderId = this.computeHost();
+      this.lastPresenterChange = Date.now();
+      leaderChanged = true;
+    }
+
     this.room.broadcast(JSON.stringify({
       type: 'LEAVE',
       payload: { userId },
@@ -215,5 +290,19 @@ export default class RoomServer implements Party.Server {
       type: 'HOST_CHANGE',
       payload: { hostId: this.computeHost() },
     } as RoomMessage));
+
+    if (takeoverChanged) {
+      this.room.broadcast(JSON.stringify({
+        type: 'TAKEOVER_SYNC',
+        payload: { enabled: this.takeoverModeEnabled, approvedUserIds: this.takeoverApprovedUserIds },
+      } as RoomMessage));
+    }
+
+    if (leaderChanged && this.boardroomLeaderId) {
+      this.room.broadcast(JSON.stringify({
+        type: 'LEADER_TAKEOVER',
+        payload: { userId: this.boardroomLeaderId },
+      } as RoomMessage));
+    }
   }
 }

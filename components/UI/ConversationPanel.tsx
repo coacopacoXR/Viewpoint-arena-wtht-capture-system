@@ -64,7 +64,7 @@ const ConversationPanel: React.FC = () => {
     insightCards,
     agents,
     viewMode,
-    splitScreenTargetId,
+    splitScreenTarget,
     setSplitScreenTarget,
     requirements,
     isPrivacyMode,
@@ -257,11 +257,11 @@ const ConversationPanel: React.FC = () => {
                     </h2>
                     <div className="flex flex-col gap-1 max-h-32 overflow-y-auto custom-scrollbar">
                         {agents.map(agent => {
-                            const isSelected = splitScreenTargetId === agent.id;
+                            const isSelected = splitScreenTarget?.kind === 'agent' && splitScreenTarget.id === agent.id;
                             return (
-                                <button 
+                                <button
                                     key={agent.id}
-                                    onClick={() => setSplitScreenTarget(agent.id)}
+                                    onClick={() => setSplitScreenTarget({ kind: 'agent', id: agent.id })}
                                     className={clsx(
                                         "flex items-center justify-between p-2 rounded border transition-all text-xs group",
                                         isSelected 

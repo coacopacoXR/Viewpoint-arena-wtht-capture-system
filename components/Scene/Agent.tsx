@@ -27,7 +27,7 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
   const setViewMode = useStore(state => state.setViewMode);
   const viewMode = useStore(state => state.viewMode);
   const leaderId = useStore(state => state.leaderId);
-  const splitScreenTargetId = useStore(state => state.splitScreenTargetId);
+  const splitScreenTarget = useStore(state => state.splitScreenTarget);
   const agentStyle = useStore(state => state.agentStyle);
   const updateHeatmap = useStore(state => state.updateHeatmap);
   const updateAgentStatus = useStore(state => state.updateAgentStatus);
@@ -313,7 +313,7 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
   if (isBoardroomMode && !isVRAgent) return null;
   const isVisible = !isPossessed; 
   const isActive = activeAgentId === initialState.id;
-  const isSplitTarget = splitScreenTargetId === initialState.id;
+  const isSplitTarget = splitScreenTarget?.kind === 'agent' && splitScreenTarget.id === initialState.id;
 
   const handleInteraction = (e: any) => {
     e.stopPropagation();

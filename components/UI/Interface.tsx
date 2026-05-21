@@ -30,6 +30,7 @@ import DeicticFeaturesExplainer from './DeicticFeaturesExplainer';
 import DrawingCanvas from './DrawingCanvas';
 import BoardroomShell from './Boardroom/BoardroomShell';
 import BoardroomCountdown from './BoardroomCountdown';
+import SplitViewOverlay from './SplitViewOverlay';
 
 const Button: React.FC<{ 
   active?: boolean; 
@@ -171,7 +172,7 @@ const Interface: React.FC = () => {
     resetTime, time,
     activeAgentId, setActiveAgent,
     leaderId, setLeader,
-    splitScreenTargetId, setSplitScreenTarget,
+    splitScreenTarget, setSplitScreenTarget,
     agents,
     agentWeights, setAgentWeight,
     endMeeting,
@@ -238,8 +239,10 @@ const Interface: React.FC = () => {
           setViewMode(ViewMode.FREE);
       } else {
           setViewMode(ViewMode.SPLIT_SCREEN);
-          if (!splitScreenTargetId && agents.length > 0) {
-              setSplitScreenTarget(agents[0].id);
+          // Default to the first agent if no target picked yet — the user
+          // can switch to a remote participant via the split-view selector.
+          if (!splitScreenTarget && agents.length > 0) {
+              setSplitScreenTarget({ kind: 'agent', id: agents[0].id });
           }
       }
   };
@@ -267,6 +270,10 @@ const Interface: React.FC = () => {
 
   return (
     <div className="w-full h-full p-6 relative pointer-events-none">
+      {/* Split-view connector (separator + name badges + target picker).
+          Renders only when viewMode === SPLIT_SCREEN. */}
+      <SplitViewOverlay />
+
       {/* Finger pointer prompt/calibration overlay + tracker host */}
       <FingerPointerHost />
 
