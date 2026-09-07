@@ -27,17 +27,37 @@ so every change lands in the working tree for review first. Specs live in
 ## Session 2026-09-07
 
 ### Done
-- `2a478e7` â€” committed `docs/plan/`, `docs/paper/`, `docs/README.md` as a
+- `2a478e7` — committed `docs/plan/`, `docs/paper/`, `docs/README.md` as a
   clean baseline so delegated diffs are reviewable.
+- `36f6011` — added this execution log.
 - Verified the Qwen headless path works end to end (13s round trip).
 - Wrote specs `.qwen-tasks/batch-a.md` and `.qwen-tasks/batch-b.md`.
+- **Batch A — `3736451`. T0.2, T0.3, T1.3 done, reviewed, committed.**
+  Reviewed rather than trusted: independently reproduced the typecheck
+  failure (10 errors without the `types/three-augment.ts` bridge, 0 with
+  it), so the fix is real and not a silencing hack. Tried a cleaner
+  tsconfig `paths` root-cause fix first — it is worse (11 errors) and was
+  reverted. Discovered the bridge file's `.ts` extension is load-bearing
+  (as `.d.ts` it becomes an ambient declaration, not an augmentation, and
+  the 10 errors return); documented in the file so nobody "tidies" it.
+  Confirmed Qwen's `.gitignore` edit did not clobber the `.qwen-tasks/`
+  entry added here.
 
 ### In progress
-- **Batch A** â€” running. Working tree already shows `.gitignore` and
-  `package.json` modified. Not yet reviewed, not yet committed.
+- **Batch B** — T1.1 lint & format. Running. Nothing reviewed or committed yet.
 
 ### Not started
-- Batches B, C, D. Ticket T0.1.
+- Batches C (T1.2 vitest, T1.4 playwright), D (T1.5 CI). Ticket T0.1.
+
+### Follow-ups noticed, not yet done
+- `CODE_OF_CONDUCT.md` line 66 has a deliberate
+  `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]` placeholder — needs a real
+  address before the repo goes public. This is a user decision.
+- `CONTRIBUTING.md`'s script table lists only `dev`/`build`/`preview`/
+  `typecheck`. It needs `lint`, `format`, `test`, and `test:e2e` added once
+  batches B and C land.
+- `utils/modelLoader.ts` carries one `@ts-expect-error`; revisit if
+  `@types/three` or `@pmndrs/pointer-events` ever fixes the dual entry point.
 
 ### Open questions for the user
 - None. Everything batches Aâ€“D need was already decided in
