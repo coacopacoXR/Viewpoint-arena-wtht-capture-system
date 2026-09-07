@@ -29,13 +29,17 @@ const ALLOWLIST = new Set(['VITE_SUPABASE_ANON_KEY']);
 // Pre-existing violations, tracked as debt. Each must cite where it lives and
 // what fixes it. Do not add to this list to silence a new finding.
 const KNOWN = new Map([
-  ['VITE_TC_PASSWORD', 'lib/teamcenterIntegration.ts - Phase 3: move Teamcenter auth server-side'],
   ['VITE_TURN_CREDENTIAL', 'lib/useWebRTC.ts - Phase 3: mint TURN creds in api/turn-credentials.ts'],
+  ['VITE_TEAMS_WEBHOOK_URL', 'lib/teamsIntegration.ts - Phase 3 T3.3: post via api/notify/teams.ts'],
 ]);
 
 const SECRET_PATTERNS = [
   'PASSWORD', 'PASSWD', 'PWD', 'SECRET', 'TOKEN',
   'CREDENTIAL', 'CREDENTIALS', 'PRIVATE', 'API_KEY', 'APIKEY', 'AUTH',
+  // A webhook URL is a bearer credential: whoever holds it can post to the
+  // channel. Found by grepping the actual built bundle, where
+  // VITE_TEAMS_WEBHOOK_URL was shipping to every visitor unflagged.
+  'WEBHOOK',
 ];
 
 const SOURCE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs'];

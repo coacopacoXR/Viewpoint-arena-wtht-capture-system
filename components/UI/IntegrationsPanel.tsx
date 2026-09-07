@@ -13,12 +13,7 @@ import {
   saveSharePointConfig,
   SharePointConfig,
 } from '../../lib/sharepointIntegration';
-import {
-  pushActionsToTeamcenter,
-  getTeamcenterConfig,
-  saveTeamcenterConfig,
-  TeamcenterConfig,
-} from '../../lib/teamcenterIntegration';
+import { TeamcenterPLMAdapter } from '../../lib/connectors/plm/teamcenter.ts';
 
 // ─── Shared ───────────────────────────────────────────────────────────────────
 
@@ -157,22 +152,23 @@ const SharePointSection: React.FC<{ items: TrackerItem[] }> = ({ items }) => {
 // ─── Teamcenter Section ───────────────────────────────────────────────────────
 
 const TeamcenterSection: React.FC<{ items: TrackerItem[] }> = ({ items }) => {
-  const [cfg, setCfg] = useState<TeamcenterConfig>(() => getTeamcenterConfig() ?? { baseUrl: '', username: '', password: '' });
   const [mode, setMode] = useState<'tasks' | 'change_notices'>('tasks');
   const [status, setStatus] = useState<StatusMsg>({ type: 'idle' });
   const [progress, setProgress] = useState(0);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const adapter = React.useMemo(() => new TeamcenterPLMAdapter(), []);
+
+  React.useEffect(() => {
+    adapter.isConfigured().then(setConfigured).catch(() => setConfigured(false));
+  }, [adapter]);
 
   const actionCount = items.filter(i => i.type === 'ACTION').length;
 
   async function handlePush() {
-    if (!cfg.baseUrl || !cfg.username || !cfg.password) {
-      setStatus({ type: 'error', text: 'All Teamcenter fields are required.' }); return;
-    }
-    saveTeamcenterConfig(cfg);
     setStatus({ type: 'loading', text: 'Connecting to Teamcenter…' });
     setProgress(0);
     try {
-      const result = await pushActionsToTeamcenter(cfg, items, mode, (done, total) => {
+      const result = await adapter.pushActions(items, mode, (done, total) => {
         setProgress(Math.round((done / total) * 100));
         setStatus({ type: 'loading', text: `Pushing… ${done}/${total}` });
       });
@@ -185,6 +181,35 @@ const TeamcenterSection: React.FC<{ items: TrackerItem[] }> = ({ items }) => {
     }
   }
 
+  if (configured === null) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">⚙️</span>
+          <p className="text-sm font-bold text-gray-900">Teamcenter PLM</p>
+        </div>
+        <p className="text-xs text-gray-500">Checking configuration…</p>
+      </div>
+    );
+  }
+
+  if (configured === false) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">⚙️</span>
+          <div>
+            <p className="text-sm font-bold text-gray-900">Teamcenter PLM</p>
+            <p className="text-xs text-gray-500">Push ACTION items to Teamcenter as tasks or change notices.</p>
+          </div>
+        </div>
+        <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          Teamcenter is not configured. Ask your administrator to set TC_BASE_URL, TC_USERNAME, and TC_PASSWORD on the server.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -193,11 +218,6 @@ const TeamcenterSection: React.FC<{ items: TrackerItem[] }> = ({ items }) => {
           <p className="text-sm font-bold text-gray-900">Teamcenter PLM</p>
           <p className="text-xs text-gray-500">Push ACTION items to Teamcenter as tasks or change notices via Active Workspace REST API.</p>
         </div>
-      </div>
-      <Input label="Base URL" value={cfg.baseUrl} onChange={e => setCfg(c => ({ ...c, baseUrl: e.target.value }))} placeholder="https://tc.company.com/awc" />
-      <div className="grid grid-cols-2 gap-2">
-        <Input label="Username" value={cfg.username} onChange={e => setCfg(c => ({ ...c, username: e.target.value }))} placeholder="infodba" />
-        <Input label="Password" type="password" value={cfg.password} onChange={e => setCfg(c => ({ ...c, password: e.target.value }))} placeholder="••••••••" />
       </div>
       <div>
         <p className="text-[10px] font-mono font-bold text-gray-400 uppercase tracking-widest mb-1.5">Push as</p>
