@@ -21,7 +21,12 @@ interface OnshapeElement {
   thumbnailInfo?: { sizes?: { size: string; href: string }[] };
 }
 
-const TYPE_INT_TO_STR: Record<number, string> = {
+// Exported so lib/connectors/plm/onshape.ts can be tested against it for
+// drift. The adapter keeps its own copy rather than importing this module,
+// because this file is a Vercel handler and pulling it into the adapter's
+// import graph would drag the serverless runtime in with it. The copies are
+// pinned equal by a test — see lib/connectors/plm/onshapeTypeDrift.test.ts.
+export const TYPE_INT_TO_STR: Record<number, string> = {
   0: 'PARTSTUDIO',
   1: 'ASSEMBLY',
   2: 'DRAWING',
@@ -34,7 +39,7 @@ const TYPE_INT_TO_STR: Record<number, string> = {
   9: 'VARIABLESTUDIO',
 };
 
-function normalizeType(e: OnshapeElement): string {
+export function normalizeType(e: OnshapeElement): string {
   if (e.elementType) return e.elementType.toUpperCase().replace(/\s+/g, '');
   if (typeof e.type === 'string') return e.type.toUpperCase().replace(/\s+/g, '');
   if (typeof e.type === 'number') return TYPE_INT_TO_STR[e.type] ?? '';
