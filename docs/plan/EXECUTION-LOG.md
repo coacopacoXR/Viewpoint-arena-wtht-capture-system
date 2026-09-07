@@ -110,45 +110,60 @@ so every change lands in the working tree for review first. Specs live in
   bundled into the client. Verified the guard still catches a planted
   `VITE_STRIPE_SECRET` in `lib/`.
 
+- **Batch F — `0cc8dc1`. T2.3 + T2.4 done, reviewed, committed. Phase 2 complete.**
+  `lib/config/redact.ts` is a genuine allowlist — it builds the public object
+  field by field and never spreads, so a secret-bearing field added to the
+  schema later cannot leak by default. Plus `api/public-config.ts`,
+  `lib/config/publicConfig.ts` (fetch + cache), regenerated `.env.example`,
+  README env section.
+  **One security fix during review.** The endpoint's 500 handler returned
+  `(err as Error).message`. `loadConfig` fails with text naming the missing
+  variable and connector — right for server logs, wrong for an
+  unauthenticated public endpoint whose entire purpose is to emit no `*Env`
+  names. A misconfigured deploy would have handed its internal env var names
+  to any caller. Now logs server-side and returns only
+  `{ error: 'config_not_available' }`, with a regression test.
+  Both security boundaries **mutation-tested**: replacing the allowlist
+  redactor with a spread fails 4 tests; reintroducing the error-message leak
+  fails the new regression test. 33 tests total.
+
 ### In progress
-- **Batch F** — T2.3 public config endpoint + T2.4 `.env.example`. Running.
-  Closes Phase 2.
+- **Batch G** — T3.1 PLM adapter interface + Onshape wrapper + shared
+  contract-test suite + MockPLMAdapter. Running.
 
 ### Not started
 - **T0.1 (asset swap)** — the only unfinished Phase 0 ticket.
-- Phase 3 onward (connector adapter refactors).
+- T3.2 (Teamcenter security fix), T3.3 (notifications), T3.4 (TURN),
+  T3.5 (model import), T3.6 (capture interface). Phase 4 onward.
 
 ### Follow-ups noticed, not yet done
 - **T0.1 needs a decision.** Needs a permissively-licensed replacement `.glb`
-  chosen and downloaded, then wired into `utils/modelLoader.ts` — a judgment
-  call plus a network fetch, a poor fit for an unattended agent. Default per
+  chosen and downloaded, then wired into `utils/modelLoader.ts`. Default per
   NEXT-STEPS is replace-and-relicense unless the user confirms redistribution
   rights to the Sennheiser/Santa Cruz models.
 - **`CODE_OF_CONDUCT.md` line 66** still has
   `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`. **User decision**, blocks going
   public.
-- **Two baselined secret-in-client-bundle violations** (`VITE_TC_PASSWORD` at
-  `lib/teamcenterIntegration.ts:136`, `VITE_TURN_CREDENTIAL` at
-  `lib/useWebRTC.ts:14`) — real, currently shipped to every visitor. Phase 3
-  server-side adapter work. `npm run check:env` reports them every run.
-- **Type-debt ratchet:** 92 `no-explicit-any` warnings across 31 files
-  (worst: `lib/usePartyPresence.ts` 15, `party/room.server.ts` 13,
-  `components/UI/MeetingSummary.tsx` 8, `pages/RoomPage.tsx` 7).
+- **IMPORTANT for T3.2 and T3.4:** when those tickets remove
+  `VITE_TC_PASSWORD` (`lib/teamcenterIntegration.ts:136`) and
+  `VITE_TURN_CREDENTIAL` (`lib/useWebRTC.ts:14`) from source, the
+  corresponding entries MUST be removed from the `KNOWN` map in
+  `scripts/check-public-env.mjs` in the same commit — the guard fails on a
+  stale baseline by design, so the ratchet only tightens. Earlier batch specs
+  said "do not touch KNOWN"; that instruction must be inverted for those two
+  tickets specifically.
+- **Type-debt ratchet:** 92 `no-explicit-any` warnings across 31 files.
 - **12 `react-hooks/exhaustive-deps` warnings.** Four are the ref-in-cleanup
   pattern (`lib/useWebRTC.ts:276-280`, `lib/usePartyPresence.ts:331`), a safe
-  mechanical fix. The rest involve store setters and presence Maps where
-  adding the dep risks re-render loops.
-- **The server-only guard in `loadConfig.ts` is untested** (it checks
-  `typeof process === 'undefined' || !process.versions.node`, which does not
-  throw under jsdom). It is a reasonable runtime guard but unproven, and it
-  does not prevent the module being *bundled* if imported from client code —
-  only from running. Worth revisiting in Phase 3.
-- Only one smoke test per harness; real coverage is a later phase.
-- `utils/modelLoader.ts` carries one `@ts-expect-error`; revisit if
-  `@types/three` or `@pmndrs/pointer-events` fixes the dual entry point.
-- **gitleaks-action** may require a licence key for org-owned repos (free for
-  public repos). Verify on first real CI run.
-- **Note for future sessions:** write this file with an explicit
+  mechanical fix; the rest risk re-render loops.
+- **The server-only guard in `loadConfig.ts` is untested** and does not
+  prevent the module being *bundled* if imported client-side, only from
+  running. Revisit in Phase 3.
+- Only one smoke test in each of the unit and e2e harnesses.
+- `utils/modelLoader.ts` carries one `@ts-expect-error`.
+- **gitleaks-action** may need a licence key for org-owned repos. Verify on
+  the first real CI run.
+- **Note for future sessions:** write this file with explicit
   `encoding='utf-8'`; Windows Python defaults to cp1252 and corrupted it once.
 
 ### Resuming
