@@ -86,27 +86,51 @@ so every change lands in the working tree for review first. Specs live in
 (0 errors / 104 tracked warnings), `typecheck`, `test`, `test:e2e`,
 `check:env`, and `build` all pass.
 
+- **Batch E — `80596c3`. T2.1 + T2.2 done, reviewed, committed.**
+  `lib/config/schema.ts` (zod discriminated unions over all six connector
+  groups, all providers the plan lists) and `lib/config/loadConfig.ts`
+  (server-only, fail-fast, names the missing var and connector), plus
+  `viewpoint.config.example.ts`; `viewpoint.config.ts` is git-ignored.
+  Tests were **mutation-tested**: deleting the VITE_ guard from the schema
+  fails exactly one test, so the suite genuinely bites rather than passing
+  vacuously.
+  **One override, and it was my spec's error, not Qwen's.** I told Qwen to
+  reject `VITE_` in every `*Env` field. But `01-architecture` §3 documents a
+  deliberate exception: `db.urlEnv` and `db.anonKeyEnv` keep the prefix
+  because the browser must read them (Supabase anon key is client-safe by
+  design, access control lives in Row Level Security). As delivered, the
+  plan's own canonical example config would have failed its own schema, and
+  `viewpoint.config.example.ts` said `SUPABASE_URL` while the running app
+  reads `VITE_SUPABASE_URL` (`lib/supabase.ts:3-4`) — that divergence would
+  have broken Supabase the moment Phase 3 wired config to app. Fixed with a
+  separate `publicEnvVarName` type scoped to those two fields only, and three
+  new tests pinning the asymmetry in both directions.
+  Also narrowed `check-public-env.mjs` to skip test paths, since negative-test
+  fixtures legitimately contain secret-shaped names and no test file is ever
+  bundled into the client. Verified the guard still catches a planted
+  `VITE_STRIPE_SECRET` in `lib/`.
+
 ### In progress
-- **Batch E** — T2.1 config schema + T2.2 config loader. Running.
+- **Batch F** — T2.3 public config endpoint + T2.4 `.env.example`. Running.
+  Closes Phase 2.
 
 ### Not started
 - **T0.1 (asset swap)** — the only unfinished Phase 0 ticket.
-- T2.3 public config endpoint, T2.4 `.env.example` regeneration (batch F).
-- Phase 3 onward.
+- Phase 3 onward (connector adapter refactors).
 
 ### Follow-ups noticed, not yet done
-- **T0.1 needs a decision.** Held back from every batch because it needs a
-  permissively-licensed replacement `.glb` chosen and downloaded, then wired
-  into `utils/modelLoader.ts` — a judgment call plus a network fetch, a poor
-  fit for an unattended agent. Default per NEXT-STEPS is replace-and-relicense
-  unless the user confirms redistribution rights to the Sennheiser/Santa Cruz
-  models.
+- **T0.1 needs a decision.** Needs a permissively-licensed replacement `.glb`
+  chosen and downloaded, then wired into `utils/modelLoader.ts` — a judgment
+  call plus a network fetch, a poor fit for an unattended agent. Default per
+  NEXT-STEPS is replace-and-relicense unless the user confirms redistribution
+  rights to the Sennheiser/Santa Cruz models.
 - **`CODE_OF_CONDUCT.md` line 66** still has
   `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`. **User decision**, blocks going
   public.
-- **Two baselined secret-in-client-bundle violations** (`VITE_TC_PASSWORD`,
-  `VITE_TURN_CREDENTIAL`) — real, currently shipped to every visitor. Phase 3
-  server-side adapter work. `npm run check:env` reports them on every run.
+- **Two baselined secret-in-client-bundle violations** (`VITE_TC_PASSWORD` at
+  `lib/teamcenterIntegration.ts:136`, `VITE_TURN_CREDENTIAL` at
+  `lib/useWebRTC.ts:14`) — real, currently shipped to every visitor. Phase 3
+  server-side adapter work. `npm run check:env` reports them every run.
 - **Type-debt ratchet:** 92 `no-explicit-any` warnings across 31 files
   (worst: `lib/usePartyPresence.ts` 15, `party/room.server.ts` 13,
   `components/UI/MeetingSummary.tsx` 8, `pages/RoomPage.tsx` 7).
@@ -114,6 +138,11 @@ so every change lands in the working tree for review first. Specs live in
   pattern (`lib/useWebRTC.ts:276-280`, `lib/usePartyPresence.ts:331`), a safe
   mechanical fix. The rest involve store setters and presence Maps where
   adding the dep risks re-render loops.
+- **The server-only guard in `loadConfig.ts` is untested** (it checks
+  `typeof process === 'undefined' || !process.versions.node`, which does not
+  throw under jsdom). It is a reasonable runtime guard but unproven, and it
+  does not prevent the module being *bundled* if imported from client code —
+  only from running. Worth revisiting in Phase 3.
 - Only one smoke test per harness; real coverage is a later phase.
 - `utils/modelLoader.ts` carries one `@ts-expect-error`; revisit if
   `@types/three` or `@pmndrs/pointer-events` fixes the dual entry point.
