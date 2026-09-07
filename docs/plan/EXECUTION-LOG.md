@@ -12,13 +12,13 @@ so every change lands in the working tree for review first. Specs live in
 **Branch**: `planning/oss-enterprise-readiness`. Nothing is pushed to
 `origin`/`main` without the user reviewing.
 
-**Batch order** (serialized, not parallel — every Phase 1 ticket edits
+**Batch order** (serialized, not parallel â€” every Phase 1 ticket edits
 `package.json`, so concurrent agents would collide there):
-- A — T0.2 gitignore, T0.3 OSS baseline files, T1.3 typecheck script
-- B — T1.1 lint & format (the plan's designated validation ticket)
-- C — T1.2 vitest, T1.4 playwright
-- D — T1.5 CI pipeline (depends on A–C)
-- T0.1 asset swap — deliberately held back from batch A; needs a
+- A â€” T0.2 gitignore, T0.3 OSS baseline files, T1.3 typecheck script
+- B â€” T1.1 lint & format (the plan's designated validation ticket)
+- C â€” T1.2 vitest, T1.4 playwright
+- D â€” T1.5 CI pipeline (depends on Aâ€“C)
+- T0.1 asset swap â€” deliberately held back from batch A; needs a
   permissively-licensed replacement model downloaded, a poor fit for an
   unattended agent. To be sequenced separately.
 
@@ -27,23 +27,23 @@ so every change lands in the working tree for review first. Specs live in
 ## Session 2026-09-07
 
 ### Done
-- `2a478e7` � committed `docs/plan/`, `docs/paper/`, `docs/README.md` as a
+- `2a478e7` — committed `docs/plan/`, `docs/paper/`, `docs/README.md` as a
   clean baseline so delegated diffs are reviewable.
-- `36f6011` � added this execution log.
+- `36f6011` — added this execution log.
 - Verified the Qwen headless path works end to end (13s round trip).
 - Wrote specs `.qwen-tasks/batch-a.md` and `.qwen-tasks/batch-b.md`.
-- **Batch A � `3736451`. T0.2, T0.3, T1.3 done, reviewed, committed.**
+- **Batch A — `3736451`. T0.2, T0.3, T1.3 done, reviewed, committed.**
   Reviewed rather than trusted: independently reproduced the typecheck
   failure (10 errors without the `types/three-augment.ts` bridge, 0 with
   it), so the fix is real and not a silencing hack. Tried a cleaner
-  tsconfig `paths` root-cause fix first � it is worse (11 errors) and was
+  tsconfig `paths` root-cause fix first — it is worse (11 errors) and was
   reverted. Discovered the bridge file's `.ts` extension is load-bearing
   (as `.d.ts` it becomes an ambient declaration, not an augmentation, and
   the 10 errors return); documented in the file so nobody "tidies" it.
   Confirmed Qwen's `.gitignore` edit did not clobber the `.qwen-tasks/`
   entry added here.
 
-- **Batch B � `0cf91c6`. T1.1 done, reviewed, committed.**
+- **Batch B — `0cf91c6`. T1.1 done, reviewed, committed.**
   Qwen fixed violations in source rather than suppressing them: deleted two
   dead unexported components in `Interface.tsx` (`FingerPointerPill`,
   `HoverPointerPill`, both superseded by the `Inline*` variants actually
@@ -51,54 +51,76 @@ so every change lands in the working tree for review first. Specs live in
   imports across 22 files. Net 66+/163-. Verified with a real
   `npm run build` that nothing live was removed.
   **One override:** Qwen set `no-explicit-any` to `"off"` (172 violations).
-  Changed here to `"warn"` with a `types.ts` exemption � 80 of the 172 are
+  Changed here to `"warn"` with a `types.ts` exemption — 80 of the 172 are
   R3F JSX intrinsics where `any` is unavoidable, but the other 92 are real
   type debt, and a repo being prepped for external audit should surface it,
   not silence it. Final: lint 0 errors / 104 warnings, exit 0.
 
-- **Batch C � `a617ca5`. T1.2 + T1.4 done, reviewed, committed.**
+- **Batch C — `a617ca5`. T1.2 + T1.4 done, reviewed, committed.**
   Vitest (jsdom) + Playwright (chromium, self-contained `vite preview`
   webServer). Smoke component chosen well: `DeicticFeaturesExplainer`
   depends only on lucide-react and clsx, so the harness is proven without
   mocking the 3D/WebRTC stack. Both tests make real assertions, not bare
   renders. `test` is `vitest run` (not watch), so CI cannot hang.
   Verified independently: lint 0 / typecheck 0 / test 1-1 / e2e 1-1.
-  No override needed � nothing to correct in this batch.
+  No override needed — nothing to correct in this batch.
+
+- **Batch D — `b333fee`. T1.5 done, reviewed, committed.**
+  `ci.yml` (8 jobs: typecheck, lint, test, build, e2e, check-env, audit,
+  gitleaks), nightly stub, `scripts/check-public-env.mjs`, CONTRIBUTING
+  script table. Both workflow YAMLs parse; 8 jobs confirmed.
+  **One significant override.** The env guard as delivered scanned only env
+  files — which are git-ignored and therefore absent in CI. It printed
+  "no env files found - nothing to do" and exited 0, so the security control
+  was vacuous precisely where it runs. It also missed the real vulnerability,
+  which is in committed source: `lib/teamcenterIntegration.ts:136` reads
+  `VITE_TC_PASSWORD` and `lib/useWebRTC.ts:14` reads `VITE_TURN_CREDENTIAL`,
+  both inlined into the client bundle by Vite. Rewritten to scan source (103
+  files) with a ratcheting baseline: the two known issues are reported but not
+  build-breaking (Phase 3 fixes them), anything new fails, a disappeared
+  baseline entry fails as stale, and a zero-file scan fails rather than
+  passing vacuously. All four behaviours were tested explicitly.
+  Also deleted a stray `NUL` file Qwen created via a `> NUL` redirect.
+
+**Phase 0 and Phase 1 are complete except T0.1.** Repo state: `npm run lint`
+(0 errors / 104 tracked warnings), `typecheck`, `test`, `test:e2e`,
+`check:env`, and `build` all pass.
 
 ### In progress
-- **Batch D** � T1.5 CI pipeline (`ci.yml`, nightly stub,
-  `scripts/check-public-env.mjs`, gitleaks, npm audit) plus the
-  CONTRIBUTING.md script-table follow-up. Running. Nothing committed yet.
+- **Batch E** — T2.1 config schema + T2.2 config loader. Running.
 
 ### Not started
-- Ticket T0.1 (asset swap). Phase 2 onward.
+- **T0.1 (asset swap)** — the only unfinished Phase 0 ticket.
+- T2.3 public config endpoint, T2.4 `.env.example` regeneration (batch F).
+- Phase 3 onward.
 
 ### Follow-ups noticed, not yet done
-- **CI must gate on lint ERRORS, not warnings** (`eslint .` exit code), since
-  104 warnings are expected and intentional. Do not add `--max-warnings 0`.
-  (Folded into the batch D spec.)
+- **T0.1 needs a decision.** Held back from every batch because it needs a
+  permissively-licensed replacement `.glb` chosen and downloaded, then wired
+  into `utils/modelLoader.ts` — a judgment call plus a network fetch, a poor
+  fit for an unattended agent. Default per NEXT-STEPS is replace-and-relicense
+  unless the user confirms redistribution rights to the Sennheiser/Santa Cruz
+  models.
+- **`CODE_OF_CONDUCT.md` line 66** still has
+  `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`. **User decision**, blocks going
+  public.
+- **Two baselined secret-in-client-bundle violations** (`VITE_TC_PASSWORD`,
+  `VITE_TURN_CREDENTIAL`) — real, currently shipped to every visitor. Phase 3
+  server-side adapter work. `npm run check:env` reports them on every run.
 - **Type-debt ratchet:** 92 `no-explicit-any` warnings across 31 files
   (worst: `lib/usePartyPresence.ts` 15, `party/room.server.ts` 13,
-  `components/UI/MeetingSummary.tsx` 8, `pages/RoomPage.tsx` 7). Worth its
-  own ticket; the count should only go down.
-- **12 `react-hooks/exhaustive-deps` warnings** left deliberately � each
-  needs a human call on runtime behaviour. Four are the ref-in-cleanup
-  pattern (`lib/useWebRTC.ts:276-280`, `lib/usePartyPresence.ts:331`) which
-  is a safe mechanical fix (copy ref to a local inside the effect). The rest
-  involve store setters and presence Maps where adding the dep risks
-  re-render loops.
-- `CODE_OF_CONDUCT.md` line 66 has a deliberate
-  `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]` placeholder � needs a real
-  address before the repo goes public. **This is a user decision.**
-- **T0.1 (asset swap) still not started.** Held back from batch A because it
-  needs a permissively-licensed replacement `.glb` downloaded and wired into
-  `utils/modelLoader.ts` � a poor fit for an unattended agent. Default per
-  NEXT-STEPS is replace-and-relicense unless the user confirms redistribution
-  rights to the Sennheiser/Santa Cruz models. Needs a decision on which open
-  sample model to use.
-- Only one smoke test exists in each harness. Real coverage is a later phase.
+  `components/UI/MeetingSummary.tsx` 8, `pages/RoomPage.tsx` 7).
+- **12 `react-hooks/exhaustive-deps` warnings.** Four are the ref-in-cleanup
+  pattern (`lib/useWebRTC.ts:276-280`, `lib/usePartyPresence.ts:331`), a safe
+  mechanical fix. The rest involve store setters and presence Maps where
+  adding the dep risks re-render loops.
+- Only one smoke test per harness; real coverage is a later phase.
 - `utils/modelLoader.ts` carries one `@ts-expect-error`; revisit if
-  `@types/three` or `@pmndrs/pointer-events` ever fixes the dual entry point.
+  `@types/three` or `@pmndrs/pointer-events` fixes the dual entry point.
+- **gitleaks-action** may require a licence key for org-owned repos (free for
+  public repos). Verify on first real CI run.
+- **Note for future sessions:** write this file with an explicit
+  `encoding='utf-8'`; Windows Python defaults to cp1252 and corrupted it once.
 
 ### Resuming
 Read this file, then `git status` and `git log --oneline -5`. If a batch's
