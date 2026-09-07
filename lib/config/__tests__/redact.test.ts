@@ -1,0 +1,113 @@
+import { describe, it, expect } from 'vitest';
+import { redactConfig } from '../redact.ts';
+import type { ViewpointConfig } from '../schema.ts';
+
+const fullSecretConfig: ViewpointConfig = {
+  plm: {
+    provider: 'onshape',
+    baseUrl: 'https://cad.onshape.com',
+    clientIdEnv: 'ONSHAPE_CLIENT_ID',
+    clientSecretEnv: 'ONSHAPE_CLIENT_SECRET',
+  },
+  capture: {
+    provider: 'openai',
+    model: 'gpt-4',
+    apiKeyEnv: 'OPENAI_API_KEY',
+  },
+  turn: {
+    provider: 'cloudflare',
+    tokenIdEnv: 'CF_TURN_TOKEN_ID',
+    apiTokenEnv: 'CF_TURN_API_TOKEN',
+  },
+  db: {
+    provider: 'supabase',
+    urlEnv: 'VITE_SUPABASE_URL',
+    anonKeyEnv: 'VITE_SUPABASE_ANON_KEY',
+  },
+  notifications: [{ provider: 'teams', webhookUrlEnv: 'TEAMS_WEBHOOK_URL' }],
+  modelImport: { provider: 'onshape' },
+};
+
+describe('redactConfig', () => {
+  it('strips all *Env key names and *Env values from the serialized output', () => {
+    const result = redactConfig(fullSecretConfig);
+    const json = JSON.stringify(result);
+
+    // No key ending in "Env" anywhere in the output.
+    const envKeys = json.match(/"[A-Za-z]*Env"/g);
+    expect(envKeys).toBeNull();
+
+    // No env var NAME (the value of any *Env field) appears anywhere.
+    const allEnvNames = [
+      'ONSHAPE_CLIENT_ID',
+      'ONSHAPE_CLIENT_SECRET',
+      'OPENAI_API_KEY',
+      'CF_TURN_TOKEN_ID',
+      'CF_TURN_API_TOKEN',
+      'VITE_SUPABASE_URL',
+      'VITE_SUPABASE_ANON_KEY',
+      'TEAMS_WEBHOOK_URL',
+    ];
+    for (const name of allEnvNames) {
+      expect(json).not.toContain(name);
+    }
+  });
+
+  it('does not leak a newly added secret field (proves allowlist, not denylist)', () => {
+    // Simulate a future contributor adding a secret-bearing field to the PLM
+    // connector. An allowlist redactor ignores unknown fields by construction;
+    // a denylist would silently pass it through.
+    const configWithNewSecret = {
+      ...fullSecretConfig,
+      plm: {
+        ...fullSecretConfig.plm,
+        signingKeyEnv: 'ONSHAPE_SIGNING_KEY',
+        signingSecretEnv: 'ONSHAPE_SIGNING_SECRET',
+      },
+    } as unknown as ViewpointConfig;
+
+    const result = redactConfig(configWithNewSecret);
+    const json = JSON.stringify(result);
+
+    expect(json).not.toContain('signingKeyEnv');
+    expect(json).not.toContain('signingSecretEnv');
+    expect(json).not.toContain('ONSHAPE_SIGNING_KEY');
+    expect(json).not.toContain('ONSHAPE_SIGNING_SECRET');
+
+    // Only the allowlisted plm fields survive.
+    expect(Object.keys(result.plm).sort()).toEqual(['baseUrl', 'provider']);
+  });
+
+  it('includes only allowlisted fields', () => {
+    const result = redactConfig(fullSecretConfig);
+
+    expect(result.plm).toEqual({
+      provider: 'onshape',
+      baseUrl: 'https://cad.onshape.com',
+    });
+    expect(result.capture).toEqual({ provider: 'openai', model: 'gpt-4' });
+    expect(result.turn).toEqual({ provider: 'cloudflare' });
+    expect(result.db).toEqual({ provider: 'supabase' });
+    expect(result.notifications).toEqual([{ provider: 'teams' }]);
+    expect(result.modelImport).toEqual({ provider: 'onshape' });
+  });
+
+  it('includes capture model for providers that have one, omits for those that do not', () => {
+    const mockCapture: ViewpointConfig = {
+      ...fullSecretConfig,
+      capture: { provider: 'mock' },
+    };
+    expect(redactConfig(mockCapture).capture).toEqual({ provider: 'mock' });
+
+    const localCapture: ViewpointConfig = {
+      ...fullSecretConfig,
+      capture: {
+        provider: 'local',
+        serviceUrl: 'http://localhost:8000',
+      },
+    };
+    // serviceUrl is not on the allowlist — the browser does not call
+    // capture-service directly; it goes through the Vercel proxy.
+    expect(redactConfig(localCapture).capture).toEqual({ provider: 'local' });
+  });
+});

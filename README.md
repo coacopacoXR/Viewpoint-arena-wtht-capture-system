@@ -69,6 +69,25 @@ The right-hand panel serves as the cognitive engine of the review, transforming 
 
 ---
 
+## Configuration
+
+Viewpoint Arena uses a two-layer configuration system:
+
+1. **`viewpoint.config.ts`** (primary interface) — declares which connector
+   providers are active (PLM, capture, TURN, database, notifications, model
+   import) and their non-secret settings (base URLs, model names, feature
+   flags). See `viewpoint.config.example.ts` for a template.
+2. **`.env`** (credential store) — holds the secret values that the config
+   file references by environment-variable name. Copy `.env.example` as a
+   starting point; it documents every variable, grouped by connector, with
+   server-only vs. public labels.
+
+The browser never imports the config file directly. It fetches the
+non-secret subset at runtime from `GET /api/public-config`, so a single
+built artifact works against any deployment's config.
+
+---
+
 ## Tech Stack
 
 *   **React 19**
