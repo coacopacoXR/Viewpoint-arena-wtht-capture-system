@@ -1,7 +1,6 @@
 import React from 'react';
 import { useStore } from '../../store';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
 
 const HeatmapOverlay: React.FC = () => {
   const pois = useStore(state => state.pois);

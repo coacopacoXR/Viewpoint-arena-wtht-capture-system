@@ -640,7 +640,7 @@ interface CommandPaletteProps {
   onClose: () => void;
 }
 
-const CommandPalette: React.FC<CommandPaletteProps> = ({ items, sessions, onItemClick, onClose }) => {
+const CommandPalette: React.FC<CommandPaletteProps> = ({ items, onItemClick, onClose }) => {
   const [q, setQ] = useState('');
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);

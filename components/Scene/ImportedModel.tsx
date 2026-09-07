@@ -12,10 +12,8 @@ const ImportedModel: React.FC = () => {
     const groupRef = useRef<THREE.Group>(null);
     const registeredIds = useRef<Set<string>>(new Set());
 
-    if (!importedMeshes) return null;
-
     useEffect(() => {
-        if (!groupRef.current) return;
+        if (!importedMeshes || !groupRef.current) return;
         const group = groupRef.current;
         group.scale.setScalar(importedScale * importedBaseScale);
         if (importedBasePosition) {
@@ -26,7 +24,7 @@ const ImportedModel: React.FC = () => {
     }, [importedScale, importedBaseScale, importedBasePosition, importedMeshes]);
 
     useEffect(() => {
-        if (!groupRef.current) return;
+        if (!importedMeshes || !groupRef.current) return;
         registeredIds.current.clear();
 
         groupRef.current.traverse(child => {
@@ -47,7 +45,7 @@ const ImportedModel: React.FC = () => {
     }, [registerPOI, importedMeshes]);
 
     useEffect(() => {
-        if (!groupRef.current) return;
+        if (!importedMeshes || !groupRef.current) return;
 
         const updateVisibility = (object: THREE.Object3D, parentVisible: boolean, parentSelected: boolean) => {
             const id = object.userData.modelId as string | undefined;
@@ -73,6 +71,8 @@ const ImportedModel: React.FC = () => {
 
         updateVisibility(groupRef.current, true, false);
     }, [objectStates, importedMeshes]);
+
+    if (!importedMeshes) return null;
 
     return <primitive ref={groupRef} object={importedMeshes} />;
 };

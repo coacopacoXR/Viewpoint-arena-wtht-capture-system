@@ -369,7 +369,7 @@ const UserLaser: React.FC = () => {
         let foundId: string | null = null;
         let foundMeshName: string | null = null;
         let foundPartName: string | null = null;
-        let hitPoint = new Vector3();
+        const hitPoint = new Vector3();
 
         for (let i = 0; i < intersects.length; i++) {
             const hit = intersects[i];

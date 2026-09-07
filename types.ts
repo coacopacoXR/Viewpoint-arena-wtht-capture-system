@@ -1,5 +1,4 @@
 import { Vector3 } from 'three';
-import React from 'react';
 
 // Augment Global JSX namespace (permissive for stability)
 declare global {

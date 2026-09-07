@@ -314,10 +314,7 @@ const CommentsPanel: React.FC = () => {
         drawingCanvas,
         commentsExpandedInScene,
         toggleCommentsExpandedInScene,
-        capturedScreenshot,
-        setCapturedScreenshot,
         setDrawingInteractionActive,
-        showDrawingCanvas,
         setShowDrawingCanvas
     } = useStore();
 

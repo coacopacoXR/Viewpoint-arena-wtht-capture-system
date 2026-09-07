@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   X, AlertTriangle, CheckCircle2, Lightbulb, Check, XCircle, Pencil,
   ClipboardList, StickyNote, ChevronDown, ChevronLeft, ChevronRight,
-  Mic, MessageSquare, MessageCircle, Layers, Camera, MapPin,
+  Mic, MessageSquare, MessageCircle, Layers, Camera,
   Info, ShieldAlert,
 } from 'lucide-react';
 import { clsx } from 'clsx';

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase, TrackerSession } from '../lib/supabase';
-import { useIdentity, saveIdentity, AVATAR_COLORS, UserIdentity } from '../lib/identity';
+import { useIdentity, AVATAR_COLORS, UserIdentity } from '../lib/identity';
 import { listRecentCurations, deleteCuration, getCurationSummary, type CurationSummary } from '../lib/curationsRepo';
 import { Camera, MapPin, Layers, Play, Pencil, Trash2 } from 'lucide-react';
 

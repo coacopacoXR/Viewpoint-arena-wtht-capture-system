@@ -53,7 +53,6 @@ const Bicycle: React.FC = () => {
       }
     });
     if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
       console.log(`[Bicycle] stamped ${idx} meshes with unique materials`);
     }
 

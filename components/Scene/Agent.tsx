@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Vector3, Group, MeshStandardMaterial, Mesh } from 'three';
+import { Vector3, Group, MeshStandardMaterial } from 'three';
 import { Html, Line, Trail } from '@react-three/drei';
 import { AgentState, PointOfInterest, ViewMode, AgentBehaviorState, AgentStyle } from '../../types';
 import { useStore } from '../../store';
@@ -200,12 +200,8 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
         
         if (targetObj) {
              const targetPos = targetObj.position.clone();
-             const targetDir = new Vector3(0, 0, 1).applyQuaternion(targetObj.quaternion); // Agents look Z forward usually or we use their lookAt logic
-             
-             // To simplify, just stand behind them
-             const offset = targetPos.clone().sub(position.current).normalize().multiplyScalar(-1.5); // Stay 1.5 units away? No, we want behind.
-             
-             // Better: Stand 2 units behind the target, slightly offset
+
+             // Stand 2 units behind the target, slightly offset
              const behindPos = targetPos.clone().add(targetPos.clone().normalize().multiplyScalar(2.0)); // Move outward from center relative to target
              
              position.current.lerp(behindPos, 0.05);

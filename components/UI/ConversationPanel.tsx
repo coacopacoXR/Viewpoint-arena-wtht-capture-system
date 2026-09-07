@@ -3,8 +3,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useStore } from '../../store';
 import {
     MessageSquare, Info, SplitSquareHorizontal,
-    ChevronRight, ChevronLeft, GripVertical,
-    CheckCircle2, AlertTriangle, Lightbulb, Activity, LocateFixed, BookOpen,
+    CheckCircle2, AlertTriangle, Lightbulb, Activity, BookOpen,
     HelpCircle, Check, X, ShieldOff, ScanLine
 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -71,23 +70,16 @@ const ConversationPanel: React.FC = () => {
     updateInsight
   } = useStore();
 
-  const [isExpanded, setIsExpanded] = useState(true);
   const [selectedCard, setSelectedCard] = useState<InsightCard | null>(null);
   const [activeTab, setActiveTab] = useState<'LIVE' | 'DOCS'>('LIVE');
   const [showExplainer, setShowExplainer] = useState(false);
 
   // Resizable panel state
-  const [panelWidth, setPanelWidth] = useState(320);
+  const [, setPanelWidth] = useState(320);
   const [insightPanelRatio, setInsightPanelRatio] = useState(0.65); // Top panel takes 65%
   const [isResizingWidth, setIsResizingWidth] = useState(false);
   const [isResizingHeight, setIsResizingHeight] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-
-  // Handle width resize
-  const handleWidthMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsResizingWidth(true);
-  }, []);
 
   // Handle height resize between insight and transcript panels
   const handleHeightMouseDown = useCallback((e: React.MouseEvent) => {
@@ -129,12 +121,14 @@ const ConversationPanel: React.FC = () => {
   // Accept/Reject insight handlers
   const handleAcceptInsight = (cardId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    updateInsight(cardId, { details: { ...insightCards.find(c => c.id === cardId)?.details!, status: 'Approved' } });
+    const card = insightCards.find(c => c.id === cardId);
+    if (card) updateInsight(cardId, { details: { ...card.details, status: 'Approved' } });
   };
 
   const handleRejectInsight = (cardId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    updateInsight(cardId, { details: { ...insightCards.find(c => c.id === cardId)?.details!, status: 'Rejected' } });
+    const card = insightCards.find(c => c.id === cardId);
+    if (card) updateInsight(cardId, { details: { ...card.details, status: 'Rejected' } });
   };
   
   // Hover state for "Source Tracing" (Array of IDs)
@@ -208,7 +202,7 @@ const ConversationPanel: React.FC = () => {
           // Only start inactivity timer if we are NOT currently hovering an insight card (reading context)
           if (hoveredSourceIds.length === 0) {
             activityTimeoutRef.current = setTimeout(() => {
-                setIsSticky(true), 4000;
+                setIsSticky(true);
             }, 4000); // Resume auto-scroll after 4s inactivity
           }
       }

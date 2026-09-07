@@ -22,12 +22,10 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
     boardroomLayout, setBoardroomLayout,
     boardroomInteractionEnabled, toggleBoardroomInteraction,
     boardroomLayoutLocked, toggleBoardroomLayoutLocked,
-    boardroomPresenterAgentId, setBoardroomPresenter,
     boardroomTranscriptPermission, toggleBoardroomTranscriptPermission,
     takeoverModeEnabled, setTakeoverModeEnabled,
     takeoverApprovedUserIds, toggleTakeoverApproval,
     boardroomLeaderId,
-    agents,
     sessionHostId,
   } = useStore();
 

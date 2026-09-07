@@ -92,13 +92,13 @@ const RoomPage: React.FC = () => {
       if (!state.config || state.config === prev.config) return;
       if (state.config.reviewId !== roomId) return;
       // debounce per-host via a moving timer keyed off the config object
-      (unsub as any)._pending && clearTimeout((unsub as any)._pending);
+      if ((unsub as any)._pending) clearTimeout((unsub as any)._pending);
       (unsub as any)._pending = setTimeout(() => {
         saveCuration(state.config!);
       }, 1000);
     });
     return () => {
-      (unsub as any)._pending && clearTimeout((unsub as any)._pending);
+      if ((unsub as any)._pending) clearTimeout((unsub as any)._pending);
       unsub();
     };
   }, [roomId, sessionHostId, presence.localUserId]);

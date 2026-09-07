@@ -1,24 +1,8 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { useStore, SYNTH_SCENE_TREE, BICYCLE_SCENE_TREE, getCurrentSceneTree } from '../../store';
-import { InsightType, InsightDetails, SceneNode, DecisionRole, ChatMessage } from '../../types';
+import { useStore, getCurrentSceneTree } from '../../store';
+import { InsightType, InsightDetails, SceneNode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
-
-// Helper to collect all node names from scene tree
-const collectNodeNames = (node: SceneNode, names: string[] = []): string[] => {
-    names.push(node.name);
-    if (node.children) {
-        node.children.forEach(child => collectNodeNames(child, names));
-    }
-    return names;
-};
-
-// Helper to get random component names from tree
-const getRandomComponents = (tree: SceneNode, count: number = 3): string[] => {
-    const allNames = collectNodeNames(tree);
-    const shuffled = [...allNames].sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, count);
-};
 
 // ============================================================================
 // ADVANCED DIALOGUE GENERATION ENGINE
@@ -852,7 +836,6 @@ const DialogueEngine: React.FC = () => {
     const addInsightCard = useStore(state => state.addInsightCard);
     const { broadcastInsightCard } = usePresence();
     const requirements = useStore(state => state.requirements);
-    const chatHistory = useStore(state => state.chatHistory);
     const activeModelType = useStore(state => state.activeModelType);
     const objectStates = useStore(state => state.objectStates);
 
@@ -866,9 +849,8 @@ const DialogueEngine: React.FC = () => {
     // Decision state per component
     const poiDecisionState = useRef<Record<string, "NONE" | "INTERMEDIATE" | "FINAL">>({});
 
-    // Get current scene tree and available component names (properly handles imported models)
+    // Get current scene tree (properly handles imported models)
     const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
-    const allComponentNames = useMemo(() => collectNodeNames(currentTree), [currentTree]);
 
     // Get next component in round-robin fashion for structured discussion
     const getNextComponent = (): { name: string; id: string } => {

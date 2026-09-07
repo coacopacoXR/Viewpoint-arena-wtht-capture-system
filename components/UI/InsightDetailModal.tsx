@@ -16,7 +16,7 @@ const TEAM_MEMBERS = [
   "Validation Lab"
 ];
 
-const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, agentColor?: string }> = ({ card, onClose, agentColor }) => {
+const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, agentColor?: string }> = ({ card, onClose }) => {
     const requirements = useStore(state => state.requirements);
     const updateInsight = useStore(state => state.updateInsight);
     

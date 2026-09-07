@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Html, Text } from '@react-three/drei';
 import { useXR, useXRInputSourceState, useXRControllerButtonEvent } from '@react-three/xr';
@@ -81,7 +81,7 @@ function ControllerGuide({
 // ─── XR LASER (right trigger) ─────────────────────────────────────────────────
 
 function XRLaser({ rightState }: { rightState: XRControllerState | undefined }) {
-  const { camera, scene } = useThree();
+  const { scene } = useThree();
   const { broadcastLaserMove } = usePresence();
   const raycaster = useRef(new THREE.Raycaster());
   const lastBroadcast = useRef(0);
@@ -152,7 +152,7 @@ function XRPresenceBroadcaster({
   rightState: XRControllerState | undefined;
 }) {
   const { camera } = useThree();
-  const { broadcastXRPresence, localUserId, remoteParticipantList } = usePresence();
+  const { broadcastXRPresence, localUserId } = usePresence();
   const lastBroadcast = useRef(0);
 
   const userInfo = useMemo(() => {
@@ -427,7 +427,7 @@ function BoardroomVirtualScreen() {
 
 // ─── BUTTON ACTIONS (wired to controller buttons) ────────────────────────────
 
-function XRButtonActions({ rightState, leftState }: {
+function XRButtonActions({ rightState }: {
   rightState: XRControllerState | undefined;
   leftState: XRControllerState | undefined;
 }) {

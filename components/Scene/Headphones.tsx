@@ -46,7 +46,6 @@ const Headphones: React.FC = () => {
       }
     });
     if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
       console.log(`[Headphones] stamped ${idx} meshes with unique materials`);
     }
 

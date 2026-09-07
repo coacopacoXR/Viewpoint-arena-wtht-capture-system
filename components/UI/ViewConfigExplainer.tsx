@@ -1,8 +1,8 @@
 
 import React, { useState } from 'react';
 import { 
-    X, SplitSquareHorizontal, Users, Sparkles, Map, Flame, Activity, 
-    Monitor, ArrowUpCircle, ScanEye, MousePointer2
+    X, SplitSquareHorizontal, Users, Sparkles, Map, Flame, Activity,
+    ScanEye, MousePointer2
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ViewMode } from '../../types';

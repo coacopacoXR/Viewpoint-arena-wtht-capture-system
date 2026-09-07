@@ -39,7 +39,7 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
   // Ref to track throttle
   const lastTimeUpdate = useRef(0);
 
-  useFrame((state, delta) => {
+  useFrame((state) => {
     if (isPlaying) {
       // Only update React state (store.time) every 100ms to prevent crash
       // This keeps the UI clock ticking but allows 60fps animation via state.clock

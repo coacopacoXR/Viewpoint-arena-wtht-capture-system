@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { clsx } from 'clsx';
 import { 
-    Mic, MousePointer2, Eye, Box, Cpu, UserCog, 
+    Mic, MousePointer2, Eye, Box, Cpu,
     FileText, GitCommitHorizontal, LayoutDashboard, ArrowRight,
     X, Activity, UserCheck, ClipboardCheck, BrainCircuit, ScanLine
 } from 'lucide-react';

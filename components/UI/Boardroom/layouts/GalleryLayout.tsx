@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useCallback, useRef, useLayoutEffect } from 'react';
 import { Monitor, LayoutGrid } from 'lucide-react';
 import { AgentState, PointOfInterest } from '../../../../types';
 import ParticipantTile from '../ParticipantTile';
@@ -72,7 +72,7 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
       updatePanelWidth(newWidth);
     };
 
-    const onUp = (ev: MouseEvent) => {
+    const onUp = () => {
       isDragging.current = false;
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);

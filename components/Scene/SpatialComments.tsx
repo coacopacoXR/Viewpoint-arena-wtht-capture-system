@@ -3,7 +3,7 @@ import { Html } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Vector3, Vector2, Raycaster, Group } from 'three';
 import { useStore, getCurrentSceneTree } from '../../store';
-import { MessageSquare, Check, X, GripVertical, Link2, ChevronDown, ChevronUp, Maximize2, Minimize2, Pencil } from 'lucide-react';
+import { MessageSquare, Check, GripVertical, Link2, Minimize2, Pencil } from 'lucide-react';
 import { SceneNode, SpatialComment } from '../../types';
 
 // Helper to find node name
@@ -235,8 +235,6 @@ const CommentPlacementPreview: React.FC = () => {
     const setShowDrawingCanvas = useStore(state => state.setShowDrawingCanvas);
     const activeModelType = useStore(state => state.activeModelType);
     const importedSceneTree = useStore(state => state.importedSceneTree);
-    const pendingCommentPosition = useStore(state => state.pendingCommentPosition);
-
     const raycaster = useRef(new Raycaster());
     const previewRef = useRef<Group>(null);
     const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
@@ -252,7 +250,6 @@ const CommentPlacementPreview: React.FC = () => {
 
         let hitPoint: Vector3 | null = null;
         let foundId: string | null = null;
-        let foundName: string | null = null;
 
         for (const hit of intersects) {
             if (hit.object.name.startsWith('Agent') || hit.object.type === 'Line' || hit.object.type === 'Points') continue;
@@ -261,7 +258,6 @@ const CommentPlacementPreview: React.FC = () => {
             while (curr) {
                 if (curr.userData && curr.userData.modelId) {
                     foundId = curr.userData.modelId;
-                    foundName = findNodeName(foundId, currentTree);
                     break;
                 }
                 if (curr.parent) curr = curr.parent;

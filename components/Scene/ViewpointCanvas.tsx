@@ -142,7 +142,6 @@ const SceneRenderer = () => {
   const temporarilyDisengagedFromAgentId = useStore(state => state.temporarilyDisengagedFromAgentId);
   const temporarilyDisengageFromAgent = useStore(state => state.temporarilyDisengageFromAgent);
   const resumeFollowingAgent = useStore(state => state.resumeFollowingAgent);
-  const clearTemporaryDisengage = useStore(state => state.clearTemporaryDisengage);
   const isBoardroomMode = useStore(state => state.isBoardroomMode);
   const boardroomPresenterDetachedId = useStore(state => state.boardroomPresenterDetachedId);
   const detachBoardroomPresenter = useStore(state => state.detachBoardroomPresenter);
@@ -251,7 +250,7 @@ const SceneRenderer = () => {
   }, [temporarilyDisengagedFromAgentId, boardroomPresenterDetachedId, resumeFollowingAgent, resumeBoardroomPresenter]);
 
   // We use render priority 1 to run after standard r3f loops.
-  useFrame((state, delta) => {
+  useFrame((state) => {
     const mainCam = defaultCamera as THREE.PerspectiveCamera;
     const controls = controlsRef.current;
     const elapsedTime = state.clock.getElapsedTime();

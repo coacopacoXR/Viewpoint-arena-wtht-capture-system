@@ -3,8 +3,8 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
     X, Cpu, Server, ShieldCheck, Terminal,
-    Network, Database, Lock, HardDrive, Share2, Globe,
-    AlertTriangle, Lightbulb, CheckCircle2, ScanLine, Search
+    Network, Database, Lock, HardDrive, Share2,
+    AlertTriangle, Lightbulb, CheckCircle2, ScanLine
 } from 'lucide-react';
 import { clsx } from 'clsx';
 

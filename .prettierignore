@@ -1,0 +1,8 @@
+dist
+node_modules
+.partykit
+.vercel
+coverage
+package-lock.json
+*.glb
+*.gltf

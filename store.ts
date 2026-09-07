@@ -625,7 +625,7 @@ export const useStore = create<AppState>((set, get) => ({
   // --- NEW: Model Import Actions ---
   setModelTransform: (modelTransform) => set({ modelTransform }),
 
-  setActiveModelType: (type) => set((state) => {
+  setActiveModelType: (type) => set(() => {
       const tree = type === 'bicycle' ? BICYCLE_SCENE_TREE : type === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
       return {
           activeModelType: type,
@@ -645,7 +645,7 @@ export const useStore = create<AppState>((set, get) => ({
   setIsImporting: (importing) => set({ isImporting: importing }),
 
   // Real model import - sets the parsed meshes and scene tree
-  setImportedModel: (meshes, sceneTree, fileName, baseScale, basePosition) => set((state) => {
+  setImportedModel: (meshes, sceneTree, fileName, baseScale, basePosition) => set(() => {
       const partCount = countParts(sceneTree);
       const modelName = fileName.replace(/\.[^/.]+$/, '');
       return {

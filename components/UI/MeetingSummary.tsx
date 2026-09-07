@@ -1,16 +1,15 @@
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store';
 import {
-    CheckCircle2, AlertTriangle, Lightbulb, FileText, Download,
+    CheckCircle2, Lightbulb, FileText, Download,
     ShieldAlert, Scale, MessageSquare, ArrowRight, LayoutDashboard, List,
-    Users, Box, GitCommitHorizontal, CircleDollarSign, Fingerprint, Gavel,
+    Users, Box, CircleDollarSign, Fingerprint, Gavel,
     Construction, HelpCircle, User, Building2, Zap, Microscope, Eye,
-    BarChart2, Search, Activity, GitBranch, Network, TreeDeciduous,
-    ArrowDown, ArrowUpRight, CircleDot, Boxes, TriangleAlert, Target,
-    BrainCircuit, Workflow, Sparkles, ChevronDown, ChevronRight as ChevronRightIcon,
-    Link2, TrendingUp, Clock, Brain, Layers, Route, Diamond, X
+    BarChart2, Search, CircleDot, TriangleAlert, Target,
+    BrainCircuit, Sparkles, ChevronDown, ChevronRight as ChevronRightIcon,
+    Link2, Clock, Route, TreeDeciduous, X
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { InsightType, InsightCard, ChatMessage } from '../../types';
@@ -156,14 +155,14 @@ const getTriggerInfo = (text: string): { type: TriggerCategory, icon: any, label
 
 const buildReasoningTree = (
     messages: ChatMessage[],
-    cards: InsightCard[],
-    agents: any[]
+    _cards: InsightCard[],
+    _agents: any[]
 ): ReasoningNode[] => {
     const nodes: ReasoningNode[] = [];
     let currentParentId: string | null = null;
     let depth = 0;
 
-    messages.forEach((msg, idx) => {
+    messages.forEach((msg) => {
         const role = classifyMessage(msg.text);
         let nodeType: ReasoningNode['type'] = 'observation';
         let confidence = 0.5;
@@ -245,7 +244,7 @@ const buildReasoningTree = (
 // PATTERN DETECTION ENGINE
 // ============================================================================
 
-const detectPatterns = (messages: ChatMessage[], cards: InsightCard[]): AnalysisPattern[] => {
+const detectPatterns = (messages: ChatMessage[], _cards: InsightCard[]): AnalysisPattern[] => {
     const patterns: AnalysisPattern[] = [];
     const roles = messages.map(m => classifyMessage(m.text));
     const uniqueSpeakers = new Set(messages.map(m => m.agentId)).size;
@@ -480,10 +479,6 @@ const MeetingSummary: React.FC = () => {
     if (!isMeetingEnded) return null;
 
     // Drag and drop handlers
-    const handleDragStart = (e: React.DragEvent, cardId: string) => {
-        e.dataTransfer.setData("cardId", cardId);
-    };
-
     const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
     };
@@ -1562,7 +1557,7 @@ const MeetingSummary: React.FC = () => {
 
                                                 <div className="absolute top-1/2 left-4 right-4 h-px bg-gray-200"></div>
                                                 <div className="flex items-center h-24 gap-1 overflow-x-auto custom-scrollbar pb-2 px-2">
-                                                    {activeThread.allMessages.map((msg, i) => {
+                                                    {activeThread.allMessages.map((msg) => {
                                                         const role = classifyMessage(msg.text);
                                                         const colorClass = getRoleColor(role);
                                                         const bgClass = colorClass.split(' ')[0];
@@ -1598,7 +1593,7 @@ const MeetingSummary: React.FC = () => {
                                             {/* Bottom: Coded Transcript */}
                                             <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
                                                 <div className="max-w-3xl mx-auto flex flex-col gap-3">
-                                                    {activeThread.allMessages.map((msg, idx) => {
+                                                    {activeThread.allMessages.map((msg) => {
                                                         const role = classifyMessage(msg.text);
                                                         const agent = agents.find(a => a.id === msg.agentId);
                                                         const colorClass = getRoleColor(role);

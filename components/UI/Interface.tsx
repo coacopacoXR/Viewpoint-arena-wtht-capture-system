@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import {
   Play, Pause, RefreshCw, Eye, EyeOff,
   User, Map, Activity, Flame,
-  SplitSquareHorizontal, Sparkles, Users, ArrowRight,
-  CheckCircle2, Power, Layers, Network, Link, BellRing, X,
+  SplitSquareHorizontal, Sparkles, Users,
+  Power, Layers, Network, Link, BellRing, X,
   ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic,
-  ChevronDown, ChevronRight, ChevronLeft, PanelRightClose, PanelRight,
+  ChevronDown, ChevronRight, PanelRightClose, PanelRight,
   MonitorPlay, Share2, Crosshair, Hand, MousePointer
 } from 'lucide-react';
 import SharePanel from './SharePanel';
@@ -53,41 +53,6 @@ const Button: React.FC<{
     {children}
   </button>
 );
-
-const FingerPointerPill: React.FC = () => {
-  const mode = useFingerPointerStore((s) => s.mode);
-  const calibration = useFingerPointerStore((s) => s.calibration);
-  const enable = useFingerPointerStore((s) => s.enableFingerPointer);
-  const disable = useFingerPointerStore((s) => s.disableFingerPointer);
-  const recalibrate = useFingerPointerStore((s) => s.startRecalibration);
-
-  const isActive = mode === 'active';
-  return (
-    <div className="flex items-center gap-1 px-3 py-2 rounded-full border shadow-sm bg-white/90 backdrop-blur border-gray-200">
-      <Hand size={14} className={isActive ? 'text-emerald-500' : 'text-gray-400'} />
-      <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Finger</span>
-      <button
-        onClick={isActive ? disable : enable}
-        title={isActive ? 'Disable finger pointer' : 'Enable finger pointer'}
-        className={clsx(
-          'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
-          isActive ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-800'
-        )}
-      >
-        {isActive ? 'On' : 'Off'}
-      </button>
-      {calibration && (
-        <button
-          onClick={recalibrate}
-          title="Recalibrate corners"
-          className="text-[9px] font-bold uppercase px-2 py-0.5 rounded text-gray-400 hover:text-gray-700 transition-all"
-        >
-          Recal
-        </button>
-      )}
-    </div>
-  );
-};
 
 const InlineFingerPill: React.FC = () => {
   const mode = useFingerPointerStore((s) => s.mode);
@@ -144,27 +109,6 @@ const InlineHoverPill: React.FC = () => {
   );
 };
 
-const HoverPointerPill: React.FC = () => {
-  const enabled = useStore((s) => s.hoverPointingEnabled);
-  const setEnabled = useStore((s) => s.setHoverPointingEnabled);
-  return (
-    <div className="flex items-center gap-1 px-3 py-2 rounded-full border shadow-sm bg-white/90 backdrop-blur border-gray-200">
-      <MousePointer size={14} className={enabled ? 'text-emerald-500' : 'text-gray-400'} />
-      <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Hover</span>
-      <button
-        onClick={() => setEnabled(!enabled)}
-        title={enabled ? 'Disable hover-to-point' : 'Auto-engage the laser when you dwell on a part'}
-        className={clsx(
-          'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
-          enabled ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-800'
-        )}
-      >
-        {enabled ? 'On' : 'Off'}
-      </button>
-    </div>
-  );
-};
-
 const Interface: React.FC = () => {
   const {
     viewMode, setViewMode, followingRemoteUserId, setFollowingRemoteUser,
@@ -190,7 +134,6 @@ const Interface: React.FC = () => {
     setCapturedScreenshot,
     setDrawingCanvas,
     setCommentMode,
-    pendingCommentNodeName,
     setPendingComment,
     setDrawingInteractionActive,
     isBoardroomMode,

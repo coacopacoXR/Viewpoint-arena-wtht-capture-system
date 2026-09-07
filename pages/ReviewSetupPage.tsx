@@ -59,7 +59,7 @@ const ReviewSetupPage: React.FC = () => {
   // Serialize a draft for the loop-detector — strip the giant base64 blob and
   // local timestamps so equivalent content compares equal across machines.
   const fingerprint = (d: ReviewDraft): string => {
-    const { importedFileBase64: _b, ...asset } = d.asset;
+    const { importedFileBase64: _, ...asset } = d.asset;
     return JSON.stringify({
       title: d.title, description: d.description, asset,
       viewpoints: d.viewpoints, pins: d.pins, agenda: d.agenda,
