@@ -56,15 +56,27 @@ so every change lands in the working tree for review first. Specs live in
   type debt, and a repo being prepped for external audit should surface it,
   not silence it. Final: lint 0 errors / 104 warnings, exit 0.
 
+- **Batch C — `a617ca5`. T1.2 + T1.4 done, reviewed, committed.**
+  Vitest (jsdom) + Playwright (chromium, self-contained `vite preview`
+  webServer). Smoke component chosen well: `DeicticFeaturesExplainer`
+  depends only on lucide-react and clsx, so the harness is proven without
+  mocking the 3D/WebRTC stack. Both tests make real assertions, not bare
+  renders. `test` is `vitest run` (not watch), so CI cannot hang.
+  Verified independently: lint 0 / typecheck 0 / test 1-1 / e2e 1-1.
+  No override needed — nothing to correct in this batch.
+
 ### In progress
-- **Batch C** — T1.2 vitest + T1.4 playwright. Running. Nothing committed yet.
+- **Batch D** — T1.5 CI pipeline (`ci.yml`, nightly stub,
+  `scripts/check-public-env.mjs`, gitleaks, npm audit) plus the
+  CONTRIBUTING.md script-table follow-up. Running. Nothing committed yet.
 
 ### Not started
-- Batch D (T1.5 CI). Ticket T0.1.
+- Ticket T0.1 (asset swap). Phase 2 onward.
 
 ### Follow-ups noticed, not yet done
 - **CI must gate on lint ERRORS, not warnings** (`eslint .` exit code), since
   104 warnings are expected and intentional. Do not add `--max-warnings 0`.
+  (Folded into the batch D spec.)
 - **Type-debt ratchet:** 92 `no-explicit-any` warnings across 31 files
   (worst: `lib/usePartyPresence.ts` 15, `party/room.server.ts` 13,
   `components/UI/MeetingSummary.tsx` 8, `pages/RoomPage.tsx` 7). Worth its
@@ -77,9 +89,14 @@ so every change lands in the working tree for review first. Specs live in
   re-render loops.
 - `CODE_OF_CONDUCT.md` line 66 has a deliberate
   `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]` placeholder — needs a real
-  address before the repo goes public. This is a user decision.
-- `CONTRIBUTING.md`'s script table needs `lint`, `format`, `test`, and
-  `test:e2e` rows added once batch C lands.
+  address before the repo goes public. **This is a user decision.**
+- **T0.1 (asset swap) still not started.** Held back from batch A because it
+  needs a permissively-licensed replacement `.glb` downloaded and wired into
+  `utils/modelLoader.ts` — a poor fit for an unattended agent. Default per
+  NEXT-STEPS is replace-and-relicense unless the user confirms redistribution
+  rights to the Sennheiser/Santa Cruz models. Needs a decision on which open
+  sample model to use.
+- Only one smoke test exists in each harness. Real coverage is a later phase.
 - `utils/modelLoader.ts` carries one `@ts-expect-error`; revisit if
   `@types/three` or `@pmndrs/pointer-events` ever fixes the dual entry point.
 
