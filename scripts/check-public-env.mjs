@@ -39,6 +39,21 @@ const SECRET_PATTERNS = [
 ];
 
 const SOURCE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs'];
+// Test files are excluded: they legitimately contain secret-shaped names as
+// negative-test fixtures ("assert this is rejected"), and nothing under a test
+// path is ever bundled into the client app, which is the only thing this guard
+// protects. Application source is never excluded.
+function isTestFile(path) {
+  const p = path.split(sep).join('/');
+  return (
+    p.includes('/__tests__/') ||
+    p.includes('.test.') ||
+    p.includes('.spec.') ||
+    p.startsWith('e2e/') ||
+    p.includes('/e2e/')
+  );
+}
+
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', 'coverage',
   '.vercel', '.partykit', 'test-results', 'playwright-report', '.qwen-tasks',
@@ -72,7 +87,9 @@ function main() {
 
   // Exclude this script: it necessarily contains the very patterns it hunts for.
   const selfPath = fileURLToPath(import.meta.url);
-  const sourceFiles = walk(root).filter((f) => resolve(f) !== resolve(selfPath));
+  const sourceFiles = walk(root)
+    .filter((f) => resolve(f) !== resolve(selfPath))
+    .filter((f) => !isTestFile(relative(root, f)));
   for (const file of sourceFiles) {
     const lines = readFileSync(file, 'utf8').split(/\r?\n/);
     lines.forEach((line, i) => {
