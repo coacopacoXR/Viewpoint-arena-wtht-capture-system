@@ -28,9 +28,9 @@ const ALLOWLIST = new Set(['VITE_SUPABASE_ANON_KEY']);
 
 // Pre-existing violations, tracked as debt. Each must cite where it lives and
 // what fixes it. Do not add to this list to silence a new finding.
+// T3.3 and T3.4 resolved the two original entries (VITE_TEAMS_WEBHOOK_URL and
+// VITE_TURN_CREDENTIAL). The map is now empty — any new finding fails the build.
 const KNOWN = new Map([
-  ['VITE_TURN_CREDENTIAL', 'lib/useWebRTC.ts - Phase 3: mint TURN creds in api/turn-credentials.ts'],
-  ['VITE_TEAMS_WEBHOOK_URL', 'lib/teamsIntegration.ts - Phase 3 T3.3: post via api/notify/teams.ts'],
 ]);
 
 const SECRET_PATTERNS = [

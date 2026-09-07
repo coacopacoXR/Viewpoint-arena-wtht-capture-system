@@ -1,12 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import clsx from 'clsx';
 import { TrackerItem, TrackerSession } from '../../lib/supabase';
-import {
-  postSessionToTeams,
-  getTeamsConfig,
-  saveTeamsConfig,
-  TeamsConfig,
-} from '../../lib/teamsIntegration';
+import { TeamsNotifyAdapter } from '../../lib/connectors/notify/teams.ts';
 import {
   syncItemsToSharePoint,
   getSharePointConfig,
@@ -46,18 +41,50 @@ const StatusBanner: React.FC<{ status: StatusMsg }> = ({ status }) => {
 // ─── Teams Section ────────────────────────────────────────────────────────────
 
 const TeamsSection: React.FC<{ session: TrackerSession | null; items: TrackerItem[] }> = ({ session, items }) => {
-  const [cfg, setCfg] = useState<TeamsConfig>(() => getTeamsConfig() ?? { webhookUrl: '' });
   const [status, setStatus] = useState<StatusMsg>({ type: 'idle' });
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const adapter = React.useMemo(() => new TeamsNotifyAdapter(), []);
+
+  React.useEffect(() => {
+    adapter.isConfigured().then(setConfigured).catch(() => setConfigured(false));
+  }, [adapter]);
 
   async function handlePost() {
-    if (!cfg.webhookUrl.trim()) { setStatus({ type: 'error', text: 'Webhook URL is required.' }); return; }
     if (!session) { setStatus({ type: 'error', text: 'Select a session first.' }); return; }
-    saveTeamsConfig(cfg);
     setStatus({ type: 'loading', text: 'Posting to Teams…' });
-    const result = await postSessionToTeams(cfg, session, items);
+    const result = await adapter.postSession(session, items);
     setStatus(result.ok
       ? { type: 'success', text: `Posted! ${items.length} items summarised.` }
       : { type: 'error', text: result.error ?? 'Unknown error' }
+    );
+  }
+
+  if (configured === null) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">💬</span>
+          <p className="text-sm font-bold text-gray-900">Microsoft Teams</p>
+        </div>
+        <p className="text-xs text-gray-500">Checking configuration…</p>
+      </div>
+    );
+  }
+
+  if (configured === false) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">💬</span>
+          <div>
+            <p className="text-sm font-bold text-gray-900">Microsoft Teams</p>
+            <p className="text-xs text-gray-500">Post a session summary card to a Teams channel.</p>
+          </div>
+        </div>
+        <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          Teams is not configured. Ask your administrator to set TEAMS_WEBHOOK_URL on the server.
+        </div>
+      </div>
     );
   }
 
@@ -67,24 +94,14 @@ const TeamsSection: React.FC<{ session: TrackerSession | null; items: TrackerIte
         <span className="text-xl">💬</span>
         <div>
           <p className="text-sm font-bold text-gray-900">Microsoft Teams</p>
-          <p className="text-xs text-gray-500">Post a session summary card to a Teams channel via incoming webhook.</p>
+          <p className="text-xs text-gray-500">Post a session summary card to a Teams channel via server-side webhook.</p>
         </div>
       </div>
-      <Input
-        label="Incoming Webhook URL"
-        type="url"
-        value={cfg.webhookUrl}
-        onChange={e => setCfg({ webhookUrl: e.target.value })}
-        placeholder="https://…webhook.office.com/…"
-      />
       <button onClick={handlePost} disabled={status.type === 'loading'}
         className="w-full bg-[#6264A7] hover:bg-[#4F52A0] text-white text-sm font-semibold py-2 rounded-lg transition-colors disabled:opacity-50">
         Post Session Summary to Teams
       </button>
       <StatusBanner status={status} />
-      <p className="text-[10px] text-gray-400 leading-relaxed">
-        Create a webhook: Teams channel → ··· → Connectors → Incoming Webhook. Paste the URL above.
-      </p>
     </div>
   );
 };

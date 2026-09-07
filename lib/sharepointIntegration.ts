@@ -1,3 +1,17 @@
+// WHY THIS FILE STAYS CLIENT-SIDE (do NOT move to api/*):
+//
+// SharePoint integration uses MSAL browser-delegated auth — the signed-in
+// user's own Microsoft account token, not an app secret. This is legitimately
+// a client-side flow by design (Microsoft's auth model, not ours to change):
+// the user signs in via a popup, MSAL caches their token in the browser, and
+// Graph API calls are made with that user's permissions.
+//
+// Moving this server-side would require an app-only (client-credentials) flow
+// with a stored app secret, which is a fundamentally different auth model and
+// would lose the per-user permission scoping that makes this safe.
+//
+// See docs/adapters/notify.md for the full rule.
+
 import { PublicClientApplication, Configuration, AccountInfo } from '@azure/msal-browser';
 import { TrackerItem } from './supabase';
 
