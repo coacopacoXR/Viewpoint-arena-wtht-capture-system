@@ -127,14 +127,53 @@ so every change lands in the working tree for review first. Specs live in
   redactor with a spread fails 4 tests; reintroducing the error-message leak
   fails the new regression test. 33 tests total.
 
+- **Batch G — `e5b4c2c`. T3.1 done.** PLMAdapter interface, Onshape adapter,
+  MockPLMAdapter, shared contract suite. **Two gaps closed on review:** the
+  Onshape adapter had NO executed coverage (contract suite runs only against
+  the mock; live needs sandbox creds), so ~200 lines shipped unverified —
+  added `onshapeAdapter.test.ts` stubbing fetch. And the adapter duplicates
+  Onshape's element-type map from `api/onshape/elements.ts` (deliberate, to
+  keep the serverless runtime out of its import graph) — both copies are now
+  exported and pinned equal by `onshapeTypeDrift.test.ts`.
+- **Batch H — `c3a402a`. T3.2 done. THE HEADLINE SECURITY FIX.**
+  Teamcenter auth moved server-side; `lib/teamcenterIntegration.ts` deleted.
+  Proven by building the bundle at HEAD~1 (contains `VITE_TC_`) and at the fix
+  (does not). **Two corrections:** the read-side methods called
+  `api/teamcenter/{documents,elements,export}`, which do not exist — the
+  contract suite was green only because it mocks the transport; they now raise
+  an explicit not-implemented error instead of a misleading 404/"not found".
+  And grepping the built bundle exposed a hole in the guard itself:
+  `VITE_TEAMS_WEBHOOK_URL` shipped unflagged because `SECRET_PATTERNS` had no
+  `WEBHOOK` entry, though a webhook URL is a bearer credential.
+- **Batch I — `30458db`. T3.3 + T3.4 done. Phase 3 security work complete.**
+  Teams webhook moved server-side (`api/notify/teams.ts`),
+  `lib/teamsIntegration.ts` deleted; SharePoint stays client-side by design
+  (MSAL user-delegated auth) documented in-file and in `docs/adapters/notify.md`.
+  TurnAdapter + Cloudflare adapter reading env NAMES from config;
+  `lib/useWebRTC.ts` no longer reads `VITE_TURN_*` (ICE gathering untouched —
+  credential sourcing only).
+  **One restoration:** commit `1db12fa` had deliberately added a
+  non-Cloudflare TURN override via `VITE_TURN_*`. T3.4 correctly deleted those
+  but left no replacement, silently losing the capability.
+  `api/turn-credentials.ts` now honours server-side `TURN_URL` /
+  `TURN_USERNAME` / `TURN_CREDENTIAL`.
+
+**MILESTONE: no credential of any kind ships to the browser.** The `KNOWN`
+baseline in `check-public-env.mjs` is now EMPTY. The built bundle contains only
+`VITE_MSAL_CLIENT_ID`, `VITE_MSAL_TENANT_ID`, `VITE_SP_LIST_ID`,
+`VITE_SP_SITE_ID` — public identifiers, not secrets. That was the central
+security goal of the plan.
+
+Repo state: 89 tests; lint 0 errors / 100 warnings; typecheck, check:env, e2e
+and build all green.
+
 ### In progress
-- **Batch G** — T3.1 PLM adapter interface + Onshape wrapper + shared
-  contract-test suite + MockPLMAdapter. Running.
+- Nothing running.
 
 ### Not started
 - **T0.1 (asset swap)** — the only unfinished Phase 0 ticket.
-- T3.2 (Teamcenter security fix), T3.3 (notifications), T3.4 (TURN),
-  T3.5 (model import), T3.6 (capture interface). Phase 4 onward.
+- **T3.5** (model import adapter), **T3.6** (capture interface +
+  characterization tests for DialogueEngine). Phase 4 onward.
 
 ### Follow-ups noticed, not yet done
 - **T0.1 needs a decision.** Needs a permissively-licensed replacement `.glb`
@@ -144,25 +183,22 @@ so every change lands in the working tree for review first. Specs live in
 - **`CODE_OF_CONDUCT.md` line 66** still has
   `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`. **User decision**, blocks going
   public.
-- **IMPORTANT for T3.2 and T3.4:** when those tickets remove
-  `VITE_TC_PASSWORD` (`lib/teamcenterIntegration.ts:136`) and
-  `VITE_TURN_CREDENTIAL` (`lib/useWebRTC.ts:14`) from source, the
-  corresponding entries MUST be removed from the `KNOWN` map in
-  `scripts/check-public-env.mjs` in the same commit — the guard fails on a
-  stale baseline by design, so the ratchet only tightens. Earlier batch specs
-  said "do not touch KNOWN"; that instruction must be inverted for those two
-  tickets specifically.
-- **Type-debt ratchet:** 92 `no-explicit-any` warnings across 31 files.
-- **12 `react-hooks/exhaustive-deps` warnings.** Four are the ref-in-cleanup
-  pattern (`lib/useWebRTC.ts:276-280`, `lib/usePartyPresence.ts:331`), a safe
-  mechanical fix; the rest risk re-render loops.
-- **The server-only guard in `loadConfig.ts` is untested** and does not
-  prevent the module being *bundled* if imported client-side, only from
-  running. Revisit in Phase 3.
+- **The Teamcenter read path is unbuilt.** `api/teamcenter/{documents,
+  elements,export}` do not exist, so `listDocuments`/`getElement`/
+  `exportGeometry` throw not-implemented. Deliberate — the old integration had
+  no read-side logic and the Teamcenter REST contract would have been invented.
+  Needs a real API spec from someone with Teamcenter access.
+- **WebRTC change is unverified against a live call.** The `useWebRTC.ts` edit
+  is minimal and preserves the openrelay fallback exactly, but ICE behaviour
+  has been fragile in this repo (two reverts in recent history) and nothing
+  here exercises a real peer connection. Worth a manual two-browser test
+  before trusting it.
+- **Type-debt ratchet:** 100 lint warnings remain (was 104).
+- The server-only guard in `loadConfig.ts` is still untested.
 - Only one smoke test in each of the unit and e2e harnesses.
-- `utils/modelLoader.ts` carries one `@ts-expect-error`.
 - **gitleaks-action** may need a licence key for org-owned repos. Verify on
-  the first real CI run.
+  the first real CI run — no CI run has happened yet; every check so far was
+  run locally.
 - **Note for future sessions:** write this file with explicit
   `encoding='utf-8'`; Windows Python defaults to cp1252 and corrupted it once.
 
