@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "check:env": "node scripts/check-public-env.mjs"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.9.0",

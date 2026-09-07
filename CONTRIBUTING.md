@@ -33,6 +33,11 @@ This starts the Vite development server. The app works in **zero-account mock mo
 | `npm run build` | Build the production bundle |
 | `npm run preview` | Preview the production build locally |
 | `npm run typecheck` | Run TypeScript type checking (`tsc --noEmit`) |
+| `npm run lint` | Lint the codebase with ESLint (errors fail; warnings are tracked debt) |
+| `npm run format` | Format the codebase with Prettier |
+| `npm run test` | Run unit and contract tests with Vitest |
+| `npm run test:e2e` | Run end-to-end tests with Playwright |
+| `npm run check:env` | Guard against secret-shaped `VITE_*` env vars leaking into the client bundle |
 
 ## Branch and PR conventions
 
@@ -40,7 +45,7 @@ This starts the Vite development server. The app works in **zero-account mock mo
 - Use descriptive branch names (e.g., `feat/local-capture-provider`, `fix/turn-credential-handling`).
 - Keep PRs focused — one logical change per PR.
 - Write a clear PR description explaining **what** changed and **why**.
-- Ensure `npm run typecheck` passes before requesting review.
+- Ensure `npm run typecheck`, `npm run lint`, `npm run test`, `npm run test:e2e`, and `npm run check:env` all pass before requesting review — these are the checks CI runs on every PR.
 - Follow existing code style and naming conventions in the project.
 
 ## Reporting bugs and requesting features
