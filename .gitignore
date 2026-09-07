@@ -26,3 +26,9 @@ dist-ssr
 # PartyKit local dev state
 .partykit/state/
 .vercel
+
+# Personal video content (not project source)
+Videos Post linkedin/
+
+# Delegated-execution scratch (specs + agent run logs)
+.qwen-tasks/

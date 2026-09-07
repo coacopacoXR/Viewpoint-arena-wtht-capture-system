@@ -230,6 +230,10 @@ export async function parseModelFile(file: File): Promise<ModelImportResult> {
 
     const rootGroup = new THREE.Group();
     rootGroup.name = file.name.replace(/\.[^/.]+$/, '');
+    // @ts-expect-error: @pmndrs/pointer-events augments Object3D via `declare module 'three'`
+    // which creates a dual identity with src/core/Object3D under @types/three's dual entry
+    // points. The polymorphic `this` on applyQuaternion makes the two Object3Ds mutually
+    // unassignable. Safe at runtime — both are THREE.Object3D instances.
     rootGroup.add(loadedObject);
 
     applySceneDefaults(rootGroup);
