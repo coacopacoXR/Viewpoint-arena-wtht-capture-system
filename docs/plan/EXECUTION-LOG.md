@@ -43,26 +43,45 @@ so every change lands in the working tree for review first. Specs live in
   Confirmed Qwen's `.gitignore` edit did not clobber the `.qwen-tasks/`
   entry added here.
 
+- **Batch B — `0cf91c6`. T1.1 done, reviewed, committed.**
+  Qwen fixed violations in source rather than suppressing them: deleted two
+  dead unexported components in `Interface.tsx` (`FingerPointerPill`,
+  `HoverPointerPill`, both superseded by the `Inline*` variants actually
+  rendered) and two dead helpers in `DialogueEngine.tsx`, plus unused
+  imports across 22 files. Net 66+/163-. Verified with a real
+  `npm run build` that nothing live was removed.
+  **One override:** Qwen set `no-explicit-any` to `"off"` (172 violations).
+  Changed here to `"warn"` with a `types.ts` exemption — 80 of the 172 are
+  R3F JSX intrinsics where `any` is unavoidable, but the other 92 are real
+  type debt, and a repo being prepped for external audit should surface it,
+  not silence it. Final: lint 0 errors / 104 warnings, exit 0.
+
 ### In progress
-- **Batch B** — T1.1 lint & format. Running. Nothing reviewed or committed yet.
+- **Batch C** — T1.2 vitest + T1.4 playwright. Running. Nothing committed yet.
 
 ### Not started
-- Batches C (T1.2 vitest, T1.4 playwright), D (T1.5 CI). Ticket T0.1.
+- Batch D (T1.5 CI). Ticket T0.1.
 
 ### Follow-ups noticed, not yet done
+- **CI must gate on lint ERRORS, not warnings** (`eslint .` exit code), since
+  104 warnings are expected and intentional. Do not add `--max-warnings 0`.
+- **Type-debt ratchet:** 92 `no-explicit-any` warnings across 31 files
+  (worst: `lib/usePartyPresence.ts` 15, `party/room.server.ts` 13,
+  `components/UI/MeetingSummary.tsx` 8, `pages/RoomPage.tsx` 7). Worth its
+  own ticket; the count should only go down.
+- **12 `react-hooks/exhaustive-deps` warnings** left deliberately — each
+  needs a human call on runtime behaviour. Four are the ref-in-cleanup
+  pattern (`lib/useWebRTC.ts:276-280`, `lib/usePartyPresence.ts:331`) which
+  is a safe mechanical fix (copy ref to a local inside the effect). The rest
+  involve store setters and presence Maps where adding the dep risks
+  re-render loops.
 - `CODE_OF_CONDUCT.md` line 66 has a deliberate
   `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]` placeholder — needs a real
   address before the repo goes public. This is a user decision.
-- `CONTRIBUTING.md`'s script table lists only `dev`/`build`/`preview`/
-  `typecheck`. It needs `lint`, `format`, `test`, and `test:e2e` added once
-  batches B and C land.
+- `CONTRIBUTING.md`'s script table needs `lint`, `format`, `test`, and
+  `test:e2e` rows added once batch C lands.
 - `utils/modelLoader.ts` carries one `@ts-expect-error`; revisit if
   `@types/three` or `@pmndrs/pointer-events` ever fixes the dual entry point.
-
-### Open questions for the user
-- None. Everything batches Aâ€“D need was already decided in
-  `07-oss-hygiene-and-licensing.md` (Apache-2.0) and `NEXT-STEPS.md`
-  (replace the branded `.glb` assets; don't escalate technical calls).
 
 ### Resuming
 Read this file, then `git status` and `git log --oneline -5`. If a batch's
