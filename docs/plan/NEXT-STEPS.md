@@ -1,64 +1,61 @@
-# Next Steps — Before Resuming
+# Next Steps — decisions only you can make
 
-> Personal checklist, not an execution ticket. Everything here is for you,
-> outside the coding session. Once these are done, tell me and I'll pick up
-> immediately from "Ready when you are" below.
+> Everything technical has moved to [`EXECUTION-LOG.md`](./EXECUTION-LOG.md),
+> which is the resume point for a new session. This file is now only the short
+> list of things that genuinely need **you**, because they are questions of
+> fact, cost, or preference that nobody else can answer.
+>
+> The original version of this file described setting up the Qwen execution
+> backend. That is done — see `delegation/README.md`.
 
-## 1. Set up the Qwen execution backend
+## 1. Do you hold redistribution rights to the branded 3D models? (T0.1)
 
-- [ ] Subscribe to **QwenCloud's Token Plan — Standard tier**
-  ($18–25/mo, 10,000 credits/week, 3–4 concurrent agents). Recommended over
-  Lite (too little concurrency to parallelize independent tickets) and Pro
-  (no reason to pay 4x before the pipeline is proven).
-  → https://www.qwencloud.com/pricing/token-plan
-- [ ] Before or right after subscribing, check their docs/support for the
-  **credit-to-token conversion rate** — not published on the pricing page,
-  and it's what actually determines whether 10k credits/week covers the
-  ~30-ticket plan or runs out fast. Worth knowing before we're deep into
-  Phase 1.
-- [ ] Generate an API key from QwenCloud's **API Keys** page (gives you a
-  base URL + key for OpenAI/Anthropic-protocol access).
+The repo ships `.glb` files named after real commercial products
+(Sennheiser, Santa Cruz). **This is the last thing blocking a public push.**
 
-## 2. Nothing else is blocking
+- If **no** or **unsure** — the default applies: replace them with an openly
+  licensed sample and move the originals to a git-ignored `assets/samples/`.
+  Nothing further is needed from you; say the word and it proceeds.
+- If **yes**, and you can point at the licence that permits redistribution,
+  they can stay.
 
-License is decided (Apache-2.0 — `07-oss-hygiene-and-licensing.md` §3) and
-the two branded `.glb` assets default to being replaced with an open sample
-(`08-task-breakdown.md` T0.1) — both proceed automatically next session,
-no action needed from you. **Only tell me before we resume if you actually
-hold redistribution rights to the Sennheiser/Santa Cruz models** — that's a
-fact only you know, so it's the one exception to "don't wait on me."
+This is the one question only you can answer, which is why it was never
+delegated.
 
-Same logic going forward: I'll only come back to you mid-execution for
-personal-preference or UI/UX calls, not technical decisions with a clear
-best answer.
+## 2. Enforcement contact for the Code of Conduct
 
-## 3. Optional — commit the plan docs
+`CODE_OF_CONDUCT.md` line 66 reads `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`.
+The Contributor Covenant requires a real address for reporting. A placeholder
+was left deliberately rather than guessing one. Blocks going public.
 
-`docs/plan/*.md` (this file included) is currently uncommitted on
-`planning/oss-enterprise-readiness`. No action needed from you — just flag
-when we resume whether you want it committed now or held until Phase 0 lands.
+## 3. How to pay for further delegated execution
+
+The Qwen weekly quota was exhausted on **2026-09-08** and resets
+**2026-09-14 19:53 UTC**. Options:
+
+- Wait for the reset. Everything is committed; nothing is lost.
+- Point Qwen at a different key (`--openai-api-key` / `--openai-base-url`, or
+  `~/.qwen/settings.json`).
+- Have Claude implement directly, which works but costs Claude credits — the
+  thing this whole delegated setup exists to avoid.
+
+Note for whichever you choose: `qwen3.7-plus` (the default) handled batches
+A–K. `qwen3.8-max` handled L–O and drained the remaining quota in four runs.
+Reserve the expensive model for genuinely hard tickets.
+
+## 4. Two things worth your own eyes before trusting them
+
+Neither blocks anything, but both are unverified in a way tests cannot fix:
+
+- **The WebRTC change** (`30458db`) moved TURN credentials server-side. The
+  diff is minimal and preserves the previous fallback exactly, but ICE has been
+  fragile here — two reverts in recent history — and nothing in the suite
+  exercises a real peer connection. Worth a manual two-browser call.
+- **CI has never run.** Every check across all 26 commits was run locally. The
+  first real GitHub Actions run is where the gitleaks licence question gets
+  answered and where the two Windows-skipped installer tests actually execute.
 
 ---
 
-## Ready when you are — what I'll do next session
-
-Once §1 above is settled:
-
-1. Install the **Qwen Code CLI**, configure it against your QwenCloud base
-   URL/API key.
-2. Set up a permission allowlist scoped to exactly what the loop needs (git
-   branch/commit on the planning branch, running `qwen`, `npm run
-   typecheck/lint/test`) so a multi-hour unattended run doesn't stall on a
-   permission prompt the first time it touches Bash/git. Still never pushes
-   to `origin`/`main` without you reviewing first — that stays manual.
-3. Execute T0.1 (asset swap, defaulting to replace) and T0.3 (LICENSE +
-   baseline OSS files) — both decided, no confirmation needed.
-4. Run **one validation ticket** (T1.1 — lint/format setup, no dependencies,
-   low risk) through the full loop end-to-end: branch off
-   `planning/oss-enterprise-readiness` → `qwen -p "<ticket>" --yolo` →
-   I check the diff against T1.1's acceptance criteria and run
-   typecheck/lint/test myself → merge if it passes.
-5. If that validation run is clean, start the autonomous loop across the rest
-   of Phase 0/1 (`08-task-breakdown.md`), respecting dependency order, and
-   only come back to you for genuine personal-preference/UI decisions —
-   plus anything stuck after a couple of retries.
+Everything else — what was built, what was overridden and why, what is still
+unfinished — is in [`EXECUTION-LOG.md`](./EXECUTION-LOG.md).

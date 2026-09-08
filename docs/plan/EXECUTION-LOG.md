@@ -261,8 +261,56 @@ ever executed.
   regexes and escape sequences must be built with `chr(92)` in Python or
   written via the Write/Edit tools instead.
 
-### Resuming
-Read this file, then `git status` and `git log --oneline -5`. If a batch's
-changes are in the tree but uncommitted, review them against the ticket's
-acceptance criteria in `08-task-breakdown.md` before committing. Check
-`.qwen-tasks/*.log` for what the agent reported.
+### Resuming from a cold session
+
+Read this file top to bottom first — it is the only place the findings,
+overrides and reasoning live. Then:
+
+```bash
+git log --oneline -8          # 26 commits on planning/oss-enterprise-readiness
+git status --short            # should be clean
+```
+
+**Establish the baseline yourself before changing anything.** Every claim below
+was verified locally, never in CI:
+
+```bash
+npm ci
+npm run lint                  # 0 errors, ~100 warnings (expected, tracked debt)
+npm run typecheck
+npm run test                  # 531 passing, 2 skipped on Windows
+npm run check:env             # KNOWN map is EMPTY and must stay empty
+npm run build
+npm run test:e2e
+
+cd capture-service            # 421 pytest tests
+python -m venv .venv && ./.venv/bin/pip install -r requirements-dev.txt
+./.venv/bin/python -m pytest
+```
+
+On Windows use `.venv/Scripts/python.exe`. `capture-service/.venv` is
+git-ignored, so a fresh clone must recreate it.
+
+**To delegate more tickets**, read `delegation/README.md` — it has the command,
+the model guidance, and the rules every spec repeats. The 15 specs already used
+are beside it. Qwen's weekly quota was exhausted on 2026-09-08 and resets
+**2026-09-14 19:53 UTC**; until then `qwen` returns 429.
+
+**If a batch is interrupted mid-run** (this happened once, batch O), do not
+discard the work reflexively. Check whether the tree still typechecks and what
+is missing against the ticket's acceptance criteria — batch O was ~90% complete
+and needed one duplicated const removed plus the one test the run never reached.
+
+**Highest-value work remaining**, roughly in order:
+1. **T0.1** — the last Phase 0 ticket, and the only thing blocking a public
+   push. Needs the user's answer on model redistribution rights.
+2. **Run CI for real.** Nothing has ever run in GitHub Actions. Expect the
+   gitleaks licence question and the two Windows-skipped installer tests to
+   surface there first.
+3. **T4.4** — LocalCaptureProvider on the frontend, which connects the built
+   capture-service to the UI. The service and the interface both exist; nothing
+   joins them.
+4. **T5.3**, Phase 6 docs, then the type-debt ratchet (100 lint warnings).
+
+**Do not trust a green test run as evidence on its own.** The review method that
+actually found problems is written up in `delegation/README.md`.
