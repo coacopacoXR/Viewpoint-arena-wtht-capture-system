@@ -22,6 +22,7 @@ import { parseModelFile } from '../utils/modelLoader';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { getIdentity } from '../lib/identity';
 import OnshapeBrowser from '../components/UI/OnshapeBrowser';
+import { useConnectorConfig } from '../lib/config/ConfigContext';
 
 type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda';
 
@@ -30,6 +31,11 @@ type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda';
 const ReviewSetupPage: React.FC = () => {
   const navigate = useNavigate();
   const { reviewId } = useParams<{ reviewId: string }>();
+  // Which model-import connector this deployment configured. 'onshape' offers
+  // the Onshape browser alongside the local file upload; anything else (e.g.
+  // 'genericGltf') leaves only the local upload. An unreachable config falls
+  // back to 'onshape' — the behaviour before selection was config-driven.
+  const { modelImport } = useConnectorConfig();
 
   const draft = useReviewSetupStore((s) => s.draft);
   const startNewDraft = useReviewSetupStore((s) => s.startNewDraft);
@@ -238,7 +244,7 @@ const ReviewSetupPage: React.FC = () => {
           <span>{draft.agenda.length} AGENDA</span>
         </div>
         <PresenceStack peers={otherPeers} />
-        <OnshapeStatusPill />
+        {modelImport === 'onshape' && <OnshapeStatusPill />}
         <ShareButton reviewId={draft.reviewId} peerCount={otherPeers.length} />
         <button
           onClick={() => {
@@ -377,6 +383,7 @@ const AssetTab: React.FC = () => {
   const removeReference = useReviewSetupStore((s) => s.removeReference);
   const setDescription = useReviewSetupStore((s) => s.setDescription);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { modelImport } = useConnectorConfig();
 
   const [refName, setRefName] = useState('');
   const [refUrl, setRefUrl] = useState('');
@@ -453,13 +460,15 @@ const AssetTab: React.FC = () => {
               {draft.asset.importedFileName ? `Imported: ${draft.asset.importedFileName}` : 'Upload your own (.glb, .obj, .fbx)'}
             </span>
           </button>
-          <button
-            onClick={() => setShowOnshapeBrowser(true)}
-            className="mt-2 w-full flex items-center justify-center gap-2 p-3 rounded border-2 border-dashed border-emerald-500/30 hover:border-emerald-400/60 hover:bg-emerald-500/5 text-emerald-200 transition-colors"
-          >
-            <span className="w-5 h-5 rounded flex items-center justify-center text-[8px] font-bold text-black bg-gradient-to-br from-emerald-300 to-emerald-500">OS</span>
-            <span className="text-xs font-bold">Import from Onshape</span>
-          </button>
+          {modelImport === 'onshape' && (
+            <button
+              onClick={() => setShowOnshapeBrowser(true)}
+              className="mt-2 w-full flex items-center justify-center gap-2 p-3 rounded border-2 border-dashed border-emerald-500/30 hover:border-emerald-400/60 hover:bg-emerald-500/5 text-emerald-200 transition-colors"
+            >
+              <span className="w-5 h-5 rounded flex items-center justify-center text-[8px] font-bold text-black bg-gradient-to-br from-emerald-300 to-emerald-500">OS</span>
+              <span className="text-xs font-bold">Import from Onshape</span>
+            </button>
+          )}
         </div>
       </Section>
 

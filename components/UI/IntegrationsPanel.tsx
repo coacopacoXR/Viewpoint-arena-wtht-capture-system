@@ -9,6 +9,7 @@ import {
   SharePointConfig,
 } from '../../lib/sharepointIntegration';
 import { TeamcenterPLMAdapter } from '../../lib/connectors/plm/teamcenter.ts';
+import { useConnectorConfig } from '../../lib/config/ConfigContext';
 
 // ─── Shared ───────────────────────────────────────────────────────────────────
 
@@ -275,13 +276,29 @@ interface IntegrationsPanelProps {
 }
 
 const IntegrationsPanel: React.FC<IntegrationsPanelProps> = ({ session, items, onClose }) => {
+  // Selection only: the sections and adapters below are untouched. When
+  // /api/public-config is unreachable, useConnectorConfig() returns the
+  // fallbacks (plm 'teamcenter', notifications ['teams']) — i.e. exactly the
+  // integrations this panel offered before it was config-aware.
+  const { plm, notifications } = useConnectorConfig();
   const [tab, setTab] = useState<IntegrationTab>('teams');
 
+  // SharePoint is deliberately not gated: it signs in as the viewing user with
+  // MSAL (see lib/sharepointIntegration.ts) and has no viewpoint.config.ts
+  // entry, so every deployment offers it.
   const tabs: { id: IntegrationTab; label: string; icon: string }[] = [
-    { id: 'teams', label: 'Teams', icon: '💬' },
+    ...(notifications.includes('teams')
+      ? [{ id: 'teams' as IntegrationTab, label: 'Teams', icon: '💬' }]
+      : []),
     { id: 'sharepoint', label: 'SharePoint', icon: '📋' },
-    { id: 'teamcenter', label: 'Teamcenter', icon: '⚙️' },
+    ...(plm === 'teamcenter'
+      ? [{ id: 'teamcenter' as IntegrationTab, label: 'Teamcenter', icon: '⚙️' }]
+      : []),
   ];
+
+  // The selected tab may be one the config just removed; fall back to the first
+  // offered tab so the content area is never blank.
+  const activeTab: IntegrationTab = tabs.some(t => t.id === tab) ? tab : tabs[0].id;
 
   return (
     <>
@@ -299,7 +316,7 @@ const IntegrationsPanel: React.FC<IntegrationsPanelProps> = ({ session, items, o
         <div className="flex border-b border-gray-100 flex-shrink-0">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={clsx('flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-semibold border-b-2 transition-colors', tab === t.id ? 'border-black text-black' : 'border-transparent text-gray-400 hover:text-gray-700')}>
+              className={clsx('flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-semibold border-b-2 transition-colors', activeTab === t.id ? 'border-black text-black' : 'border-transparent text-gray-400 hover:text-gray-700')}>
               <span className="text-lg">{t.icon}</span>
               {t.label}
             </button>
@@ -308,9 +325,9 @@ const IntegrationsPanel: React.FC<IntegrationsPanelProps> = ({ session, items, o
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-5">
-          {tab === 'teams' && <TeamsSection session={session} items={items} />}
-          {tab === 'sharepoint' && <SharePointSection items={items} />}
-          {tab === 'teamcenter' && <TeamcenterSection items={items} />}
+          {activeTab === 'teams' && <TeamsSection session={session} items={items} />}
+          {activeTab === 'sharepoint' && <SharePointSection items={items} />}
+          {activeTab === 'teamcenter' && <TeamcenterSection items={items} />}
         </div>
 
         <div className="flex-shrink-0 px-6 py-3 border-t border-gray-100">

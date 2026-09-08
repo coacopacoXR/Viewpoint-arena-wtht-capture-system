@@ -77,3 +77,41 @@ describe('fetchPublicConfig', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('fetchPublicConfig cache recovery', () => {
+  it('recovers after a malformed body instead of caching the failure forever', async () => {
+    const { fetchPublicConfig, resetPublicConfigCache } = await import('../publicConfig.ts');
+    resetPublicConfigCache();
+
+    // 200 OK whose body is HTML — the SPA-fallback case.
+    const bad = {
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new Error('Unexpected token <');
+      },
+    };
+    const good = {
+      ok: true,
+      status: 200,
+      json: async () => ({ plm: { provider: 'onshape' } }),
+    };
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(bad as never)
+      .mockResolvedValueOnce(good as never);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchPublicConfig()).rejects.toThrow(/not JSON/);
+
+    // The retry must actually re-fetch and succeed.
+    await expect(fetchPublicConfig()).resolves.toMatchObject({
+      plm: { provider: 'onshape' },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    resetPublicConfigCache();
+    vi.unstubAllGlobals();
+  });
+});
