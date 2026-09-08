@@ -52,6 +52,32 @@ jobs:
       - run: npm ci
       - run: npm run test
 
+  capture-service:
+    name: capture-service (python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: capture-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            capture-service/requirements.txt
+            capture-service/requirements-dev.txt
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements-dev.txt
+      # requirements-whisper.txt is deliberately NOT installed. The suite has to
+      # prove the service runs with no faster-whisper, no model download, no GPU
+      # and no Ollama: if a code path ever grows a top-level whisper import, this
+      # job fails with ModuleNotFoundError instead of quietly pulling 400 MB.
+      # The full checkout above is required — tests/test_typescript_parity.py
+      # reads lib/connectors/capture/*.ts to check the Python port has not
+      # drifted from the TypeScript contract.
+      - run: python -m pytest
+
   build:
     name: build
     runs-on: ubuntu-latest

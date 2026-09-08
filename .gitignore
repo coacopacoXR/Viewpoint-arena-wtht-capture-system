@@ -37,5 +37,14 @@ Videos Post linkedin/
 test-results/
 playwright-report/
 
+# capture-service (Python) build artefacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+capture-service/.env
+capture-service/.env.local
+
 # Per-deployment config (contains *Env names pointing to secrets)
 viewpoint.config.ts
