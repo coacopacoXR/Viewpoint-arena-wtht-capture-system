@@ -2,7 +2,7 @@ import type { ViewpointConfig } from './schema.ts';
 
 export interface PublicConfig {
   plm: { provider: string; baseUrl?: string };
-  capture: { provider: string; model?: string };
+  capture: { provider: string; model?: string; baseUrl?: string };
   turn: { provider: string };
   db: { provider: string };
   notifications: { provider: string }[];
@@ -28,6 +28,13 @@ export function redactConfig(config: ViewpointConfig): PublicConfig {
 
   const capture: PublicConfig['capture'] = { provider: config.capture.provider };
   if ('model' in config.capture) capture.model = config.capture.model;
+  // capture.baseUrl is only present for 'ollamaDirect', which is the one
+  // capture mode where the browser calls the model host itself (LAN-only, no
+  // proxy, no API key — that is the entire point of the mode). It is a network
+  // address, not a credential, so it belongs on the allowlist. Note the
+  // contrast with capture.serviceUrl for 'local', which stays off it because
+  // that path goes through the Vercel proxy.
+  if ('baseUrl' in config.capture) capture.baseUrl = config.capture.baseUrl;
 
   return {
     plm,

@@ -5,7 +5,33 @@
 // (capture.contract.test.ts) asserts the behavioural guarantees so any
 // implementation — ours or a corp's — can be verified against the same checks.
 
-import type { InsightType } from '../../../types';
+import type { InsightCard, InsightType } from '../../../types';
+
+/**
+ * One speaker-labelled slice of a real transcript.
+ *
+ * From docs/plan/02-connector-adapters.md §2 / local-capture-plan.md
+ * §"Provider abstraction". Produced by a TranscriptionProvider (whisper) or
+ * supplied by the caller in bring-your-own-transcript mode.
+ */
+export interface TranscriptChunk {
+  speakerId: string;
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
+/**
+ * Where the review was, spatially, when the transcript window was captured.
+ * Fused into the extraction prompt so a card can be attributed to the part
+ * that was on screen / under the laser at the time.
+ */
+export interface SlideContext {
+  agendaIdx: number;
+  slideTitle: string;
+  hoveredPartName?: string;
+  laserTargetPartName?: string;
+}
 
 /**
  * Output of a single dialogue-generation call.
@@ -34,11 +60,31 @@ export interface DialogueOutput {
 }
 
 /**
- * CaptureProvider — generates the simulated (or real) review conversation.
+ * CaptureProvider — a capture backend, of either flavour.
  *
- * The MockProvider extracts the current DialogueEngine generation logic
- * behind this interface with **no behaviour change**. Future implementations
- * (LocalCapture, Ollama, cloud LLMs) will replace the mock with real AI.
+ * There are two genuinely different kinds of capture provider and they do not
+ * share a single method:
+ *
+ *  1. SIMULATION-driven (`generateDialogue` + `generateInsightDetails`) —
+ *     invents a review conversation from the scene tree. This is what
+ *     MockProvider does, extracted verbatim from DialogueEngine.tsx. It is
+ *     synchronous because nothing leaves the process.
+ *  2. TRANSCRIPT-driven (`extractInsights`) — turns a real, already-spoken
+ *     meeting transcript into insight cards. This is what every real backend
+ *     (OpenAI, Anthropic, Ollama, capture-service) does. It is async because
+ *     it crosses a network.
+ *
+ * Neither flavour can implement the other honestly: a transcript provider has
+ * no phrase library to invent dialogue from, and the simulation has no
+ * transcript to read. Making both sets of methods OPTIONAL — and naming each
+ * capability precisely with SimulationCaptureProvider / TranscriptCaptureProvider
+ * below — is what lets one interface cover both without either side growing a
+ * method it would have to stub or throw from.
+ *
+ * Call sites must feature-detect before use:
+ * `typeof provider.extractInsights === 'function'`. An object with none of the
+ * three satisfies this type but fails the contract suite, which is where that
+ * mistake gets caught.
  */
 export interface CaptureProvider {
   /**
@@ -50,7 +96,7 @@ export interface CaptureProvider {
    * @param isUserDriven Whether the user selected this part (biases depth).
    * @param modelType    Active model type ('bicycle' selects bike-specific phrases).
    */
-  generateDialogue(
+  generateDialogue?(
     agentId: string,
     partName: string,
     step: number,
@@ -67,7 +113,7 @@ export interface CaptureProvider {
    * @param decisionState Current decision state for the component.
    * @param template      The phrase template that triggered the insight.
    */
-  generateInsightDetails(
+  generateInsightDetails?(
     type: InsightType,
     targetId: string,
     targetLabel: string,
@@ -77,4 +123,36 @@ export interface CaptureProvider {
       reasoningChain?: { confidence?: number; implication?: string };
     },
   ): import('../../../types').InsightDetails;
+
+  /**
+   * Turn a transcript window plus the spatial context it was spoken in into
+   * insight cards. Resolves to `[]` when the window held nothing worth
+   * capturing; rejects with a descriptive Error rather than returning
+   * partially-built cards.
+   *
+   * No implementation of this method may accept or return a credential: cloud
+   * providers proxy through api/capture/extract.ts, which holds the API key in
+   * server-side process.env (docs/plan/02-connector-adapters.md §2).
+   */
+  extractInsights?(
+    transcript: TranscriptChunk[],
+    context: SlideContext,
+  ): Promise<InsightCard[]>;
 }
+
+/**
+ * The simulation capability, stated precisely. MockCaptureProvider satisfies
+ * this (and therefore CaptureProvider) with no change.
+ */
+export type SimulationCaptureProvider = Required<
+  Pick<CaptureProvider, 'generateDialogue' | 'generateInsightDetails'>
+>;
+
+/**
+ * The transcript capability, stated precisely. OpenAICaptureProvider,
+ * AnthropicCaptureProvider, OllamaDirectCaptureProvider and (in T4.4)
+ * LocalCaptureProvider all satisfy this.
+ */
+export type TranscriptCaptureProvider = Required<
+  Pick<CaptureProvider, 'extractInsights'>
+>;

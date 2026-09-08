@@ -110,4 +110,35 @@ describe('redactConfig', () => {
     // capture-service directly; it goes through the Vercel proxy.
     expect(redactConfig(localCapture).capture).toEqual({ provider: 'local' });
   });
+
+  it('exposes capture.baseUrl for ollamaDirect, and still no key name', () => {
+    // ollamaDirect is the one capture mode where the browser calls the model
+    // host itself (LAN-only, no proxy, no API key), so the base URL has to
+    // reach it. It is a network address, not a credential.
+    const ollamaCapture: ViewpointConfig = {
+      ...fullSecretConfig,
+      capture: {
+        provider: 'ollamaDirect',
+        baseUrl: 'http://ollama.internal:11434',
+        model: 'deepseek-r1:7b',
+      },
+    };
+    const result = redactConfig(ollamaCapture);
+
+    expect(result.capture).toEqual({
+      provider: 'ollamaDirect',
+      baseUrl: 'http://ollama.internal:11434',
+      model: 'deepseek-r1:7b',
+    });
+    expect(JSON.stringify(result)).not.toMatch(/"[A-Za-z]*Env"/);
+  });
+
+  it('never exposes capture.apiKeyEnv even though the browser needs the model', () => {
+    const result = redactConfig(fullSecretConfig);
+    const json = JSON.stringify(result);
+
+    expect(result.capture).toEqual({ provider: 'openai', model: 'gpt-4' });
+    expect(json).not.toContain('apiKeyEnv');
+    expect(json).not.toContain('OPENAI_API_KEY');
+  });
 });
