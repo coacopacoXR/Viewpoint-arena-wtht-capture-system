@@ -195,6 +195,32 @@ Each ticket: **Why / Files / Interface (where relevant) / Acceptance criteria
 
 ---
 
+### T3.7 — Wire the app to the config (ADDED during execution)
+
+- **Why**: the plan schedules building the adapters (T3.1-T3.6) and the config
+  layer (T2.1-T2.4), but never schedules connecting them. Without this ticket
+  `viewpoint.config.ts` is inert: nothing in the app fetches
+  `/api/public-config`, and `components/UI/IntegrationsPanel.tsx` hardcodes its
+  provider choices. The plan's core promise — "re-point at your own
+  infrastructure by editing one local config file" — is not true until this
+  lands, and Phase 5's `install.sh` would otherwise write a config file that
+  nothing reads.
+- **Files (new)**: `lib/config/ConfigContext.tsx` — a React context that
+  fetches the public config once at startup via `lib/config/publicConfig.ts`
+  and exposes the active provider per connector category.
+- **Files (modified)**: `components/UI/IntegrationsPanel.tsx` and any other
+  component that statically picks a connector.
+- **Acceptance**: changing `plm.provider` in `viewpoint.config.ts` changes
+  which PLM integration the UI offers, without a code edit. Same for
+  notifications and model import.
+- **Fail-safe**: if `/api/public-config` is unreachable (local dev with no
+  config file, or a misconfigured deploy) the UI must fall back to its current
+  behaviour rather than rendering empty. A missing config must never blank the
+  integrations UI.
+- **Depends on**: T2.3, T3.1-T3.5.
+
+---
+
 ## Phase 4 — Real local AI capture
 
 Mirrors `local-capture-plan.md`'s component list and phased estimate almost
