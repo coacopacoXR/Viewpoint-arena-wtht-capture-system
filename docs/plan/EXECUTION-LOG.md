@@ -167,40 +167,99 @@ security goal of the plan.
 Repo state: 89 tests; lint 0 errors / 100 warnings; typecheck, check:env, e2e
 and build all green.
 
+- **Batch J — `9c4c6ee`. T3.5 model import.** genericUpload formalizes the
+  no-PLM path and reuses `validateModelFile` rather than duplicating it.
+- **Batch K — `553ee35`. T3.6 capture extraction. Phase 3 complete.**
+  DialogueEngine drops 1100 -> 247 lines. **Process gap caught:** the
+  characterization snapshots were recorded AFTER the move, not before, so on
+  their own they prove determinism rather than preservation. Equivalence was
+  established independently two ways: a line comparison (446 of 456 lines
+  verbatim) and running pre- and post-refactor `generateDetails` over 81
+  input combinations with identical seeded randomness — all byte-identical.
+- **`b8e4c0b` — T3.7 ADDED TO THE PLAN.** The plan schedules building the
+  adapters and the config layer but never connecting them, so
+  `viewpoint.config.ts` would have stayed inert and Phase 5's installer would
+  have written a file nothing reads.
+- **Batch L — `f89dc66`. T3.7 wiring.** ConfigContext fetches
+  `/api/public-config` at startup; IntegrationsPanel and ReviewSetupPage now
+  select from config. Fail-safe verified by mutation: making "config
+  unavailable" hide integrations fails exactly the 3 fail-safe tests. Also
+  fixed a latent cache bug this ticket made load-bearing — a body that failed
+  to parse left the rejected promise cached forever, so retries could never
+  succeed. That is precisely the SPA-fallback case where a retry is wanted.
+- **Batch M — `1a32fb6`. T4.5 + T4.6 cloud and LAN capture providers.**
+  **One override:** Qwen rejected markdown-fenced model replies and flagged it
+  for review. Correct for OpenAI/Ollama (JSON mode makes fences unreachable)
+  but wrong for Anthropic, which has no JSON mode and fences by habit — the
+  strict rule would have failed well-formed Anthropic output in normal use.
+  Now unwrapped; JSON.parse still validates everything inside, and an unclosed
+  fence is still rejected. Tests encoding the old behaviour were updated.
+- **Batch N — `55a2c47`. T4.1-T4.3 capture-service (Python).** 419 pytest
+  tests, verified genuinely runnable (pytest is not installed globally; Qwen
+  built `capture-service/.venv`, which is gitignored). Best artefact:
+  `tests/test_typescript_parity.py` reads the TS source and fails if the
+  Python port drifts — prompt byte-for-byte, key sets, enums, limits.
+  Mutation-tested. Two parsers in two languages drifting is the bug nobody
+  notices until a card comes out malformed in production.
+- **Batch O — `15c7a13`. T5.1 + T5.2 deployment. QUOTA RAN OUT MID-BATCH.**
+  docker-compose (8 services), install.sh, `/api/health`. capture-service
+  publishes no host port and sits behind an install-time shared secret.
+  Finished by hand: removed a duplicated const the cut-off left behind, and
+  wrote the ticket's REQUIRED installer test, which the interrupted run never
+  got to. Verified by hand first that `install.sh --defaults --configure-only`
+  produces a config `configSchema.parse` accepts.
+
+## BLOCKED: Qwen token plan quota exhausted
+
+The ModelStudio token-plan weekly quota was exhausted during batch O.
+**It resets 2026-09-14 19:53 UTC.** Until then `qwen` returns
+`insufficient_quota` (429) and no delegated batch can run.
+
+`qwen3.8-max` was used for batches L-O and consumed the remaining quota
+quickly; the cheaper default `qwen3.7-plus` handled batches A-K. If the loop
+resumes on the same plan, prefer `qwen3.7-plus` for mechanical work and
+reserve `qwen3.8-max` for genuinely hard tickets.
+
+Options for the user: wait for the reset, add a different API key
+(`qwen --openai-api-key` / `--openai-base-url`, or `~/.qwen/settings.json`),
+or have Claude implement directly at higher credit cost.
+
 ### In progress
 - Nothing running.
 
-### Not started
-- **T0.1 (asset swap)** — the only unfinished Phase 0 ticket.
-- **T3.5** (model import adapter), **T3.6** (capture interface +
-  characterization tests for DialogueEngine). Phase 4 onward.
+### Repo state
+Phases 0-5 substantially complete except T0.1, T4.4, T4.7, T4.8, T5.3 and
+Phase 6. 531 JS tests (2 skipped on Windows), 421 pytest tests. lint 0 errors,
+typecheck, check:env, build and e2e all green — ALL RUN LOCALLY. No CI run has
+ever executed.
 
-### Follow-ups noticed, not yet done
-- **T0.1 needs a decision.** Needs a permissively-licensed replacement `.glb`
-  chosen and downloaded, then wired into `utils/modelLoader.ts`. Default per
-  NEXT-STEPS is replace-and-relicense unless the user confirms redistribution
-  rights to the Sennheiser/Santa Cruz models.
+### Not started
+- **T0.1 (asset swap)** — last Phase 0 ticket. Needs the user's call on
+  redistribution rights, or an openly-licensed replacement model chosen.
+- T4.4 (LocalCaptureProvider frontend), T4.7 (live streaming), T4.8 (n8n),
+  T5.3 (PLM deep link), Phase 6 (docs and polish).
+
+### Follow-ups
 - **`CODE_OF_CONDUCT.md` line 66** still has
   `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`. **User decision**, blocks going
   public.
-- **The Teamcenter read path is unbuilt.** `api/teamcenter/{documents,
-  elements,export}` do not exist, so `listDocuments`/`getElement`/
-  `exportGeometry` throw not-implemented. Deliberate — the old integration had
-  no read-side logic and the Teamcenter REST contract would have been invented.
-  Needs a real API spec from someone with Teamcenter access.
-- **WebRTC change is unverified against a live call.** The `useWebRTC.ts` edit
-  is minimal and preserves the openrelay fallback exactly, but ICE behaviour
-  has been fragile in this repo (two reverts in recent history) and nothing
-  here exercises a real peer connection. Worth a manual two-browser test
-  before trusting it.
-- **Type-debt ratchet:** 100 lint warnings remain (was 104).
-- The server-only guard in `loadConfig.ts` is still untested.
-- Only one smoke test in each of the unit and e2e harnesses.
-- **gitleaks-action** may need a licence key for org-owned repos. Verify on
-  the first real CI run — no CI run has happened yet; every check so far was
-  run locally.
+- **No CI run has ever happened.** Every check was local. The first real
+  Actions run is where the gitleaks licence question gets answered, and where
+  the two Windows-skipped installer tests actually execute.
+- **The WebRTC change is unverified against a live call** (`30458db`). Given
+  two ICE-related reverts in recent history, worth a manual two-browser test.
+- **capture-service has no CORS policy yet** and relies on the compose
+  network plus a shared secret. Fine for the self-hosted stack; revisit if the
+  browser is ever pointed at it directly.
+- **No speaker diarization** — one honest `speaker-1` label rather than
+  invented turns that would appear as fact in `InsightCard.agentId`.
+- **The JS test suite has grown to 531.** Some of batch M's 246 additions are
+  more thorough than strictly needed. Not a problem yet; worth watching.
+- Type debt: 100 lint warnings.
 - **Note for future sessions:** write this file with explicit
-  `encoding='utf-8'`; Windows Python defaults to cp1252 and corrupted it once.
+  `encoding='utf-8'`. Also: the Bash tool's heredoc eats backslashes, so
+  regexes and escape sequences must be built with `chr(92)` in Python or
+  written via the Write/Edit tools instead.
 
 ### Resuming
 Read this file, then `git status` and `git log --oneline -5`. If a batch's
