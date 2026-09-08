@@ -1,0 +1,62 @@
+# GPU override — NVIDIA Container Toolkit required.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
+#       --profile capture-local up -d
+#
+# An OVERRIDE FILE, not a `gpu` profile, because a compose profile can only turn
+# a whole service on or off. It cannot add a device reservation to a service the
+# base file already defines, and duplicating `ollama` and `capture-service` into
+# `-cpu`/`-gpu` variants would mean two definitions of every setting to keep in
+# sync. install.sh assembles this command from the "GPU profile?" answer.
+#
+# Prerequisites on the host: an NVIDIA driver, then
+# https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+# Verify with `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`.
+# If that fails, nothing below will work — remove this file from the command and
+# run the CPU stack instead. It is slower, not broken.
+
+services:
+  ollama:
+    environment:
+      # Keep only one model resident. GPU VRAM is the scarce resource and a
+      # second model swapped in behind the first is how an extraction starts
+      # timing out mid-meeting.
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-2h}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # All GPUs. Narrow this to `device_ids: ['0']` on a box where
+              # another workload owns the rest.
+              count: all
+              capabilities: [gpu]
+
+  capture-service:
+    environment:
+      # cuda + float16 is the pairing faster-whisper wants on a GPU. `int8` (the
+      # CPU default) is not supported on every CUDA build and fails at model load
+      # rather than at install, so it has to change here and not be left to the
+      # operator to discover.
+      CAPTURE_WHISPER_DEVICE: cuda
+      CAPTURE_WHISPER_COMPUTE_TYPE: ${CAPTURE_WHISPER_COMPUTE_TYPE:-float16}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  whisper:
+    environment:
+      CAPTURE_WHISPER_DEVICE: cuda
+      CAPTURE_WHISPER_COMPUTE_TYPE: ${CAPTURE_WHISPER_COMPUTE_TYPE:-float16}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -44,6 +44,13 @@ ENV_EFFECT: dict[str, tuple[str, str, object]] = {
     "CAPTURE_MAX_UPLOAD_BYTES": ("1048576", "max_upload_bytes", 1048576),
     "CAPTURE_HOST": ("0.0.0.0", "host", "0.0.0.0"),
     "CAPTURE_PORT": ("9000", "port", 9000),
+    # A valid secret lands verbatim; the empty/unset case (auth off) and the
+    # too-short case are covered by their own tests below.
+    "CAPTURE_SHARED_SECRET": (
+        "a" * 32,
+        "shared_secret",
+        "a" * 32,
+    ),
 }
 
 

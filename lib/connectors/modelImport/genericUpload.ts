@@ -12,6 +12,8 @@ import type {
   ModelImportResult,
   ModelImportSource,
 } from './types.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
+import { HEALTH_DETAILS } from '../../health/details.ts';
 import { validateModelFile } from '../../../utils/modelLoader.ts';
 
 export class GenericUploadModelImportAdapter implements ModelImportAdapter {
@@ -43,5 +45,16 @@ export class GenericUploadModelImportAdapter implements ModelImportAdapter {
     });
 
     return { blob };
+  }
+
+  /**
+   * Always ok, and that is a real statement rather than a stub: this mode reads
+   * a File the user picked and validates it locally. There is no PLM, no
+   * network call and no credential, so nothing can be down. It is what makes a
+   * `plm: none` / `modelImport: genericGltf` install report a green /api/health
+   * with zero external accounts.
+   */
+  async healthCheck(): Promise<HealthCheckResult> {
+    return { ok: true, detail: HEALTH_DETAILS.selfContained };
   }
 }

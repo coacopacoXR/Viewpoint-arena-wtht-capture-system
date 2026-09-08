@@ -27,11 +27,19 @@ import {
 } from './extractionPrompt';
 import { parseInsightCards } from './parseInsightCards';
 import { CaptureEndpointError } from './extractClient';
+import type { HealthCheckResult } from '../../health/types';
+import { HEALTH_DETAILS } from '../../health/details';
 
 type FetchFn = typeof globalThis.fetch;
 
 /** Extraction on a CPU-only 7B model takes 5-10s; a cold load takes longer. */
 const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * A health poll gets seconds, not the extraction budget. Listing models is a
+ * local metadata read even while a model is cold-loading, so anything slower
+ * than this means the host is not answering.
+ */
+const HEALTH_TIMEOUT_MS = 10_000;
 const MAX_OUTPUT_TOKENS = 4096;
 /** Ollama's error bodies are short; cap what gets repeated to the user. */
 const MAX_BODY_EXCERPT = 300;
@@ -245,6 +253,68 @@ export class OllamaDirectCaptureProvider implements TranscriptCaptureProvider {
   }
 
   /**
+   * Is the Ollama host answering, and is the configured model pulled on it?
+   *
+   * `GET /api/tags` is Ollama's unauthenticated model list, so this checks the
+   * two things that actually go wrong in this mode — the host is unreachable
+   * from the browser (binding, CORS, mixed content: the five causes
+   * extractInsights spells out), and the host is fine but nobody ran
+   * `ollama pull`. It never sends a prompt, so it costs no inference.
+   *
+   * The model comparison accepts a bare name against a tagged list entry:
+   * Ollama reports `deepseek-r1:7b` for a pulled tag but also answers for
+   * `deepseek-r1`, which it resolves to `:latest`. Treating those as different
+   * models would report a working deployment as broken.
+   *
+   * The detail is a fixed phrase and never the URL, the model name or Ollama's
+   * reply: the base URL is a LAN address (not a credential, and already public
+   * via capture.baseUrl), but a health response is not the place to repeat it,
+   * and an upstream body is never safe to forward.
+   */
+  async healthCheck(): Promise<HealthCheckResult> {
+    const controller = new AbortController();
+    // A health poll must not inherit the 120s extraction budget: a hung model
+    // host would otherwise hold the whole /api/health response open.
+    const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await this._fetch(`${this._baseUrl}/api/tags`, {
+        signal: controller.signal,
+      });
+    } catch {
+      return {
+        ok: false,
+        detail: controller.signal.aborted
+          ? HEALTH_DETAILS.timedOut
+          : HEALTH_DETAILS.unreachable,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      return { ok: false, detail: HEALTH_DETAILS.upstreamError };
+    }
+
+    const body = (await response.json().catch(() => null)) as {
+      models?: Array<{ name?: unknown }>;
+    } | null;
+    const names = (body?.models ?? [])
+      .map((m) => m?.name)
+      .filter((n): n is string => typeof n === 'string');
+
+    if (names.length === 0) {
+      // An empty list means this is Ollama (the shape parsed) with nothing
+      // pulled, which is a different fix from "that URL is not Ollama".
+      return { ok: false, detail: HEALTH_DETAILS.modelMissing };
+    }
+    if (!names.some((name) => sameModel(name, this._model))) {
+      return { ok: false, detail: HEALTH_DETAILS.modelMissing };
+    }
+    return { ok: true, detail: HEALTH_DETAILS.modelAvailable };
+  }
+
+  /**
    * Ollama reports a missing model as an HTTP 404 with a JSON error body, so
    * the 404 branch has to look at the body to tell "model not pulled" from
    * "that URL is not Ollama at all". Both are common; they have different fixes.
@@ -343,4 +413,19 @@ function excerpt(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   if (flat.length <= MAX_BODY_EXCERPT) return flat;
   return `${flat.slice(0, MAX_BODY_EXCERPT)}…`;
+}
+
+/**
+ * Compare a model name from Ollama's tag list against the configured one.
+ *
+ * An untagged name means Ollama's `:latest`, on both sides, so `deepseek-r1`
+ * and `deepseek-r1:latest` are the same model. Comparing the strings directly
+ * would report a working deployment as missing its model.
+ */
+function sameModel(listed: string, configured: string): boolean {
+  if (listed === configured) return true;
+  const [listedName, listedTag] = listed.split(':');
+  const [configuredName, configuredTag] = configured.split(':');
+  if (listedName !== configuredName) return false;
+  return (listedTag ?? 'latest') === (configuredTag ?? 'latest');
 }

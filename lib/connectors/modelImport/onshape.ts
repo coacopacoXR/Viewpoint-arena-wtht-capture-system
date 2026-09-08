@@ -13,6 +13,8 @@ import type {
   ModelImportResult,
   ModelImportSource,
 } from './types.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
+import { HEALTH_DETAILS } from '../../health/details.ts';
 
 export interface OnshapeModelImportOpts {
   /** Override for globalThis.fetch — for testing only. */
@@ -129,5 +131,35 @@ export class OnshapeModelImportAdapter implements ModelImportAdapter {
       `&dataId=${encodeURIComponent(dataId)}`;
 
     return { url };
+  }
+
+  /**
+   * Is the translate route this adapter drives deployed and answering?
+   *
+   * It probes with NO query parameters, which is the point: the handler
+   * validates `d`/`w`/`e`/`type` first and answers 400 (or 401 from its auth
+   * wrapper), so the probe proves the route exists and ran without starting a
+   * translation. Starting a real GLTF export on every health poll would queue
+   * work on the customer's Onshape tenant and cost minutes.
+   *
+   * Only the status code is read. The 400 body and any auth detail are
+   * discarded, and the detail is a fixed phrase — no route path, no document id
+   * and no upstream text reaches the response.
+   */
+  async healthCheck(): Promise<HealthCheckResult> {
+    let status: number;
+    try {
+      const response = await this._fetch('/api/onshape/translate');
+      status = response.status;
+    } catch {
+      return { ok: false, detail: HEALTH_DETAILS.unreachable };
+    }
+    if (status === 404) {
+      return { ok: false, detail: HEALTH_DETAILS.routeUnavailable };
+    }
+    if (status >= 500) {
+      return { ok: false, detail: HEALTH_DETAILS.upstreamError };
+    }
+    return { ok: true, detail: HEALTH_DETAILS.routeReachable };
   }
 }

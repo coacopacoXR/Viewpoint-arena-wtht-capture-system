@@ -4,6 +4,8 @@
 
 import type { InsightType, InsightDetails } from '../../../types';
 import type { CaptureProvider, DialogueOutput } from './types';
+import type { HealthCheckResult } from '../../health/types';
+import { HEALTH_DETAILS } from '../../health/details';
 
 interface PersonalityProfile {
     id: string;
@@ -888,5 +890,15 @@ export class MockCaptureProvider implements CaptureProvider {
         template: { type: string; reasoningChain?: { confidence?: number; implication?: string } },
     ): InsightDetails {
         return generateDetails(type, targetId, targetLabel, decisionState, template as EnhancedPhraseTemplate);
+    }
+
+    /**
+     * Always ok: the simulation is a phrase library living in this module, so
+     * there is no network, no model host and no key that could be missing.
+     * Saying so explicitly is what lets a default install report a green
+     * /api/health with zero accounts configured.
+     */
+    async healthCheck(): Promise<HealthCheckResult> {
+        return { ok: true, detail: HEALTH_DETAILS.selfContained };
     }
 }

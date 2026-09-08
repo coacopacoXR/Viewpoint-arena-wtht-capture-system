@@ -6,6 +6,7 @@
 // implementation — ours or a corp's — can be verified against the same checks.
 
 import type { InsightCard, InsightType } from '../../../types';
+import type { HealthCheckResult } from '../../health/types.ts';
 
 /**
  * One speaker-labelled slice of a real transcript.
@@ -138,6 +139,20 @@ export interface CaptureProvider {
     transcript: TranscriptChunk[],
     context: SlideContext,
   ): Promise<InsightCard[]>;
+
+  /**
+   * Is this connector usable right now? Called by GET /api/health
+   * (docs/plan/05-observability-and-metrics.md §1).
+   *
+   * Optional like the other two capabilities, and implemented by every
+   * provider in this repo — including MockCaptureProvider, which has nothing
+   * to reach and says so. Must never reject, and must never run an extraction:
+   * a health check that spends tokens or uploads audio is not a health check.
+   * `detail` must stay free of credentials, env var names, model output and
+   * hostnames — see the full rules on PLMAdapter.healthCheck in
+   * lib/connectors/plm/types.ts.
+   */
+  healthCheck?(): Promise<HealthCheckResult>;
 }
 
 /**

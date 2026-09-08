@@ -9,10 +9,13 @@ read it — one mechanism, three deployments.
 All variables use the `CAPTURE_` prefix and NONE of them use a `VITE_` prefix,
 because nothing in this service is ever shipped to a browser. That is the rule
 enforced by scripts/check-public-env.mjs: a `VITE_` name is inlined into the
-client bundle, so a secret in one is a public secret. This service holds no
-secrets at all — Ollama and faster-whisper are unauthenticated LAN/local
-components — but the naming rule still applies so that the day someone adds a
-bearer token here they reach for an unprefixed name.
+client bundle, so a secret in one is a public secret.
+
+Every variable below is a preference EXCEPT `CAPTURE_SHARED_SECRET`, which is a
+genuine secret: it is the bearer token that guards a service accepting complete
+meeting recordings (see auth.py). It never appears in a response, a log line or
+a /health body, and it is generated randomly by install.sh rather than shipped
+with a default — a documented default secret is no secret at all.
 
 Variables (all optional; the defaults are the documented local-install values):
 
@@ -35,6 +38,10 @@ Variables (all optional; the defaults are the documented local-install values):
                                   Default: 127.0.0.1
     CAPTURE_PORT                  Bind port for `python -m capture_service`.
                                   Default: 8080
+    CAPTURE_SHARED_SECRET         Bearer token required on EVERY route. Empty
+                                  (the default) means authentication is off,
+                                  which is only safe because the service then
+                                  binds 127.0.0.1.  Default: (empty)
 """
 
 from __future__ import annotations
@@ -90,6 +97,12 @@ DEFAULT_MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 
+# The shortest accepted CAPTURE_SHARED_SECRET. install.sh generates 64 hex
+# characters, so this only ever fires on a hand-written value — and a
+# hand-written "changeme" guarding a service that accepts meeting recordings is
+# worth refusing to start over. Empty is still allowed and means "off".
+MIN_SHARED_SECRET_LENGTH = 16
+
 # The complete set of variables this service reads. tests/test_config.py walks
 # it, so a variable added to Settings but not to DEFAULTS (or vice versa) fails
 # the suite instead of silently becoming unread.
@@ -104,6 +117,7 @@ ENV_VAR_NAMES: tuple[str, ...] = (
     "CAPTURE_MAX_UPLOAD_BYTES",
     "CAPTURE_HOST",
     "CAPTURE_PORT",
+    "CAPTURE_SHARED_SECRET",
 )
 
 DEFAULTS: Mapping[str, str] = {
@@ -117,6 +131,9 @@ DEFAULTS: Mapping[str, str] = {
     "CAPTURE_MAX_UPLOAD_BYTES": str(DEFAULT_MAX_UPLOAD_BYTES),
     "CAPTURE_HOST": DEFAULT_HOST,
     "CAPTURE_PORT": str(DEFAULT_PORT),
+    # No default secret. Ever. A shipped default would be the first thing an
+    # attacker tries, and the service would start happily with it.
+    "CAPTURE_SHARED_SECRET": "",
 }
 
 
@@ -135,6 +152,10 @@ class Settings:
     max_upload_bytes: int
     host: str
     port: int
+    # None means "authentication is off". Declared last with a default so every
+    # existing Settings(...) construction — including the one in
+    # tests/test_config.py that pins the documented defaults — keeps working.
+    shared_secret: str | None = None
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -162,6 +183,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         max_upload_bytes=_positive_int(raw, "CAPTURE_MAX_UPLOAD_BYTES"),
         host=_text(raw, "CAPTURE_HOST"),
         port=_port(raw, "CAPTURE_PORT"),
+        shared_secret=_shared_secret(raw, "CAPTURE_SHARED_SECRET"),
     )
 
 
@@ -268,3 +290,30 @@ def _url_root(raw: Mapping[str, str], name: str) -> str:
         )
 
     return f"{parts.scheme}://{parts.netloc}"
+
+
+def _shared_secret(raw: Mapping[str, str], name: str) -> str | None:
+    """Validate the bearer token, or return None to leave authentication off.
+
+    The ONLY validator here that must not quote the value it was given. Every
+    other one shows `{value!r}` because seeing the typo is the fix; this one's
+    value is a credential, and a ConfigError message is printed to stderr by
+    `python -m capture_service`, captured by `docker logs`, and pasted into
+    issue trackers. So the message reports the LENGTH and nothing else — enough
+    to tell "empty" from "too short" without publishing the secret.
+    """
+    value = _value(raw, name)
+    if not value:
+        # Empty means off, not invalid: that is the documented laptop default,
+        # where the service binds 127.0.0.1 and nothing off-box can reach it.
+        return None
+    if len(value) < MIN_SHARED_SECRET_LENGTH:
+        raise ConfigError(
+            f"{name} is set but only {len(value)} character(s) long; it must be "
+            f"at least {MIN_SHARED_SECRET_LENGTH}. This is the only thing "
+            f"between a caller and a service that accepts meeting recordings, "
+            f"so generate a strong one — `openssl rand -hex 32`, or re-run "
+            f"install.sh, which does it for you. To switch authentication off "
+            f"entirely, unset the variable instead of weakening it."
+        )
+    return value

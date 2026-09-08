@@ -45,7 +45,19 @@ const teamcenterPlm = z.object({
   passwordEnv: envVarName,
 });
 
-const plmSchema = z.discriminatedUnion('provider', [onshapePlm, teamcenterPlm]);
+// 'none' is the "we have no PLM we support, or we don't want one connected"
+// deployment: install.sh offers it as `none-manual-upload`. It carries no *Env
+// fields because there is nothing to authenticate, and it pairs with
+// modelImport 'genericGltf'. /api/health omits a connector whose provider is
+// 'none' rather than reporting it as failing — a deployment that deliberately
+// has no PLM is not a degraded deployment.
+const noPlm = z.object({ provider: z.literal('none') });
+
+const plmSchema = z.discriminatedUnion('provider', [
+  onshapePlm,
+  teamcenterPlm,
+  noPlm,
+]);
 
 const captureSchema = z.discriminatedUnion('provider', [
   z.object({ provider: z.literal('mock') }),

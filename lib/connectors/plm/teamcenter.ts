@@ -15,6 +15,8 @@ import type {
   PLMElement,
 } from './types.ts';
 import type { TrackerItem } from '../../supabase.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
+import { HEALTH_DETAILS } from '../../health/details.ts';
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -171,6 +173,47 @@ export class TeamcenterPLMAdapter implements PLMAdapter {
         elementId: query.plmElement,
       },
     };
+  }
+
+  /**
+   * Is the server-side route this adapter depends on there and answering?
+   *
+   * It checks the route, NOT the Teamcenter credentials, and that limit is
+   * deliberate:
+   *
+   *  - This adapter is browser-safe and holds no credential, so it cannot
+   *    verify one. TC_USERNAME / TC_PASSWORD live in server-side process.env
+   *    behind api/teamcenter/*.
+   *  - The only way to verify them is a real login, and /api/health is polled.
+   *    Authenticating to a customer's Teamcenter on every poll would hammer
+   *    their SSO and can trip account lockout — a health check that breaks the
+   *    thing it checks is worse than a weaker check.
+   *
+   * So this answers "is the Teamcenter API surface deployed", which is the
+   * failure an installer actually hits: a build with no api/teamcenter/*
+   * functions 404s here, and that is reported rather than discovered by a user
+   * mid-review. 405 is the expected answer (the route only accepts POST) and
+   * means the handler ran.
+   *
+   * No status text, no response body and no URL is repeated: only the fixed
+   * phrase. The existing isConfigured() is left alone — it reads `resp.ok`, so
+   * it reports false against the 405 this route returns for a HEAD, and
+   * changing it would change behaviour a caller may depend on.
+   */
+  async healthCheck(): Promise<HealthCheckResult> {
+    let status: number;
+    try {
+      const response = await this._fetch('/api/teamcenter/login', {
+        method: 'HEAD',
+      });
+      status = response.status;
+    } catch {
+      return { ok: false, detail: HEALTH_DETAILS.unreachable };
+    }
+    if (status === 404) return { ok: false, detail: HEALTH_DETAILS.routeUnavailable };
+    if (status === 503) return { ok: false, detail: HEALTH_DETAILS.notConfigured };
+    if (status >= 500) return { ok: false, detail: HEALTH_DETAILS.upstreamError };
+    return { ok: true, detail: HEALTH_DETAILS.routeReachable };
   }
 
   // ─── Teamcenter-specific push operations ────────────────────────────

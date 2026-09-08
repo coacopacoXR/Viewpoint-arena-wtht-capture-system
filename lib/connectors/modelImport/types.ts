@@ -6,6 +6,7 @@
 // can be verified against the same checks.
 
 import type { PLMDocumentRef } from '../plm/types.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
 
 /**
  * Discriminated union for the two import modes:
@@ -38,4 +39,16 @@ export interface ModelImportAdapter {
     source: ModelImportSource,
     format: 'gltf',
   ): Promise<ModelImportResult>;
+
+  /**
+   * Is this connector usable right now? Called by GET /api/health.
+   *
+   * Optional; every adapter in this repo implements it. Must never reject, and
+   * must not start a translation: a health check that queues a real CAD export
+   * would be slow, may cost money upstream, and would be indistinguishable
+   * from a user's import. `detail` must stay free of credentials, env var
+   * names and hostnames — see the full rules on PLMAdapter.healthCheck in
+   * lib/connectors/plm/types.ts.
+   */
+  healthCheck?(): Promise<HealthCheckResult>;
 }

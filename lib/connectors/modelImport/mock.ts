@@ -9,6 +9,8 @@ import type {
   ModelImportResult,
   ModelImportSource,
 } from './types.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
+import { HEALTH_DETAILS } from '../../health/details.ts';
 
 // Minimal valid GLB header — enough to prove the adapter returns a Blob of
 // the right MIME type without shipping a real 3D model in the test suite.
@@ -46,5 +48,10 @@ export class MockModelImportAdapter implements ModelImportAdapter {
     // PLM source — return a deterministic mock URL.
     const ref = source.ref;
     return { url: `mock://model/${ref.id}.glb` };
+  }
+
+  /** Nothing external to reach; see GenericUploadModelImportAdapter.healthCheck. */
+  async healthCheck(): Promise<HealthCheckResult> {
+    return { ok: true, detail: HEALTH_DETAILS.selfContained };
   }
 }

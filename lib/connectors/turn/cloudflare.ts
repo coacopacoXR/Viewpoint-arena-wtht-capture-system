@@ -9,6 +9,8 @@
 // imported by browser-reachable code.
 
 import type { TurnAdapter } from './types.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
+import { HEALTH_DETAILS } from '../../health/details.ts';
 
 if (typeof process === 'undefined' || !process.versions?.node) {
   throw new Error(
@@ -68,5 +70,27 @@ export class CloudflareTurnAdapter implements TurnAdapter {
     }
 
     return data.iceServers;
+  }
+
+  /**
+   * Are both TURN credentials present? Presence only — no API call.
+   *
+   * Calling getIceServers() to check health would mint a real credential
+   * against Cloudflare's METERED TURN API on every poll, and the minted
+   * username/credential pair would be sitting in the return path of an
+   * unauthenticated endpoint. Both are disqualifying, so this reports what can
+   * be known for free.
+   *
+   * The detail names no variable: WHICH of the two is missing is deployment
+   * internals, and the server log is where an operator looks. Say the pair is
+   * incomplete and they will find it in the config.
+   */
+  async healthCheck(): Promise<HealthCheckResult> {
+    const tokenId = this._env[this._tokenIdEnv];
+    const apiToken = this._env[this._apiTokenEnv];
+    if (!tokenId || !apiToken) {
+      return { ok: false, detail: HEALTH_DETAILS.notConfigured };
+    }
+    return { ok: true, detail: HEALTH_DETAILS.configured };
   }
 }

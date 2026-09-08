@@ -25,6 +25,9 @@ Two design rules this file exists to keep:
 Routes are plain `def`, not `async def`: Whisper transcription blocks a worker
 for the length of the recording, and FastAPI runs sync routes in a threadpool so
 one meeting cannot stall the event loop for everyone else.
+
+When CAPTURE_SHARED_SECRET is set, every route below — /health and /docs
+included — requires it. auth.py explains why there is no exemption list.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from . import __version__
+from .auth import require_shared_secret
 from .config import Settings, load_settings
 from .errors import CaptureServiceError, EmptyTranscript, EmptyUpload, UploadTooLarge
 from .ollama import LlmClient, OllamaClient
@@ -366,6 +370,16 @@ def create_app(
     app.state.llm = resolved_llm
 
     _register_error_handlers(app)
+
+    # Registered ONLY when a secret is configured, so an unauthenticated laptop
+    # run has the exact request path it always had: no middleware, no per-request
+    # header lookup, nothing to disable. See auth.py for why this is opt-in by
+    # absence and why it covers every route including /health and /docs.
+    if resolved_settings.shared_secret is not None:
+        app.middleware("http")(
+            require_shared_secret(resolved_settings.shared_secret)
+        )
+
     app.include_router(router)
     return app
 

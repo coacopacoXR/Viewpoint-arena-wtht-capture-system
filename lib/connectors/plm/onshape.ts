@@ -15,6 +15,8 @@ import type {
   PLMDocumentRef,
   PLMElement,
 } from './types.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
+import { HEALTH_DETAILS } from '../../health/details.ts';
 
 const ONSHAPE_API = 'https://cad.onshape.com';
 
@@ -278,5 +280,40 @@ export class OnshapePLMAdapter implements PLMAdapter {
         elementId: query.plmElement,
       },
     };
+  }
+
+  /**
+   * Reachability of the Onshape API host, unauthenticated.
+   *
+   * Deliberately does NOT authenticate. A real check would need a session, and
+   * /api/health is polled by an unauthenticated dashboard and by install.sh:
+   * minting or reusing an OAuth session on every poll would spend a user's
+   * token budget to answer "is the network path there". Any HTTP answer at all
+   * — including 401 and 404 — means the host resolved and answered, which is
+   * the only thing this can honestly claim without a credential.
+   *
+   * Probes the module's ONSHAPE_API constant rather than the config's
+   * plm.baseUrl: this adapter does not take a base URL, and adding one is
+   * T3.1's reorganisation, not a health check's business.
+   */
+  async healthCheck(): Promise<HealthCheckResult> {
+    try {
+      // A network-level answer is the result; the body is never read, so no
+      // upstream text can be repeated anywhere.
+      const response = await fetch(`${ONSHAPE_API}/api/v9/documents`, {
+        method: 'HEAD',
+      });
+      // 401/404 mean the host answered and we simply sent no credential, which
+      // is the point of an unauthenticated probe. 5xx means Onshape itself is
+      // unhealthy, which the deployment does want to see.
+      if (response.status >= 500) {
+        return { ok: false, detail: HEALTH_DETAILS.upstreamError };
+      }
+      return { ok: true, detail: HEALTH_DETAILS.reachable };
+    } catch {
+      // fetch's own message is dropped: it embeds the URL, and the URL is an
+      // internal detail of this deployment.
+      return { ok: false, detail: HEALTH_DETAILS.unreachable };
+    }
   }
 }

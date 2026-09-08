@@ -6,6 +6,7 @@
 // can be verified against the same checks.
 
 import type { TrackerSession, TrackerItem } from '../../supabase.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
 
 export interface NotificationSinkAdapter {
   /** Stable identifier for this sink — e.g. 'teams', 'teamcenter', 'jira'. */
@@ -23,4 +24,18 @@ export interface NotificationSinkAdapter {
 
   /** Post a single tracker item. */
   postItem(item: TrackerItem): Promise<{ ok: boolean; error?: string }>;
+
+  /**
+   * Is this sink usable right now? Called by GET /api/health, which reports
+   * one entry per ENABLED sink keyed by `id`.
+   *
+   * Optional; every adapter in this repo implements it. Must never reject, and
+   * must not post anything: a health check that sends a real notification to a
+   * team's channel would make the endpoint unusable. Check configuration and
+   * reachability only. `detail` must stay free of credentials, env var names
+   * and hostnames — see the full rules on PLMAdapter.healthCheck in
+   * lib/connectors/plm/types.ts. A webhook URL is a bearer credential, so it
+   * must never appear here even partially.
+   */
+  healthCheck?(): Promise<HealthCheckResult>;
 }

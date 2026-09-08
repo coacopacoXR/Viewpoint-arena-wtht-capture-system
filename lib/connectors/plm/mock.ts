@@ -4,6 +4,8 @@ import type {
   PLMDocumentRef,
   PLMElement,
 } from './types.ts';
+import type { HealthCheckResult } from '../../health/types.ts';
+import { HEALTH_DETAILS } from '../../health/details.ts';
 
 // In-memory catalogue the mock uses to respond to lookups. Kept small and
 // deterministic so contract tests can assert exact shapes.
@@ -88,5 +90,12 @@ export class MockPLMAdapter implements PLMAdapter {
       roomHint: `mock-room-${doc.id}`,
       doc: { id: doc.id, workspaceId: doc.workspaceId },
     };
+  }
+
+  async healthCheck(): Promise<HealthCheckResult> {
+    // The mock reads an in-module catalogue, so there is nothing that can be
+    // down. Reporting ok unconditionally is the honest answer, and it is what
+    // makes a default install's /api/health green with zero accounts.
+    return { ok: true, detail: HEALTH_DETAILS.selfContained };
   }
 }

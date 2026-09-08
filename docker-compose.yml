@@ -1,0 +1,476 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Viewpoint Arena — self-hosted stack
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# docs/plan/06-deployment-and-installation.md §2 and docs/local-capture-plan.md
+# §"Installation", with one change throughout: every service is configured from
+# `viewpoint.config.ts` + `.env`, the pair install.sh writes.
+#
+#     ./install.sh                       # interactive
+#     ./install.sh --defaults            # non-interactive (what CI runs)
+#     docker compose --profile capture-local up -d
+#
+# ── WHAT IS PUBLISHED TO THE HOST, AND WHY ───────────────────────────────────
+#
+#   nginx-proxy   80, 443, 8443   the only public entry point
+#   partykit      127.0.0.1:1999  loopback only; browsers reach it via 8443
+#   ollama        127.0.0.1:11434 loopback only, for `ollama pull` from the host
+#   n8n           127.0.0.1:5678  loopback only, profile n8n
+#
+#   app, capture-service, whisper, postgres   NO PORTS AT ALL
+#
+# ── WHY capture-service PUBLISHES NO PORT ────────────────────────────────────
+#
+# capture-service accepts complete meeting recordings. Audio of an engineering
+# review is among the most sensitive data an organisation has: it names parts,
+# suppliers, failure modes and who said what about them. The service has no
+# notion of a user, no rate limit and no audit trail, and it will transcribe and
+# run an LLM over anything posted to it. So:
+#
+#   1. It has no `ports:` entry. Not "bound to 127.0.0.1", not "behind the
+#      proxy" — nothing on the host can open a socket to it, and nothing on the
+#      network can either.
+#   2. It sits on `backend`, which is `internal: true`. Docker will not route
+#      between that network and any external interface, in either direction.
+#   3. It also sits on `models` (not internal, because Ollama and Whisper have
+#      to be able to fetch models). Reachability still comes only from
+#      containers on those two networks — `app` and `whisper`.
+#   4. It requires CAPTURE_SHARED_SECRET on EVERY route once that variable is
+#      set, which install.sh always sets. Network isolation is the primary
+#      control; the secret is the one that still holds if somebody publishes the
+#      port anyway or if another container on `models` is compromised.
+#
+# Reaching it from the host, when you genuinely need to:
+#
+#   docker compose exec capture-service curl -sS \
+#     -H "X-Capture-Token: $CAPTURE_SHARED_SECRET" http://127.0.0.1:8080/health
+#
+# Do not "fix" this by adding a port mapping. If an operator must expose it,
+# put it behind nginx-proxy with authentication in front — see
+# capture-service/README.md §7.
+#
+# ── PROFILES ─────────────────────────────────────────────────────────────────
+#
+#   capture-local   ollama. Activate when capture.provider is 'local' or
+#                   'ollamaDirect'. Off by default: a mock-capture install has
+#                   no reason to pull a multi-GB image or reserve RAM for a
+#                   model it will never load.
+#   whisper         a second capture-service instance dedicated to transcription.
+#                   Off by default because capture-service transcribes
+#                   in-process today; see the `whisper` service comment.
+#   n8n             the optional workflow engine (T4.8).
+#
+#   GPU is a compose OVERRIDE, not a profile, because a profile cannot add a
+#   device reservation to an existing service:
+#
+#       docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
+#         --profile capture-local up -d
+#
+#   install.sh assembles that command for you.
+#
+# ── KNOWN GAP, STATED PLAINLY ────────────────────────────────────────────────
+#
+# The `api/*` handlers in this repo are Vercel serverless functions, and this
+# stack does not run them: `app` is nginx serving the Vite build, exactly as
+# §2 specifies, and nginx answers /api/* with a JSON 501 rather than the SPA
+# fallback (deploy/nginx/app.conf explains both halves of that). Consequences:
+#
+#   * GET /api/health (T5.2) works in the cloud-hybrid deployment and is fully
+#     tested here, but is not served by this stack yet.
+#   * The SPA cannot fetch /api/public-config, so lib/config/ConfigContext.tsx
+#     falls back to its documented default providers. The app renders; it does
+#     not blank. That fail-safe is the reason this gap is survivable.
+#   * postgres is plain Postgres 16. supabase-js needs a PostgREST/GoTrue
+#     gateway in front of it, so the db connector reports degraded until one is
+#     added or VITE_SUPABASE_URL points at a hosted project.
+#
+# These are tracked, not overlooked. Nothing above is a reason to expose
+# capture-service.
+
+name: viewpoint-arena
+
+# One log config for everything. docs/plan/05-observability-and-metrics.md §2
+# asks for structured logs from every server-side surface and §6 says not to
+# build a dashboard; rotated json-file output is what an org's existing log
+# shipper can already read. Bounded, because an unrotated container log on a
+# box that also holds a 4 GB model is how a host runs out of disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+networks:
+  # Public-facing: the proxy and the things it fronts.
+  edge:
+    driver: bridge
+
+  # internal: true means Docker provides no route between this network and any
+  # external interface. Containers on it cannot be reached from the host or the
+  # internet, and cannot reach out either. postgres and capture-service live
+  # here; `app` is attached so it can call capture-service without either one
+  # being reachable from outside.
+  backend:
+    driver: bridge
+    internal: true
+
+  # NOT internal, and that is deliberate: Ollama has to be able to pull a model
+  # and Whisper has to download weights on first use. Anything on this network
+  # has outbound internet, which is why capture-service's isolation comes from
+  # having no published port rather than from this network.
+  #
+  # A fully air-gapped install can close it: pre-seed the two model volumes on a
+  # connected machine, then add
+  #
+  #     networks: { models: { internal: true } }
+  #
+  # to an override file. CAPTURE_WHISPER_MODEL also accepts a path to a local
+  # CTranslate2 directory for exactly this case.
+  models:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  ollama-models:
+  whisper-models:
+  partykit-state:
+  n8n-data:
+
+services:
+  # ── The only public entry point ──────────────────────────────────────────
+  nginx-proxy:
+    image: nginx:${NGINX_IMAGE_TAG:-alpine}
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - '${HTTP_PORT:-80}:80'
+      - '${HTTPS_PORT:-443}:443'
+      # PartyKit WebSocket over TLS. See deploy/nginx/proxy.conf for why this is
+      # a separate port rather than a path: partysocket connects to
+      # `<host>/<room>`, so the room id occupies the first path segment and
+      # there is no prefix to mount it under.
+      - '${WSS_PORT:-8443}:8443'
+    volumes:
+      - ./deploy/nginx/proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      # install.sh generates a self-signed pair here for the hostname you gave
+      # it. Replace these two files with a real certificate and nothing else
+      # changes. Git-ignored: a private key must never be committed.
+      - ./deploy/certs:/etc/nginx/certs:ro
+    networks:
+      - edge
+    depends_on:
+      - app
+      - partykit
+    healthcheck:
+      # `nginx -t` rather than a request: port 80 only redirects, and probing
+      # 443 needs --no-check-certificate against the self-signed default, which
+      # would then pass even with a certificate nginx cannot actually serve.
+      test: ['CMD', 'nginx', '-t']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── The app: nginx serving the Vite build ────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: deploy/app.Dockerfile
+      args:
+        # VITE_ values are inlined at BUILD time, so they are build args and a
+        # change means a rebuild. Only client-safe values may travel this way —
+        # see deploy/app.Dockerfile and scripts/check-public-env.mjs.
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+        VITE_PARTYKIT_HOST: ${VITE_PARTYKIT_HOST:-}
+    image: viewpoint-arena-app:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    logging: *logging
+    # No ports. Reached only through nginx-proxy.
+    networks:
+      - edge
+      # Attached so the app CAN reach capture-service and postgres when an API
+      # runtime exists. `internal: true` means that reachability never extends
+      # to the host.
+      - backend
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1/nginx-health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Realtime room server ─────────────────────────────────────────────────
+  partykit:
+    build:
+      context: .
+      dockerfile: deploy/partykit.Dockerfile
+    image: viewpoint-arena-partykit:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      # LOOPBACK ONLY by default. Browsers reach PartyKit through
+      # nginx-proxy:8443 (wss://), which is what an HTTPS deployment needs —
+      # a page served over TLS cannot open ws:// to a published 1999.
+      #
+      # Set PARTYKIT_BIND=0.0.0.0 for the plain-ws LAN URL that
+      # docs/local-capture-plan.md prints, accepting that the room server is
+      # then open to the whole network with no authentication of its own.
+      - '${PARTYKIT_BIND:-127.0.0.1}:${PARTYKIT_PORT:-1999}:1999'
+    volumes:
+      - partykit-state:/app/.partykit
+    networks:
+      - edge
+    healthcheck:
+      # A TCP probe. The dev server's routes are `/<room>` and a bare GET / is
+      # not a 200, so an HTTP probe would report a healthy server as down.
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('net').connect(1999,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Local meeting capture ────────────────────────────────────────────────
+  #
+  # NO PORTS. See the block comment at the top of this file: this service
+  # accepts meeting recordings and must not be reachable from the host or the
+  # internet. Read that before adding a `ports:` entry here.
+  capture-service:
+    build:
+      context: ./capture-service
+    image: viewpoint-arena-capture-service:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - backend
+      - models
+    environment:
+      # The secret install.sh generated. Empty means authentication is off,
+      # which is only acceptable because this container has no published port —
+      # and install.sh never leaves it empty.
+      CAPTURE_SHARED_SECRET: ${CAPTURE_SHARED_SECRET:-}
+      CAPTURE_OLLAMA_BASE_URL: ${CAPTURE_OLLAMA_BASE_URL:-http://ollama:11434}
+      CAPTURE_OLLAMA_MODEL: ${CAPTURE_OLLAMA_MODEL:-deepseek-r1:7b}
+      CAPTURE_WHISPER_MODEL: ${CAPTURE_WHISPER_MODEL:-base.en}
+      CAPTURE_WHISPER_DEVICE: ${CAPTURE_WHISPER_DEVICE:-cpu}
+      CAPTURE_WHISPER_COMPUTE_TYPE: ${CAPTURE_WHISPER_COMPUTE_TYPE:-int8}
+      CAPTURE_WHISPER_LANGUAGE: ${CAPTURE_WHISPER_LANGUAGE:-}
+      CAPTURE_TIMEOUT_SECONDS: ${CAPTURE_TIMEOUT_SECONDS:-120}
+      CAPTURE_MAX_UPLOAD_BYTES: ${CAPTURE_MAX_UPLOAD_BYTES:-209715200}
+      CAPTURE_HOST: 0.0.0.0
+      CAPTURE_PORT: '8080'
+    volumes:
+      # The Whisper model download (~150 MB for base.en) survives a rebuild, and
+      # is what an air-gapped install pre-seeds on a connected machine.
+      - whisper-models:/home/capture/.cache/huggingface
+    # No depends_on: ollama and whisper are profile-gated, and depending on a
+    # service whose profile is inactive is an error rather than a no-op.
+    # Ordering does not matter here anyway — /health performs no I/O, and a
+    # /capture request that arrives before Ollama is up fails with
+    # capture_upstream_unreachable, which the client already handles.
+    deploy:
+      resources:
+        limits:
+          # docs/local-capture-plan.md §"Open questions": resource ceilings so a
+          # runaway model cannot take the host down. Transcription is roughly
+          # real-time on CPU, so this bounds one meeting without starving the
+          # box; raise it on a dedicated machine.
+          cpus: '${CAPTURE_CPUS:-4}'
+          memory: ${CAPTURE_MEMORY:-6g}
+
+  # ── Standalone transcription ─────────────────────────────────────────────
+  #
+  # The same image as capture-service, because that IS the transcription server:
+  # capture_service/transcribe.py wraps faster-whisper and POST /transcribe is
+  # already the "whisper only, no LLM call" endpoint
+  # (capture-service/README.md §3).
+  #
+  # It is NOT started by default, and this is worth being precise about rather
+  # than shipping a container that looks used: capture-service transcribes
+  # IN-PROCESS today. This service exists so an operator can give transcription
+  # its own CPU/GPU budget and scale it separately from extraction, and it is
+  # the endpoint T4.7's streaming path is written against. Point a second
+  # capture-service at it by setting CAPTURE_OLLAMA_BASE_URL per instance and
+  # scaling: `docker compose --profile whisper up -d --scale whisper=2`.
+  whisper:
+    profiles:
+      - whisper
+    build:
+      context: ./capture-service
+    image: viewpoint-arena-capture-service:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - backend
+      - models
+    environment:
+      CAPTURE_SHARED_SECRET: ${CAPTURE_SHARED_SECRET:-}
+      CAPTURE_WHISPER_MODEL: ${CAPTURE_WHISPER_MODEL:-base.en}
+      CAPTURE_WHISPER_DEVICE: ${CAPTURE_WHISPER_DEVICE:-cpu}
+      CAPTURE_WHISPER_COMPUTE_TYPE: ${CAPTURE_WHISPER_COMPUTE_TYPE:-int8}
+      CAPTURE_WHISPER_LANGUAGE: ${CAPTURE_WHISPER_LANGUAGE:-}
+      CAPTURE_MAX_UPLOAD_BYTES: ${CAPTURE_MAX_UPLOAD_BYTES:-209715200}
+      CAPTURE_HOST: 0.0.0.0
+      CAPTURE_PORT: '8080'
+    volumes:
+      - whisper-models:/home/capture/.cache/huggingface
+    deploy:
+      resources:
+        limits:
+          cpus: '${WHISPER_CPUS:-4}'
+          memory: ${WHISPER_MEMORY:-6g}
+
+  # ── Local LLM ────────────────────────────────────────────────────────────
+  ollama:
+    profiles:
+      - capture-local
+    image: ollama/ollama:${OLLAMA_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      # LOOPBACK ONLY. Ollama has NO authentication whatsoever: publishing it on
+      # a network interface hands anyone on that network a free LLM and the
+      # ability to read every model you pulled. capture-service reaches it as
+      # `http://ollama:11434` over the compose network and does not need this
+      # mapping at all — it exists so an operator can run `ollama pull` and
+      # `ollama list` from the host.
+      - '127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434'
+    environment:
+      # 0.0.0.0 INSIDE the container, so the compose network can reach it. Not
+      # the same as being published — see the ports comment above.
+      OLLAMA_HOST: 0.0.0.0
+      # Empty means Ollama sends no Access-Control-Allow-Origin, which blocks
+      # browser requests. That is the correct default: capture.provider 'local'
+      # reaches Ollama through capture-service, never from a browser.
+      #
+      # ONLY capture.provider 'ollamaDirect' needs this set, because in that mode
+      # the browser talks to Ollama itself. Set it to the app's exact origin —
+      #   OLLAMA_ORIGINS=https://arena.internal.acme.com
+      # — and publish the port on a real interface. Never set it to `*`: that is
+      # an unauthenticated LLM open to any website any employee visits.
+      OLLAMA_ORIGINS: ${OLLAMA_ORIGINS:-}
+      # Keep the model resident between requests. A 7B model cold-loads in
+      # seconds and the extraction timeout assumes it is already warm.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    volumes:
+      # The pulled model (~4.7 GB for deepseek-r1:7b). This volume is the
+      # air-gapped install's payload: fill it on a connected machine, move it.
+      - ollama-models:/root/.ollama
+    networks:
+      - models
+    deploy:
+      resources:
+        limits:
+          memory: ${OLLAMA_MEMORY:-10g}
+    healthcheck:
+      # `ollama list` talks to the local server, so it fails while the runtime is
+      # still starting and succeeds once the API answers. The image has no curl
+      # or wget, and no built-in /health route.
+      test: ['CMD-SHELL', 'ollama list >/dev/null 2>&1 || exit 1']
+      interval: 60s
+      timeout: 15s
+      retries: 5
+      # A cold start loads the runtime and may restore a multi-GB model.
+      start_period: 60s
+
+  # ── Database ─────────────────────────────────────────────────────────────
+  #
+  # Plain postgres:16 — the lighter of the two variants
+  # docs/plan/06-deployment-and-installation.md §2 offers. Read the KNOWN GAP
+  # comment at the top of this file before pointing VITE_SUPABASE_URL at it:
+  # supabase-js needs a PostgREST/GoTrue gateway in front of Postgres, so this
+  # container holds the schema and the data but is not by itself a Supabase.
+  postgres:
+    image: postgres:${POSTGRES_IMAGE_TAG:-16-alpine}
+    restart: unless-stopped
+    logging: *logging
+    # No ports. `docker compose exec postgres psql -U viewpoint` is how an
+    # operator reaches it; publishing 5432 would put the review tracker on the
+    # network for a password guess.
+    networks:
+      - backend
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-viewpoint}
+      POSTGRES_USER: ${POSTGRES_USER:-viewpoint}
+      # Generated by install.sh. Never a literal here: a default database
+      # password in a public compose file is a default database password.
+      #
+      # `${VAR:-}` rather than `${VAR:?}`, so this file can be validated
+      # (`docker compose config`) before install.sh has written anything. An
+      # empty value is still a hard failure, just a legible one at the right
+      # moment: the postgres image refuses to initialise without a password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # NOT MOUNTED INTO /docker-entrypoint-initdb.d, and that is deliberate.
+      #
+      # docs/supabase-schema.sql ends with a DO block that enables Supabase
+      # Realtime:
+      #
+      #     alter publication supabase_realtime add table review_curations;
+      #   exception when duplicate_object then null;
+      #
+      # On a real Supabase image that is correct. On plain postgres:16 the
+      # publication does not exist, so the statement raises `undefined_object` —
+      # which that handler does NOT catch — and the entrypoint aborts. The
+      # container would exit during initialisation with a half-applied schema and
+      # no obvious cause, on every first boot, for anyone using the lighter
+      # variant this file offers.
+      #
+      # install.sh step 7 applies it instead, with psql's ON_ERROR_STOP off, so
+      # the one Supabase-only statement fails harmlessly here and succeeds on a
+      # Supabase image:
+      #
+      #     docker compose exec -T postgres \
+      #       psql -v ON_ERROR_STOP=0 -U viewpoint -d viewpoint \
+      #       < docs/supabase-schema.sql
+      #
+      # Re-run that after an upgrade; see 06-deployment-and-installation.md §4.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-viewpoint} -d ${POSTGRES_DB:-viewpoint}']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Optional workflow engine (T4.8) ──────────────────────────────────────
+  n8n:
+    profiles:
+      - n8n
+    image: n8nio/n8n:${N8N_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      # LOOPBACK ONLY. n8n's editor runs arbitrary workflows, which is a much
+      # larger prize than anything else in this stack. Reach it over an SSH
+      # tunnel (`ssh -L 5678:127.0.0.1:5678 <host>`) or put it behind
+      # nginx-proxy with authentication in front.
+      - '${N8N_BIND:-127.0.0.1}:${N8N_PORT:-5678}:5678'
+    environment:
+      N8N_HOST: ${PUBLIC_HOSTNAME:-localhost}
+      N8N_PORT: '5678'
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-https}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-}
+      # Encrypts n8n's own stored credentials. Generated by install.sh; losing
+      # it makes every credential n8n already holds unreadable.
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
+      # docs/plan/05-observability-and-metrics.md §5: no outbound telemetry by
+      # default. An enterprise adopter's security review looks for exactly this.
+      N8N_DIAGNOSTICS_ENABLED: 'false'
+      DO_NOT_TRACK: '1'
+    volumes:
+      - n8n-data:/home/node/.n8n
+    networks:
+      - edge
+      # `models`, not `backend`: n8n needs outbound internet for its nodes, and
+      # `backend` is internal. This is also what lets a workflow call
+      # capture-service by name.
+      - models
+    deploy:
+      resources:
+        limits:
+          memory: ${N8N_MEMORY:-1g}
