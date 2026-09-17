@@ -8,19 +8,20 @@
 > The original version of this file described setting up the Qwen execution
 > backend. That is done — see `delegation/README.md`.
 
-## 1. Do you hold redistribution rights to the branded 3D models? (T0.1)
+## 1. Branded 3D models (T0.1) — DECIDED 2026-09-17
 
 The repo ships `.glb` files named after real commercial products
-(Sennheiser, Santa Cruz). **This is the last thing blocking a public push.**
+(Sennheiser, Santa Cruz).
 
-- If **no** or **unsure** — the default applies: replace them with an openly
-  licensed sample and move the originals to a git-ignored `assets/samples/`.
-  Nothing further is needed from you; say the word and it proceeds.
-- If **yes**, and you can point at the licence that permits redistribution,
-  they can stay.
+**Decision:** keep them for now. At the public release, replace them with a
+simple cube and remove the originals.
 
-This is the one question only you can answer, which is why it was never
-delegated.
+Caveat recorded at decision time: the GitHub repo is *already* public and both
+models are on `main` there, so "at release" means the release announcement,
+not the moment the repo becomes visible. A swap in a new commit leaves the
+files in git history; removing them fully needs a history rewrite
+(`git filter-repo --path-glob '*.glb' --invert-paths`), as was done for commit
+attribution on 2026-09-17.
 
 ## 2. Enforcement contact for the Code of Conduct
 

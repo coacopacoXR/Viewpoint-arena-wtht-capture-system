@@ -21,7 +21,10 @@ Each ticket: **Why / Files / Interface (where relevant) / Acceptance criteria
   filename, move branded originals to a git-ignored `assets/samples/`. Only
   keep the branded assets in the public repo if the user has explicitly
   confirmed redistribution rights before this ticket runs.
-- **Depends on**: nothing. Do this first, in parallel with everything else.
+- **Decision (2026-09-17)**: deferred to release. Keep the branded models until
+  then; at release swap them for a plain cube model and remove the originals
+  from git history. See `NEXT-STEPS.md` §1.
+- **Depends on**: the release date.
 
 ### T0.2 — Repo hygiene housekeeping
 - **Files**: `.gitignore` (add `Videos Post linkedin/`).

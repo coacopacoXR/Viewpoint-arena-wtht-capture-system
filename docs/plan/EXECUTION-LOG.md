@@ -234,8 +234,9 @@ typecheck, check:env, build and e2e all green — ALL RUN LOCALLY. No CI run has
 ever executed.
 
 ### Not started
-- **T0.1 (asset swap)** — last Phase 0 ticket. Needs the user's call on
-  redistribution rights, or an openly-licensed replacement model chosen.
+- **T0.1 (asset swap)** — last Phase 0 ticket. User decided 2026-09-17: keep
+  the branded models for now; at public release replace them with a cube and
+  strip the originals from history. See `NEXT-STEPS.md` §1.
 - T4.4 (LocalCaptureProvider frontend), T4.7 (live streaming), T4.8 (n8n),
   T5.3 (PLM deep link), Phase 6 (docs and polish).
 
