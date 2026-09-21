@@ -95,6 +95,8 @@ describe('TeamcenterPLMAdapter', () => {
       auth: { sessionRef: 'tc-test-session' },
       missingRef: { id: 'nonexistent' },
       existingRef: { id: 'tc-doc-1', workspaceId: 'tc-ws-1', elementId: 'tc-elem-1' },
+      launchSource: 'teamcenter',
+      launchDocId: 'tc-doc-1',
     };
   });
 

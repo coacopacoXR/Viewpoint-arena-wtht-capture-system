@@ -6,6 +6,7 @@ import type {
 } from './types.ts';
 import type { HealthCheckResult } from '../../health/types.ts';
 import { HEALTH_DETAILS } from '../../health/details.ts';
+import { isGenericPlmId } from './launchParams.ts';
 
 // In-memory catalogue the mock uses to respond to lookups. Kept small and
 // deterministic so contract tests can assert exact shapes.
@@ -83,10 +84,14 @@ export class MockPLMAdapter implements PLMAdapter {
   ): Promise<{ roomHint: string; doc: PLMDocumentRef } | null> {
     if (query.plmSource !== 'mock') return null;
     const docId = query.plmDoc;
-    if (!docId) return null;
+    // Shape check before the catalogue lookup, matching the real adapters: a
+    // caller must not be able to tell "rejected as malformed" from "not in the
+    // catalogue", and the id is never echoed unless it passed.
+    if (!docId || !isGenericPlmId(docId)) return null;
     const doc = MOCK_DOCS.find((d) => d.id === docId);
     if (!doc) return null;
     return {
+      // A label only, never a room id — see PLMAdapter.resolveLaunchContext.
       roomHint: `mock-room-${doc.id}`,
       doc: { id: doc.id, workspaceId: doc.workspaceId },
     };

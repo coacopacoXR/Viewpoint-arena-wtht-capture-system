@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
   ChevronLeft, Camera, MapPin, ListOrdered, Box, Trash2,
@@ -21,8 +21,14 @@ import type { ModelType } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { getIdentity } from '../lib/identity';
-import OnshapeBrowser from '../components/UI/OnshapeBrowser';
+import OnshapeBrowser, { type OnshapeLaunchDocument } from '../components/UI/OnshapeBrowser';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
+import {
+  PLM_SOURCE_LABELS,
+  buildLaunchSearch,
+  plmReferenceUrl,
+  type PLMLaunch,
+} from '../lib/connectors/plm/launchParams';
 
 type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda';
 
@@ -375,8 +381,24 @@ const PRESET_MODELS: { type: ModelType; label: string; subtitle: string }[] = [
   { type: 'synth',      label: 'Synth',      subtitle: 'Procedural placeholder' },
 ];
 
+// ─── PLM launch (T5.3) ───────────────────────────────────────────────────────
+
+// The reference URL is built by lib/connectors/plm/launchParams.ts
+// (plmReferenceUrl) out of ids that module already validated — see the note
+// there for why Teamcenter gets a reference with no link.
+
+const LAUNCH_NOTES: Record<'teamcenter' | 'mock', string> = {
+  // api/teamcenter/export does not exist yet, so TeamcenterPLMAdapter's
+  // exportGeometry throws not-implemented. Said plainly rather than faked.
+  teamcenter:
+    'Geometry import from Teamcenter is not available yet. The document is recorded as a reference below — export it from Teamcenter and upload the file here to review it in 3D.',
+  mock:
+    'This review was opened from the mock PLM connector, which has no geometry to import. The document is recorded as a reference below — upload a file to review it in 3D.',
+};
+
 const AssetTab: React.FC = () => {
   const draft = useReviewSetupStore((s) => s.draft)!;
+  const { reviewId } = useParams<{ reviewId: string }>();
   const setModelType = useReviewSetupStore((s) => s.setModelType);
   const setImportedFile = useReviewSetupStore((s) => s.setImportedFile);
   const addReference = useReviewSetupStore((s) => s.addReference);
@@ -388,6 +410,50 @@ const AssetTab: React.FC = () => {
   const [refName, setRefName] = useState('');
   const [refUrl, setRefUrl] = useState('');
   const [showOnshapeBrowser, setShowOnshapeBrowser] = useState(false);
+
+  // PLM deep-link launch: /launch resolves the link and hands the validated
+  // document over in router state.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const plmLaunch = (location.state as { plmLaunch?: PLMLaunch } | null)?.plmLaunch;
+  const [launchNote, setLaunchNote] = useState<string | null>(null);
+  const [launchDocument, setLaunchDocument] = useState<OnshapeLaunchDocument | undefined>(undefined);
+  const [launchElementId, setLaunchElementId] = useState<string | undefined>(undefined);
+  const [launchReturnTo, setLaunchReturnTo] = useState<string | undefined>(undefined);
+  const handledLaunchRef = useRef(false);
+
+  useEffect(() => {
+    if (!plmLaunch || handledLaunchRef.current) return;
+    // The draft store is persisted, so on first render `draft` can still be the
+    // PREVIOUS review's draft; the bootstrap effect replaces it with a fresh one
+    // for this id a moment later. Handling the launch before that would write
+    // the reference into the old draft and lose it. A launch always mints a new
+    // random id, so a matching draft can only be the fresh one.
+    if (draft.reviewId !== reviewId) return;
+    // Set synchronously: StrictMode mounts this component twice, and the import
+    // below must not run twice for one launch.
+    handledLaunchRef.current = true;
+    const { source, doc } = plmLaunch;
+    // Clear the router state straight away, so a reload of this page cannot
+    // re-trigger the launch (and re-import the same model).
+    navigate(location.pathname, { replace: true, state: null });
+
+    addReference({
+      name: `${PLM_SOURCE_LABELS[source]} document`,
+      url: plmReferenceUrl(source, doc),
+    });
+
+    if (source === 'onshape') {
+      // The OAuth round-trip drops router state, so sign-in must return to
+      // /launch with the same validated ids — never to this page.
+      setLaunchReturnTo(`/launch${buildLaunchSearch(source, doc)}`);
+      setLaunchDocument({ id: doc.id, workspaceId: doc.workspaceId });
+      setLaunchElementId(doc.elementId);
+      setShowOnshapeBrowser(true);
+      return;
+    }
+    setLaunchNote(LAUNCH_NOTES[source]);
+  }, [plmLaunch, navigate, location.pathname, addReference, draft.reviewId, reviewId]);
 
   const handleFile = async (file: File) => {
     const buf = await file.arrayBuffer();
@@ -469,6 +535,12 @@ const AssetTab: React.FC = () => {
               <span className="text-xs font-bold">Import from Onshape</span>
             </button>
           )}
+          {launchNote && (
+            <div className="mt-2 flex gap-2 rounded border border-amber-500/30 bg-amber-500/5 p-2.5">
+              <AlertTriangle size={13} className="text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-amber-100/90 leading-relaxed">{launchNote}</p>
+            </div>
+          )}
         </div>
       </Section>
 
@@ -521,6 +593,9 @@ const AssetTab: React.FC = () => {
         <OnshapeBrowser
           onClose={() => setShowOnshapeBrowser(false)}
           onImported={(file) => { handleFile(file); }}
+          initialDocument={launchDocument}
+          initialElementId={launchElementId}
+          signInReturnTo={launchReturnTo}
         />
       )}
     </div>

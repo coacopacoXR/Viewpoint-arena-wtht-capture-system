@@ -17,6 +17,7 @@ import type {
 import type { TrackerItem } from '../../supabase.ts';
 import type { HealthCheckResult } from '../../health/types.ts';
 import { HEALTH_DETAILS } from '../../health/details.ts';
+import { isGenericPlmId } from './launchParams.ts';
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -164,14 +165,20 @@ export class TeamcenterPLMAdapter implements PLMAdapter {
   ): Promise<{ roomHint: string; doc: PLMDocumentRef } | null> {
     if (query.plmSource !== 'teamcenter') return null;
     const docId = query.plmDoc;
-    if (!docId) return null;
+    // Re-validate here even though lib/connectors/plm/launchParams.ts already
+    // did: a corp calling this adapter straight from its own launch handler
+    // must not depend on that module having run first. A Teamcenter UID is
+    // opaque, but it may not contain a path or query separator — see
+    // isGenericPlmId.
+    if (!docId || !isGenericPlmId(docId)) return null;
+    const workspaceId = query.plmWorkspace;
+    if (workspaceId && !isGenericPlmId(workspaceId)) return null;
+    const elementId = query.plmElement;
+    if (elementId && !isGenericPlmId(elementId)) return null;
     return {
+      // A label only, never a room id — see PLMAdapter.resolveLaunchContext.
       roomHint: `tc-${docId}`,
-      doc: {
-        id: docId,
-        workspaceId: query.plmWorkspace,
-        elementId: query.plmElement,
-      },
+      doc: { id: docId, workspaceId, elementId },
     };
   }
 

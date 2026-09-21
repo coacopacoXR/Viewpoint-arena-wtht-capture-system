@@ -6,6 +6,7 @@
 // GET /api/onshape/callback?code=<authcode>&state=<token>
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { safeReturnPath } from '../_lib/safeReturnPath.js';
 
 const ONSHAPE_TOKEN = 'https://oauth.onshape.com/oauth/token';
 
@@ -115,6 +116,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Set-Cookie', setCookies);
 
   // Send them back to wherever they started. Default to root if no return URL.
-  const safeReturn = parsed.returnTo && parsed.returnTo.startsWith('/') ? parsed.returnTo : '/';
-  res.redirect(302, safeReturn);
+  //
+  // safeReturnPath, NOT `parsed.returnTo.startsWith('/')`: both `//evil.com`
+  // and `/\evil.com` start with a slash, and browsers resolve either as another
+  // host — an open redirect that carries a freshly-minted Onshape session with
+  // it. auth-start validates the same value on the way in; this is the check
+  // that has to hold even for a cookie written by an older build.
+  res.redirect(302, safeReturnPath(parsed.returnTo));
 }

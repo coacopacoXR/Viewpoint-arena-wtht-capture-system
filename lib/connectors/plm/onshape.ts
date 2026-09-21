@@ -8,7 +8,6 @@
 // any server-side caller) creates the context via createOnshapeAuthContext()
 // after extracting the access token through the existing cookie-based auth.
 
-import { randomUUID } from 'node:crypto';
 import type {
   PLMAdapter,
   PLMAuthContext,
@@ -17,6 +16,7 @@ import type {
 } from './types.ts';
 import type { HealthCheckResult } from '../../health/types.ts';
 import { HEALTH_DETAILS } from '../../health/details.ts';
+import { isOnshapeId } from './launchParams.ts';
 
 const ONSHAPE_API = 'https://cad.onshape.com';
 
@@ -46,7 +46,12 @@ function purgeExpired(): void {
  */
 export function createOnshapeAuthContext(accessToken: string): PLMAuthContext {
   purgeExpired();
-  const id = randomUUID();
+  // globalThis.crypto, not node:crypto. This module is imported by the
+  // browser-side launch page (pages/LaunchPage.tsx) as well as by server code,
+  // and a `node:` specifier would land in the client bundle. randomUUID() is
+  // present in every runtime this repo targets (Node 19+, all evergreen
+  // browsers), and the rest of the app already calls it unguarded.
+  const id = globalThis.crypto.randomUUID();
   sessions.set(id, { accessToken, createdAt: Date.now() });
   return { sessionRef: id };
 }
@@ -271,14 +276,21 @@ export class OnshapePLMAdapter implements PLMAdapter {
   ): Promise<{ roomHint: string; doc: PLMDocumentRef } | null> {
     if (query.plmSource !== 'onshape') return null;
     const docId = query.plmDoc;
-    if (!docId) return null;
+    // Re-validate here even though lib/connectors/plm/launchParams.ts already
+    // did: a corp wiring this adapter into its own launch handler must not
+    // depend on that module having run first. An id that is not 24 hex chars
+    // is rejected outright — never echoed back, never used to build a URL.
+    if (!docId || !isOnshapeId(docId)) return null;
+    const workspaceId = query.plmWorkspace;
+    if (workspaceId && !isOnshapeId(workspaceId)) return null;
+    const elementId = query.plmElement;
+    if (elementId && !isOnshapeId(elementId)) return null;
     return {
+      // A label only. See PLMAdapter.resolveLaunchContext: the caller must NOT
+      // use this as a room id, because it is derived from a document id that
+      // everyone with access to the document can see.
       roomHint: `onshape-${docId}`,
-      doc: {
-        id: docId,
-        workspaceId: query.plmWorkspace,
-        elementId: query.plmElement,
-      },
+      doc: { id: docId, workspaceId, elementId },
     };
   }
 

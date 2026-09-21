@@ -7,6 +7,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { randomBytes } from 'node:crypto';
+import { safeReturnPath } from '../_lib/safeReturnPath.js';
 
 const ONSHAPE_AUTHORIZE = 'https://oauth.onshape.com/oauth/authorize';
 const SCOPES = 'OAuth2Read OAuth2ReadPII';
@@ -26,7 +27,10 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const state = randomBytes(24).toString('hex');
-  const returnTo = typeof req.query.return === 'string' ? req.query.return : '/';
+  // Validated on the way in, not only on the way out. This value is packed into
+  // the state cookie and echoed by the callback as a redirect target, so a
+  // hostile `return` (e.g. //evil.com) must never be stored in the first place.
+  const returnTo = safeReturnPath(req.query.return);
   const redirectUri = `${originOf(req)}/api/onshape/callback`;
 
   // Pack state + return URL into a single HTTP-only cookie so the callback

@@ -9,6 +9,8 @@
 //   - return shapes match the interface types
 //   - missing documents produce errors
 //   - no adapter method accepts or returns a raw credential
+//   - resolveLaunchContext validates a launch link's ids instead of echoing
+//     them, so a hand-edited URL cannot inject a path or a query parameter
 
 import { describe, it, expect } from 'vitest';
 import type {
@@ -71,6 +73,10 @@ export interface PLMContractSetup {
   missingRef: PLMDocumentRef;
   /** A document ref known to exist, for happy-path tests. */
   existingRef: PLMDocumentRef;
+  /** The `plmSource` value this adapter answers to. */
+  launchSource: string;
+  /** A document id this adapter resolves for `launchSource` — the positive control. */
+  launchDocId: string;
 }
 
 export function runPLMContractTests(
@@ -166,14 +172,88 @@ export function runPLMContractTests(
       // Even when called with query params that look credential-like, the
       // adapter must not echo them back or leak them in the result.
       const result = await ctx.adapter.resolveLaunchContext({
-        plmSource: 'mock',
-        plmDoc: 'mock-doc-1',
+        plmSource: ctx.launchSource,
+        plmDoc: ctx.launchDocId,
         token: 'should-not-appear',
         password: 'should-not-appear',
       });
       if (result) {
         assertNoCredentialFields(result, 'resolveLaunchContext.result');
         assertNoCredentialValues(result, 'resolveLaunchContext.result');
+      }
+      expect(JSON.stringify(result ?? null)).not.toContain('should-not-appear');
+    });
+
+    it('resolveLaunchContext resolves a well-formed launch link', async () => {
+      ctx ??= await setup();
+      // Positive control for the injection test below: without it, an adapter
+      // that returned null for everything would pass that test vacuously.
+      const result = await ctx.adapter.resolveLaunchContext({
+        plmSource: ctx.launchSource,
+        plmDoc: ctx.launchDocId,
+      });
+      expect(result).not.toBeNull();
+      expect(result?.doc.id).toBe(ctx.launchDocId);
+      expect(typeof result?.roomHint).toBe('string');
+    });
+
+    it('resolveLaunchContext never returns a path-traversal or URL-injection id', async () => {
+      ctx ??= await setup();
+      // A launch URL is attacker-editable — anyone can hand-edit one, and the
+      // link template lives in a customer's PLM console. An id that could break
+      // out of a path or inject a query parameter must never come back out of
+      // the adapter, because callers build Onshape URLs and reference links
+      // from doc.id. Every source is probed, not just this adapter's own: an
+      // adapter must reject a link addressed to a different PLM outright.
+      const injected = [
+        '../../x',
+        'a?b=c',
+        'a/b',
+        '%2F',
+        '..%2F..%2Fetc%2Fpasswd',
+        'x#fragment',
+        'a\\b',
+        'a b',
+        'https://evil.example/x',
+        'a'.repeat(200),
+      ];
+      for (const source of ['mock', 'onshape', 'teamcenter']) {
+        for (const id of injected) {
+          const result = await ctx.adapter.resolveLaunchContext({
+            plmSource: source,
+            plmDoc: id,
+          });
+          if (result === null) continue;
+          expect(result.doc.id).not.toBe(id);
+          expect(result.doc.id).not.toContain(id);
+          // Whatever survives must be a plain opaque id: no separator, no
+          // percent-escape, no whitespace, no scheme.
+          expect(result.doc.id).toMatch(/^[A-Za-z0-9_.-]{1,128}$/);
+          expect(result.roomHint).not.toContain(id);
+          if (result.doc.workspaceId !== undefined) {
+            expect(result.doc.workspaceId).toMatch(/^[A-Za-z0-9_.-]{1,128}$/);
+          }
+          if (result.doc.elementId !== undefined) {
+            expect(result.doc.elementId).toMatch(/^[A-Za-z0-9_.-]{1,128}$/);
+          }
+        }
+      }
+    });
+
+    it('resolveLaunchContext rejects an injected workspace or element id', async () => {
+      ctx ??= await setup();
+      // The document id is the obvious target, so it is the one a caller
+      // validates first. The other two end up in the same URLs.
+      for (const key of ['plmWorkspace', 'plmElement'] as const) {
+        const result = await ctx.adapter.resolveLaunchContext({
+          plmSource: ctx.launchSource,
+          plmDoc: ctx.launchDocId,
+          [key]: '../../etc/passwd',
+        });
+        if (result === null) continue;
+        const resolved = key === 'plmWorkspace' ? result.doc.workspaceId : result.doc.elementId;
+        expect(resolved).not.toBe('../../etc/passwd');
+        expect(resolved ?? '').toMatch(/^[A-Za-z0-9_.-]{0,128}$/);
       }
     });
   });
@@ -189,5 +269,7 @@ describe('PLMAdapter contract suite', () => {
     auth: { sessionRef: 'mock-session' },
     missingRef: { id: 'nonexistent-doc-xyz' },
     existingRef: { id: 'mock-doc-1', workspaceId: 'mock-ws-1' },
+    launchSource: 'mock',
+    launchDocId: 'mock-doc-1',
   }));
 });

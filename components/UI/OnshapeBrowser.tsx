@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import {
   X, Search, Loader2, Box, Layers, ChevronLeft, LogOut, ExternalLink,
@@ -9,14 +9,44 @@ import {
   type OnshapeUser, type OnshapeDocument, type OnshapeElement, type OnshapeDocFilter,
 } from '../../lib/onshape';
 
+/** The document a PLM launch link points at (T5.3). Ids are already validated. */
+export interface OnshapeLaunchDocument {
+  id: string;
+  workspaceId?: string;
+}
+
 interface Props {
   onClose: () => void;
   onImported: (file: File) => void;
+  /**
+   * Deep-link launch: open THIS document instead of the document list. Omit for
+   * the normal "Import from Onshape" flow, which is unchanged.
+   */
+  initialDocument?: OnshapeLaunchDocument;
+  /**
+   * With initialDocument: import this element straight away. The element's type
+   * (ASSEMBLY vs PARTSTUDIO) is looked up rather than trusted from the link; if
+   * the id is not in the document, the element picker is shown instead.
+   */
+  initialElementId?: string;
+  /**
+   * Where the OAuth round-trip should return to. A launch passes /launch?...
+   * rather than the setup page, because router state does not survive the
+   * redirect. Omit to keep the current URL.
+   */
+  signInReturnTo?: string;
 }
 
-type Step = 'checking' | 'auth' | 'documents' | 'elements' | 'loading';
+type Step = 'checking' | 'auth' | 'documents' | 'elements' | 'loading' | 'launch';
 
-const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
+interface LaunchTarget {
+  doc: OnshapeLaunchDocument;
+  elementId?: string;
+}
+
+const OnshapeBrowser: React.FC<Props> = ({
+  onClose, onImported, initialDocument, initialElementId, signInReturnTo,
+}) => {
   const [user, setUser] = useState<OnshapeUser | null | undefined>(undefined);
   // Start in 'checking' so we don't flash the Connect CTA at users who are
   // already signed in. The auth-status effect will flip us to 'auth' or
@@ -31,6 +61,18 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
   const [allElementTypes, setAllElementTypes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loadingMsg, setLoadingMsg] = useState('');
+  // Explanation shown with the document list when a launch link could not be
+  // followed all the way (e.g. it named no workspace and the document is not in
+  // the recent list).
+  const [launchInfo, setLaunchInfo] = useState<string | null>(null);
+
+  // Captured once: the launch target belongs to this mount, and reading it from
+  // a ref keeps the mount effect's dependency array empty — which is what makes
+  // it run exactly once, as before.
+  const launchRef = useRef<LaunchTarget | null>(
+    initialDocument ? { doc: initialDocument, elementId: initialElementId } : null,
+  );
+  const launchStartedRef = useRef(false);
 
   // On mount: check auth status. Show the doc list if signed in, else sign-in CTA.
   useEffect(() => {
@@ -39,7 +81,12 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
       const me = await getCurrentOnshapeUser();
       if (cancelled) return;
       setUser(me);
-      setStep(me ? 'documents' : 'auth');
+      if (!me) { setStep('auth'); return; }
+      // A launch link already knows the document, so it skips the list. Not
+      // signed in still lands on 'auth' — the OAuth cookies are the whole
+      // authentication for a launch, and there is nothing to launch into
+      // without them.
+      setStep(launchRef.current ? 'launch' : 'documents');
     })();
     return () => { cancelled = true; };
   }, []);
@@ -76,8 +123,11 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
   const [loadingPhase, setLoadingPhase] = useState<'starting' | 'translating' | 'downloading'>('starting');
   const [loadingElapsed, setLoadingElapsed] = useState(0);
 
-  const importElement = async (el: OnshapeElement) => {
-    if (!selectedDoc?.defaultWorkspaceId) return;
+  // Import by explicit ids rather than from `selectedDoc`, so the launch path —
+  // which knows its document before any state has settled — can use it too.
+  const runImport = useCallback(async (
+    documentId: string, workspaceId: string, el: OnshapeElement,
+  ) => {
     setError(null);
     setStep('loading');
     setLoadingMsg(el.name);
@@ -85,7 +135,7 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
     setLoadingElapsed(0);
     try {
       const file = await importOnshapeModel(
-        selectedDoc.id, selectedDoc.defaultWorkspaceId, el.id, el.type,
+        documentId, workspaceId, el.id, el.type,
         (phase, elapsed) => { setLoadingPhase(phase); setLoadingElapsed(elapsed); },
       );
       onImported(file);
@@ -94,7 +144,77 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
       setError((err as Error).message);
       setStep('elements');
     }
+  }, [onImported, onClose]);
+
+  const importElement = (el: OnshapeElement) => {
+    if (!selectedDoc?.defaultWorkspaceId) return;
+    void runImport(selectedDoc.id, selectedDoc.defaultWorkspaceId, el);
   };
+
+  // Follow a launch link: resolve the workspace, list the document's elements,
+  // then either import the linked element or hand the user the picker.
+  const openLaunchedDocument = useCallback(async (target: LaunchTarget) => {
+    const documentId = target.doc.id;
+    let workspaceId = target.doc.workspaceId;
+    let documentName = 'Onshape document';
+
+    if (!workspaceId) {
+      // The link named no workspace. Take the document's default workspace from
+      // the same source the document list uses — /api/onshape/documents returns
+      // defaultWorkspaceId. There is no per-document lookup in lib/onshape.ts
+      // and inventing one is not this ticket's business.
+      const { items } = await listOnshapeDocuments();
+      const match = items.find((d) => d.id === documentId);
+      if (match) documentName = match.name;
+      workspaceId = match?.defaultWorkspaceId;
+      if (!workspaceId) {
+        setLaunchInfo(
+          'The launch link did not name a workspace and this document is not in your recent list. Pick it below to continue.',
+        );
+        setStep('documents');
+        return;
+      }
+    }
+
+    setSelectedDoc({
+      id: documentId,
+      name: documentName,
+      modifiedAt: '',
+      createdAt: '',
+      defaultWorkspaceId: workspaceId,
+    });
+    setElements(null);
+    setAllElementTypes([]);
+
+    const { items, allTypes } = await listOnshapeElements(documentId, workspaceId);
+    setElements(items);
+    setAllElementTypes(allTypes);
+
+    if (!target.elementId) {
+      setStep('elements');
+      return;
+    }
+
+    const element = items.find((e) => e.id === target.elementId);
+    if (!element) {
+      // The id in the link is not an importable element of this document (moved,
+      // deleted, or it is a drawing). Show the picker rather than guess.
+      setError('The element named in the launch link is not in this document. Pick one below.');
+      setStep('elements');
+      return;
+    }
+    // The element's type comes from the API, not from the link: importOnshapeModel
+    // picks the assembly or part-studio translation endpoint from it.
+    await runImport(documentId, workspaceId, element);
+  }, [runImport]);
+
+  useEffect(() => {
+    if (step !== 'launch' || launchStartedRef.current) return;
+    launchStartedRef.current = true;
+    const target = launchRef.current;
+    if (!target) { setStep('documents'); return; }
+    void openLaunchedDocument(target);
+  }, [step, openLaunchedDocument]);
 
   const handleSignOut = async () => {
     await signOutOnshape();
@@ -159,7 +279,7 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
                 Browse your Onshape documents and import any assembly or part studio as a curated review model. We only request read access — your data stays in Onshape.
               </p>
               <button
-                onClick={() => startOnshapeSignIn()}
+                onClick={() => startOnshapeSignIn(signInReturnTo)}
                 className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs uppercase tracking-wide transition-colors"
               >
                 Connect Onshape <ExternalLink size={12} />
@@ -167,6 +287,13 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
               <p className="text-[10px] text-white/40 mt-3">
                 You'll be redirected to Onshape to approve access.
               </p>
+            </div>
+          )}
+
+          {step === 'launch' && (
+            <div className="px-8 py-16 text-center">
+              <Loader2 size={22} className="mx-auto text-emerald-400 animate-spin" />
+              <div className="text-[12px] text-white/70 mt-3">Opening the linked document…</div>
             </div>
           )}
 
@@ -200,6 +327,11 @@ const OnshapeBrowser: React.FC<Props> = ({ onClose, onImported }) => {
                   ))}
                 </div>
               </div>
+              {launchInfo && (
+                <div className="px-4 py-2 border-b border-white/5 text-[11px] text-white/60 bg-white/[0.02] leading-relaxed">
+                  {launchInfo}
+                </div>
+              )}
               <div className="px-2 py-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                 {documents === null && (
                   <div className="col-span-full py-12 text-center text-white/40 text-[11px]">

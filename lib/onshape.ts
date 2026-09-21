@@ -81,8 +81,12 @@ export async function listOnshapeElements(
   documentId: string,
   workspaceId: string,
 ): Promise<{ items: OnshapeElement[]; allTypes: string[] }> {
+  // URLSearchParams, not interpolation: these ids come from a URL a PLM system
+  // (or a person) supplied, and a raw `&`, `#` or space in one of them would
+  // otherwise truncate the query or add a parameter the caller never asked for.
+  const params = new URLSearchParams({ d: documentId, w: workspaceId });
   const result = await api<{ items: OnshapeElement[]; allTypes?: string[] }>(
-    `/api/onshape/elements?d=${documentId}&w=${workspaceId}`,
+    `/api/onshape/elements?${params.toString()}`,
   );
   if ('error' in result) return { items: [], allTypes: [] };
   return { items: result.items, allTypes: result.allTypes ?? [] };
@@ -109,8 +113,11 @@ export async function importOnshapeModel(
 
   // 1) Kick off translation.
   onProgress?.('starting', elapsed());
+  const startParams = new URLSearchParams({
+    d: documentId, w: workspaceId, e: elementId, type,
+  });
   const startResp = await fetch(
-    `/api/onshape/translate?d=${documentId}&w=${workspaceId}&e=${elementId}&type=${type}`,
+    `/api/onshape/translate?${startParams.toString()}`,
     { credentials: 'include' },
   );
   if (!startResp.ok) {
@@ -141,7 +148,10 @@ export async function importOnshapeModel(
     await new Promise((r) => setTimeout(r, POLL_INTERVALS[pollIdx] ?? 5000));
     pollIdx++;
     onProgress?.('translating', elapsed());
-    const sResp = await fetch(`/api/onshape/translate-status?id=${translationId}`, { credentials: 'include' });
+    const sResp = await fetch(
+      `/api/onshape/translate-status?${new URLSearchParams({ id: translationId }).toString()}`,
+      { credentials: 'include' },
+    );
     if (!sResp.ok) {
       const text = await sResp.text();
       throw new Error(`Onshape status check failed: ${text.slice(0, 200)}`);
@@ -171,8 +181,9 @@ export async function importOnshapeModel(
 
   // 3) Download the GLB.
   onProgress?.('downloading', elapsed());
+  const dlParams = new URLSearchParams({ did: documentIdOut, dataId });
   const dlResp = await fetch(
-    `/api/onshape/translate-download?did=${documentIdOut}&dataId=${dataId}`,
+    `/api/onshape/translate-download?${dlParams.toString()}`,
     { credentials: 'include' },
   );
   if (!dlResp.ok) {
