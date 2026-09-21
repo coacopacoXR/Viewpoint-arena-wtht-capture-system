@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { useStore, getCurrentSceneTree } from '../../store';
 import { InsightType, SceneNode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
+import { useConnectorConfig } from '../../lib/config/ConfigContext';
 import { MockCaptureProvider } from '../../lib/connectors/capture/mock';
 import type { ConversationContext } from '../../lib/connectors/capture/mock';
 
@@ -84,6 +85,8 @@ const DialogueEngine: React.FC = () => {
     const objectStates = useStore(state => state.objectStates);
 
     const importedSceneTree = useStore(state => state.importedSceneTree);
+    const connectorConfig = useConnectorConfig();
+    const simulate = !connectorConfig.loading && connectorConfig.capture === 'mock';
 
     const lastSpeakTime = useRef<Record<string, number>>({});
     const messageBuffer = useRef<string[]>([]);
@@ -111,6 +114,12 @@ const DialogueEngine: React.FC = () => {
     };
 
     useFrame(() => {
+        // The simulation is the MOCK capture provider. With a real provider
+        // (local, openai, ...) its invented dialogue and cards would be mixed in
+        // with the real insights, indistinguishable in the tracker. Found in a
+        // live run: real cards from a recording sat between simulated ones.
+        // Nothing runs while the config is still loading, for the same reason.
+        if (!simulate) return;
         // Don't generate dialogue when paused, in privacy mode, or agents hidden
         if (!isPlaying || isPrivacyMode || hideAgents) return;
 
