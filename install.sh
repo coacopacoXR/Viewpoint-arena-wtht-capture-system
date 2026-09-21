@@ -511,7 +511,7 @@ collect_answers() {
       # The compose-internal name. It resolves on the `backend` network, which
       # is internal:true, so this URL is deliberately unreachable from outside.
       A_CAPTURE_SERVICE_URL="$(ask 'capture-service URL (as seen by the server)' 'http://capture-service:8080')"
-      A_OLLAMA_MODEL="$(ask 'Ollama model to pull and extract with' 'deepseek-r1:7b')"
+      A_OLLAMA_MODEL="$(ask 'Ollama model to pull and extract with' 'qwen2.5:7b')"
       A_WHISPER_MODEL="$(ask 'Whisper model' 'base.en')"
       ;;
     openai)
@@ -530,7 +530,7 @@ collect_answers() {
       # a guessed URL is how a design-review transcript ends up POSTed to
       # whatever is listening on somebody else's machine.
       A_OLLAMA_BROWSER_URL="$(ask 'Ollama base URL reachable FROM THE BROWSER (e.g. http://ollama.internal:11434)')"
-      A_CAPTURE_MODEL="$(ask 'Ollama model' 'deepseek-r1:7b')"
+      A_CAPTURE_MODEL="$(ask 'Ollama model' 'qwen2.5:7b')"
       say '  Note: this mode needs OLLAMA_ORIGINS set and the Ollama port published'
       say '  on a real interface — see the ollama service in docker-compose.yml.'
       ;;

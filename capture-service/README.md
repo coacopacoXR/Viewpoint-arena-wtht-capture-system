@@ -87,7 +87,7 @@ three requests into a meeting.
 | `CAPTURE_WHISPER_COMPUTE_TYPE` | `int8` | `default`, `auto`, `int8`, `int8_float16`, `float16`, `float32`. Use `float16` on a GPU. |
 | `CAPTURE_WHISPER_LANGUAGE` | *(empty)* | Language hint, e.g. `en` or `de`. Empty means auto-detect, which is slower and occasionally wrong on a mixed-language review. |
 | `CAPTURE_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | The Ollama **root** URL. Must have a scheme and host and **no path** — the service appends `/api/chat` itself. Must be reachable *from this service*, and must not contain a username or password. |
-| `CAPTURE_OLLAMA_MODEL` | `deepseek-r1:7b` | A model that is already pulled on that Ollama instance (`ollama list`). Alternates from the plan: `qwen2.5:7b-instruct`, `llama3.1:8b-instruct`. |
+| `CAPTURE_OLLAMA_MODEL` | `qwen2.5:7b` | A model that is already pulled on that Ollama instance (`ollama list`). Chosen over the plan's `deepseek-r1:7b` by a head-to-head on a real recording: qwen found all three insights with assignee and the correct due date in 3 of 3 runs in ~20 s; deepseek-r1 missed the assignee and due date every time, titled cards just "RISK"/"ACTION" in 2 of 3, and took ~44 s. |
 | `CAPTURE_TIMEOUT_SECONDS` | `120` | Per-request Ollama timeout. A 7B model on CPU takes 5–10s per extraction, and much longer while it cold-loads into RAM. |
 | `CAPTURE_MAX_UPLOAD_BYTES` | `209715200` (200 MiB) | Hard ceiling on one uploaded recording — about four hours of Opus/WebM, under two hours of 16-bit mono WAV. Enforced while streaming the body, so an oversized upload costs no inference. |
 | `CAPTURE_HOST` | `127.0.0.1` | Bind address for `python -m capture_service`. |
@@ -118,7 +118,7 @@ container healthcheck. Performs no I/O and never triggers a model load, so
   "service": "capture-service",
   "version": "0.1.0",
   "whisper": { "model": "base.en", "device": "cpu", "computeType": "int8", "loaded": false },
-  "llm": { "baseUrl": "http://127.0.0.1:11434", "model": "deepseek-r1:7b" },
+  "llm": { "baseUrl": "http://127.0.0.1:11434", "model": "qwen2.5:7b" },
   "limits": { "maxUploadBytes": 209715200, "maxTranscriptChars": 200000, "maxTranscriptChunks": 2000 }
 }
 ```
@@ -239,7 +239,7 @@ whole path, start to finish.
 ```bash
 # 1. Ollama, if you do not have it: https://ollama.com/download
 ollama serve &                 # already running if you installed the app
-ollama pull deepseek-r1:7b     # ~4.7 GB; the plan's default extraction model
+ollama pull qwen2.5:7b         # ~4.7 GB; the default extraction model
 ollama list                    # confirm it is there
 
 # 2. The service, with the transcription extra
@@ -249,7 +249,7 @@ pip install -r requirements-whisper.txt
 
 # 3. Point it at Ollama (the defaults already do, if Ollama is local)
 export CAPTURE_OLLAMA_BASE_URL="http://127.0.0.1:11434"
-export CAPTURE_OLLAMA_MODEL="deepseek-r1:7b"
+export CAPTURE_OLLAMA_MODEL="qwen2.5:7b"
 export CAPTURE_WHISPER_MODEL="base.en"     # small.en if you want better accuracy
 
 # 4. Start it — the first /capture request downloads the Whisper model

@@ -63,7 +63,7 @@ def test_health_reports_the_configuration(service: Service) -> None:
         },
         "llm": {
             "baseUrl": "http://127.0.0.1:11434",
-            "model": "deepseek-r1:7b",
+            "model": "qwen2.5:7b",
         },
         "limits": {
             "maxUploadBytes": 200 * 1024 * 1024,

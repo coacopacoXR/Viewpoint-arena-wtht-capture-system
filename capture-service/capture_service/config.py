@@ -30,7 +30,7 @@ Variables (all optional; the defaults are the documented local-install values):
     CAPTURE_OLLAMA_BASE_URL       Ollama ROOT url, no path — /api/chat is
                                   appended.  Default: http://127.0.0.1:11434
     CAPTURE_OLLAMA_MODEL          Model that must already be pulled on that
-                                  Ollama instance.  Default: deepseek-r1:7b
+                                  Ollama instance.  Default: qwen2.5:7b
     CAPTURE_TIMEOUT_SECONDS       Per-request Ollama timeout.  Default: 120
     CAPTURE_MAX_UPLOAD_BYTES      Hard ceiling on one uploaded recording.
                                   Default: 209715200 (200 MiB)
@@ -82,7 +82,7 @@ DEFAULT_WHISPER_MODEL = "base.en"
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 # The plan's default extraction model: solid output, and CPU-viable in a pinch.
-DEFAULT_OLLAMA_MODEL = "deepseek-r1:7b"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 
 # A 7B model on CPU takes 5–10s per extraction and much longer while it
 # cold-loads into RAM. Same ceiling as the TypeScript Ollama provider

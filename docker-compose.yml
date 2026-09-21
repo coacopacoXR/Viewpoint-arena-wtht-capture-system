@@ -283,7 +283,7 @@ services:
       # and install.sh never leaves it empty.
       CAPTURE_SHARED_SECRET: ${CAPTURE_SHARED_SECRET:-}
       CAPTURE_OLLAMA_BASE_URL: ${CAPTURE_OLLAMA_BASE_URL:-http://ollama:11434}
-      CAPTURE_OLLAMA_MODEL: ${CAPTURE_OLLAMA_MODEL:-deepseek-r1:7b}
+      CAPTURE_OLLAMA_MODEL: ${CAPTURE_OLLAMA_MODEL:-qwen2.5:7b}
       CAPTURE_WHISPER_MODEL: ${CAPTURE_WHISPER_MODEL:-base.en}
       CAPTURE_WHISPER_DEVICE: ${CAPTURE_WHISPER_DEVICE:-cpu}
       CAPTURE_WHISPER_COMPUTE_TYPE: ${CAPTURE_WHISPER_COMPUTE_TYPE:-int8}
@@ -386,7 +386,7 @@ services:
       # seconds and the extraction timeout assumes it is already warm.
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
     volumes:
-      # The pulled model (~4.7 GB for deepseek-r1:7b). This volume is the
+      # The pulled model (~4.7 GB for qwen2.5:7b). This volume is the
       # air-gapped install's payload: fill it on a connected machine, move it.
       - ollama-models:/root/.ollama
     networks:
