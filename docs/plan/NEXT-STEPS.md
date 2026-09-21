@@ -52,9 +52,9 @@ Neither blocks anything, but both are unverified in a way tests cannot fix:
   diff is minimal and preserves the previous fallback exactly, but ICE has been
   fragile here — two reverts in recent history — and nothing in the suite
   exercises a real peer connection. Worth a manual two-browser call.
-- **CI has never run.** Every check across all 26 commits was run locally. The
-  first real GitHub Actions run is where the gitleaks licence question gets
-  answered and where the two Windows-skipped installer tests actually execute.
+- ~~CI has never run.~~ Done 2026-09-21: branch pushed, all 9 jobs green after
+  four fixes (see EXECUTION-LOG). The gitleaks action ran without a licence
+  prompt on this personal-account repo.
 
 ---
 

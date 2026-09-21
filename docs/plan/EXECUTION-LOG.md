@@ -259,6 +259,32 @@ Qwen quota had reset; delegation resumed. A stray `cla` typed at the top of
   **Known consequence:** signing in to Onshape mid-launch returns to
   `/launch` and mints a second review id; the first is abandoned.
 
+- **FIRST REAL CI RUN (branch pushed with the user's approval).** Took four
+  runs to go green; every failure was real and invisible locally:
+  - `d3a6973` — tests needed a developer's `.env.local` (`lib/supabase.ts`
+    throws at import without a URL; vitest now sets placeholders). The
+    Linux-only installer test rejected `VITE_PARTYKIT_HOST`, a public
+    hostname; now explicitly approved. gitleaks: 8 hits, all deliberately
+    secret-shaped fake fixtures in the health tests, ignored by FINGERPRINT
+    in `.gitleaksignore` (note: a history rewrite for T0.1 changes the commit
+    hash and invalidates these fingerprints; regenerate them then). npm audit:
+    27 findings; non-breaking fixes, js-yaml 4.3.2, @vercel/node 13, and an
+    `overrides` pin of undici 6.28.1 under partykit's miniflare (verified
+    partykit dev still starts and a WebSocket connects). Blocking audit now
+    covers runtime deps only; dev tooling audited non-blocking (remaining
+    highs are inside @vercel/node, imported for types only).
+  - **Also `d3a6973`: the self-hosted partykit container could never start.**
+    Its CMD passed `--host` and `--no-open`, which `partykit dev` rejects
+    ("unknown option"). It binds 0.0.0.0 by default. A new test checks every
+    CMD flag against the installed CLI's `--help`.
+  - `eadae7c` — **any build without `VITE_SUPABASE_URL` was a blank white
+    page**, including the default self-hosted install. Now falls back to an
+    unresolvable `.invalid` host so queries fail as ordinary errors and the
+    app loads. Caught by the e2e smoke test.
+  - `5c144b2` — a timing race in batch Q's OnshapeBrowser test (synchronous
+    query for an async-loaded list); failed only on the slower runner.
+  Final run on `5c144b2`: all 9 jobs green, e2e included.
+
 ### Resolved: Qwen token plan quota
 
 The weekly quota exhausted during batch O reset on 2026-09-14; batches P and
@@ -279,8 +305,8 @@ or have Claude implement directly at higher credit cost.
 ### Repo state
 Phases 0-5 complete except T0.1, T4.7, T4.8. Phase 6 not started.
 789 JS tests (2 skipped on Windows), 421 pytest tests. lint 0 errors / 101
-warnings, typecheck, check:env, build all green — ALL RUN LOCALLY. No CI run
-has ever executed. Nothing pushed.
+warnings, typecheck, check:env, build, e2e all green, **and green in GitHub
+Actions** (run on `5c144b2`). Branch pushed to origin; nothing on `main`.
 
 ### Not started
 - **T0.1 (asset swap)** — user decided 2026-09-17: keep the branded models for
@@ -368,9 +394,8 @@ and needed one duplicated const removed plus the one test the run never reached.
 
 **Highest-value work remaining**, roughly in order:
 1. **T0.1** — decided (cube at release). Plus the Code of Conduct email.
-2. **Run CI for real.** Nothing has ever run in GitHub Actions. Expect the
-   gitleaks licence question and the two Windows-skipped installer tests to
-   surface there first.
+2. **CI** — done, green. Housekeeping: actions/checkout@v4 and setup-node@v4
+   run on the deprecated Node 20 runtime (warning only); bump to current.
 3. **A real end-to-end capture run** under docker compose (T4.4 is untested
    outside jsdom), and the Vercel config-file question above.
 4. Phase 6 docs, then the type-debt ratchet (101 lint warnings).
