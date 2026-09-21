@@ -37,6 +37,15 @@ const server = createServer((req, res) => {
       }),
     );
   });
+  // Liveness for the container healthcheck: "is this process serving". Not
+  // /api/health, which answers 503 whenever any connector is degraded and
+  // would make Docker restart a perfectly healthy API server.
+  if (req.url === '/healthz') {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/plain');
+    res.end('ok');
+    return;
+  }
   handle(req, res)
     .then((handled) => {
       if (!handled) {

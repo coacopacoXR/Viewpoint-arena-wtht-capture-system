@@ -17,7 +17,7 @@
 #   ollama        127.0.0.1:11434 loopback only, for `ollama pull` from the host
 #   n8n           127.0.0.1:5678  loopback only, profile n8n
 #
-#   app, capture-service, whisper, postgres   NO PORTS AT ALL
+#   app, api, capture-service, whisper, postgres   NO PORTS AT ALL
 #
 # ── WHY capture-service PUBLISHES NO PORT ────────────────────────────────────
 #
@@ -68,30 +68,14 @@
 #
 #   install.sh assembles that command for you.
 #
-# ── KNOWN GAP, STATED PLAINLY ────────────────────────────────────────────────
+# ── HOW /api/* IS SERVED ─────────────────────────────────────────────────────
 #
-# The `api/*` handlers in this repo are Vercel serverless functions, and this
-# stack does not run them: `app` is nginx serving the Vite build, exactly as
-# §2 specifies, and nginx answers /api/* with a JSON 501 rather than the SPA
-# fallback (deploy/nginx/app.conf explains both halves of that). Consequences:
-#
-#   * GET /api/health (T5.2) works in the cloud-hybrid deployment and is fully
-#     tested here, but is not served by this stack yet.
-#   * The SPA cannot fetch /api/public-config, so lib/config/ConfigContext.tsx
-#     falls back to its documented default providers. The app renders; it does
-#     not blank. That fail-safe is the reason this gap is survivable.
-#   * postgres is plain Postgres 16. supabase-js needs a PostgREST/GoTrue
-#     gateway in front of it, so the db connector reports degraded until one is
-#     added or VITE_SUPABASE_URL points at a hosted project.
-#
-# ONE EXCEPTION: /api/capture/local is served, by nginx rather than by a Node
-# runtime. It needs no handler logic — it is `proxy_pass` to capture-service
-# plus the X-Capture-Token header (see deploy/nginx/app.conf) — and without it
-# the local capture flow (T4.4) would have no server-side path at all in the
-# deployment that is the whole point of running capture-service.
-#
-# These are tracked, not overlooked. Nothing above is a reason to expose
-# capture-service.
+# The api/*.ts files are Vercel functions. Here the `api` service runs the same
+# files with server/api-server.ts, and nginx in `app` proxies /api/* to it, so
+# /api/public-config, /api/health, TURN credentials, Onshape sign-in and Teams
+# notifications work exactly as on Vercel. /api/capture/local alone is proxied
+# by nginx straight to capture-service, to stream large recordings without a
+# detour through Node.
 
 name: viewpoint-arena
 
@@ -217,6 +201,33 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # ── API: the api/*.ts functions, the same files Vercel runs ─────────────
+  # server/api-server.ts serves them over plain HTTP; nginx in `app` proxies
+  # /api/* here, so the browser still sees one same-origin site. This is what
+  # makes /api/public-config, /api/health, TURN credentials, Onshape sign-in
+  # and Teams notifications work in the self-hosted stack.
+  api:
+    build:
+      context: .
+      dockerfile: deploy/api.Dockerfile
+    image: viewpoint-arena-api:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    logging: *logging
+    # No ports. Reached only through the app container's nginx.
+    networks:
+      # edge: outbound internet for Onshape, Cloudflare TURN, Teams, cloud AI.
+      - edge
+      # backend: capture-service and postgres.
+      - backend
+    # Every secret the handlers read (ONSHAPE_*, CF_TURN_*, TEAMS_*, capture
+    # keys, CAPTURE_SHARED_SECRET). Runtime only, never an image layer.
+    env_file:
+      - .env
+    volumes:
+      # The per-deployment master config, written by install.sh. Read-only: the
+      # API reads it, nothing in the stack may change it.
+      - ./viewpoint.config.ts:/app/viewpoint.config.ts:ro
 
   # ── Realtime room server ─────────────────────────────────────────────────
   partykit:

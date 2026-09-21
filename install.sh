@@ -1279,18 +1279,6 @@ poll_health() {
     status="${raw##*$'\n'}"
     body="${raw%$'\n'*}"
 
-    if [[ "$body" == *'api_runtime_not_deployed'* ]]; then
-      say ''
-      say 'SKIP: this stack does not serve api/* yet. The `app` container is nginx'
-      say 'serving the Vite build, and the api/* handlers in this repo are Vercel'
-      say 'serverless functions with no runtime here — so nginx answers /api/* with'
-      say 'a JSON 501 rather than the SPA fallback. Read the KNOWN GAP block at the'
-      say 'top of docker-compose.yml. The app still renders: lib/config/'
-      say 'ConfigContext.tsx falls back to its documented default providers when'
-      say '/api/public-config is unavailable, which is exactly this case.'
-      return 0
-    fi
-
     if [[ "$status" == '200' ]]; then
       note "ready after ${attempt} attempt(s)"
       printf '%s\n' "$body" >&2
