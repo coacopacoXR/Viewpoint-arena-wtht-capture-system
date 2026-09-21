@@ -332,6 +332,17 @@ const PostMeetingSummary: React.FC = () => {
     }
   };
 
+  const handleStart = async (): Promise<void> => {
+    setOutcome(null);
+    try {
+      await start();
+    } catch (err) {
+      setOutcome({
+        message: err instanceof Error ? err.message : 'Recording could not be started.',
+      });
+    }
+  };
+
   const handleStop = async (): Promise<void> => {
     try {
       const audio = await stop();
@@ -374,7 +385,7 @@ const PostMeetingSummary: React.FC = () => {
 
         {state === 'idle' && (
           <button
-            onClick={start}
+            onClick={() => void handleStart()}
             disabled={summarising}
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
           >

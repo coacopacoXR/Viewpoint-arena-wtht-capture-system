@@ -284,7 +284,7 @@ def test_the_ollama_request_payload_matches_the_browser_provider() -> None:
     source = read_typescript(OLLAMA_DIRECT_TS)
     # The knobs that must be identical for two front ends to get the same
     # behaviour out of the same model.
-    for fragment in ("stream: false", "format: 'json'", "temperature: 0"):
+    for fragment in ("stream: false", "format: EXTRACTION_JSON_SCHEMA", "temperature: 0"):
         assert fragment in source, f"{fragment} is no longer what ollamaDirect.ts sends"
 
 
@@ -364,3 +364,26 @@ def _all_error_subclasses() -> list[type[CaptureServiceError]]:
 
     walk(CaptureServiceError)
     return found
+
+
+def test_the_ollama_json_schema_is_identical_to_the_typescript_one() -> None:
+    import json
+
+    from capture_service.prompt import EXTRACTION_JSON_SCHEMA
+
+    ts_copy = json.loads((CAPTURE_TS / "extractionSchema.json").read_text(encoding="utf-8"))
+    assert EXTRACTION_JSON_SCHEMA == ts_copy, (
+        "capture_service/extraction_schema.json has drifted from "
+        "lib/connectors/capture/extractionSchema.json; copy the TS one over"
+    )
+
+
+def test_the_json_schema_only_allows_keys_the_parser_accepts() -> None:
+    from capture_service.parse_cards import CARD_KEYS, DETAILS_KEYS
+    from capture_service.prompt import EXTRACTION_JSON_SCHEMA
+
+    card = EXTRACTION_JSON_SCHEMA["properties"]["cards"]["items"]
+    assert set(card["properties"]) <= set(CARD_KEYS)
+    assert set(card["properties"]["details"]["properties"]) <= set(DETAILS_KEYS)
+    assert card["additionalProperties"] is False
+    assert card["properties"]["details"]["additionalProperties"] is False

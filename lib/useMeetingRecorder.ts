@@ -161,8 +161,13 @@ export interface UseMeetingRecorderOptions {
 
 export interface UseMeetingRecorderReturn {
   readonly state: RecorderState;
-  /** Begins recording. No-op when unsupported or already recording. */
-  start(): void;
+  /**
+   * Begins recording. No-op when unsupported or already recording.
+   *
+   * Rejects with a readable message when there is no microphone to record: the
+   * call provides none and the browser refused (or has no) microphone.
+   */
+  start(): Promise<void>;
   /**
    * Stops recording and resolves with the whole recording as one Blob.
    * Rejects only when nothing was in progress — the caller keeps the Blob on a
@@ -170,6 +175,17 @@ export interface UseMeetingRecorderReturn {
    */
   stop(): Promise<Blob>;
 }
+
+/** True when the stream carries at least one audio track that is still live. */
+export function hasLiveAudio(stream: MediaStream | null): stream is MediaStream {
+  return (
+    stream !== null && stream.getAudioTracks().some((track) => track.readyState !== 'ended')
+  );
+}
+
+/** The message shown when there is nothing to record from. */
+export const NO_MICROPHONE_MESSAGE =
+  'No microphone available. Allow microphone access in the browser, or join the call with your microphone on, then try again.';
 
 export function useMeetingRecorder({
   localStream,
@@ -186,6 +202,10 @@ export function useMeetingRecorder({
   const chunksRef = useRef<BlobPart[]>([]);
   const mimeTypeRef = useRef<string | undefined>(undefined);
   const finishRef = useRef<((blob: Blob) => void) | null>(null);
+  const startingRef = useRef(false);
+  // A microphone stream THIS hook opened because the call provided none. Unlike
+  // the WebRTC streams, it belongs to the recorder, so the recorder stops it.
+  const ownMicRef = useRef<MediaStream | null>(null);
 
   // Refs rather than closure values so start() and stop() stay stable: a
   // participant who joins mid-recording is picked up by the attach effect below,
@@ -201,13 +221,16 @@ export function useMeetingRecorder({
     if (graph === null) return;
     // useWebRTC replaces the Map (not its streams) whenever a peer joins, so
     // this re-runs and attach() is idempotent for the ones already mixed in.
-    if (localStream) graph.attach(localStream);
+    // The call's local stream is skipped while the recorder has its own mic
+    // open: both are the same physical microphone, and mixing it twice would
+    // double every word the host says and garble the transcript.
+    if (hasLiveAudio(localStream) && ownMicRef.current === null) graph.attach(localStream);
     for (const stream of remoteStreams.values()) graph.attach(stream);
   }, [localStream, remoteStreams]);
 
-  // Unmount cleanup. Stops the recorder and tears the graph down, and pointedly
-  // does NOT call track.stop() on anything: these streams belong to useWebRTC,
-  // and navigating away from the manager panel must not end the call.
+  // Unmount cleanup. Stops the recorder and tears the graph down. It stops the
+  // recorder's OWN microphone, and pointedly nothing else: the WebRTC streams
+  // belong to useWebRTC, and navigating away must not end the call.
   useEffect(() => {
     return () => {
       const recorder = recorderRef.current;
@@ -223,6 +246,8 @@ export function useMeetingRecorder({
         if (recorder.state !== 'inactive') recorder.stop();
       }
       graph?.dispose();
+      ownMicRef.current?.getTracks().forEach((track) => track.stop());
+      ownMicRef.current = null;
     };
   }, []);
 
@@ -234,43 +259,72 @@ export function useMeetingRecorder({
     return blob;
   }, []);
 
-  const start = useCallback(() => {
+  const releaseOwnMic = useCallback(() => {
+    ownMicRef.current?.getTracks().forEach((track) => track.stop());
+    ownMicRef.current = null;
+  }, []);
+
+  const start = useCallback(async (): Promise<void> => {
     if (!isRecordingSupported()) return;
     // Never restarts a recording already in flight: that would discard the
     // meeting so far. The UI only offers start() while idle.
-    if (recorderRef.current !== null) return;
+    if (recorderRef.current !== null || startingRef.current) return;
+    startingRef.current = true;
 
-    const streams: MediaStream[] = [];
-    if (localStreamRef.current !== null) streams.push(localStreamRef.current);
-    streams.push(...remoteStreamsRef.current.values());
+    try {
+      const streams: MediaStream[] = [];
+      if (hasLiveAudio(localStreamRef.current)) {
+        streams.push(localStreamRef.current);
+      } else {
+        // The host has not joined the call's audio — typical for an in-person
+        // review run from one laptop. Without this the mixer had no input and
+        // MediaRecorder produced a 0-byte recording (found in a live test).
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error(NO_MICROPHONE_MESSAGE);
+        try {
+          ownMicRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+          throw new Error(NO_MICROPHONE_MESSAGE);
+        }
+        streams.push(ownMicRef.current);
+      }
+      streams.push(...remoteStreamsRef.current.values());
 
-    const graph = createMixingGraph(new AudioContext(), streams);
-    const mimeType = selectRecordingMimeType((candidate) =>
-      MediaRecorder.isTypeSupported(candidate),
-    );
-    const recorder =
-      mimeType === undefined
-        ? new MediaRecorder(graph.output)
-        : new MediaRecorder(graph.output, { mimeType });
+      const graph = createMixingGraph(new AudioContext(), streams);
+      const mimeType = selectRecordingMimeType((candidate) =>
+        MediaRecorder.isTypeSupported(candidate),
+      );
+      const recorder =
+        mimeType === undefined
+          ? new MediaRecorder(graph.output)
+          : new MediaRecorder(graph.output, { mimeType });
 
-    chunksRef.current = [];
-    mimeTypeRef.current = mimeType;
+      chunksRef.current = [];
+      mimeTypeRef.current = mimeType;
 
-    recorder.ondataavailable = (event: BlobEvent) => {
-      if (event.data.size > 0) chunksRef.current.push(event.data);
-    };
-    recorder.onstop = () => {
-      const blob = takeBlob();
-      const finish = finishRef.current;
-      finishRef.current = null;
-      if (finish !== null) finish(blob);
-    };
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        // Only hand the chunks over when stop() is waiting for them. If the
+        // browser stopped the recorder on its own, they stay put and stop()
+        // collects them; taking them here used to throw the meeting away.
+        const finish = finishRef.current;
+        if (finish === null) return;
+        finishRef.current = null;
+        finish(takeBlob());
+      };
 
-    graphRef.current = graph;
-    recorderRef.current = recorder;
-    recorder.start(RECORDER_TIMESLICE_MS);
-    setState('recording');
-  }, [takeBlob]);
+      graphRef.current = graph;
+      recorderRef.current = recorder;
+      recorder.start(RECORDER_TIMESLICE_MS);
+      setState('recording');
+    } catch (err) {
+      releaseOwnMic();
+      throw err;
+    } finally {
+      startingRef.current = false;
+    }
+  }, [takeBlob, releaseOwnMic]);
 
   const stop = useCallback(async (): Promise<Blob> => {
     const recorder = recorderRef.current;
@@ -298,8 +352,9 @@ export function useMeetingRecorder({
     // Disposed AFTER the recorder has produced its final chunk: closing the
     // AudioContext first would cut the tail off the meeting.
     graph.dispose();
+    releaseOwnMic();
     return blob;
-  }, [takeBlob]);
+  }, [takeBlob, releaseOwnMic]);
 
   return { state, start, stop };
 }

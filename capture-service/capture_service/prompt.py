@@ -14,10 +14,19 @@ keep a contract that crosses a language boundary.
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 
 from .schemas import SlideContext, TranscriptChunk
+
+# The JSON Schema Ollama constrains its reply to. A copy of
+# lib/connectors/capture/extractionSchema.json (the Docker build context is
+# capture-service/ alone); tests/test_typescript_parity.py fails if they drift.
+EXTRACTION_JSON_SCHEMA = json.loads(
+    (Path(__file__).parent / "extraction_schema.json").read_text(encoding="utf-8")
+)
 
 # Copied verbatim from EXTRACTION_SYSTEM_PROMPT in
 # lib/connectors/capture/extractionPrompt.ts. Do not edit locally.

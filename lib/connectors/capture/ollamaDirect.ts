@@ -26,6 +26,7 @@ import {
   buildExtractionUserPrompt,
 } from './extractionPrompt';
 import { parseInsightCards } from './parseInsightCards';
+import EXTRACTION_JSON_SCHEMA from './extractionSchema.json';
 import { CaptureEndpointError } from './extractClient';
 import type { HealthCheckResult } from '../../health/types';
 import { HEALTH_DETAILS } from '../../health/details';
@@ -129,9 +130,11 @@ export class OllamaDirectCaptureProvider implements TranscriptCaptureProvider {
       // Non-negotiable: a streaming reply would have to be reassembled before
       // it could be parsed, and there is nothing to stream to here.
       stream: false,
-      // Ollama's structured-output mode. It constrains the reply to valid
-      // JSON; parseInsightCards is still the authority on the schema.
-      format: 'json',
+      // Ollama's structured-output mode with the exact card schema, not just
+      // "some JSON": a live run with plain 'json' got the details fields
+      // flattened onto the card, and the strict parser rightly refused the lot.
+      // parseInsightCards is still the authority on the shape.
+      format: EXTRACTION_JSON_SCHEMA,
       options: { temperature: 0, num_predict: MAX_OUTPUT_TOKENS },
       messages: [
         { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },

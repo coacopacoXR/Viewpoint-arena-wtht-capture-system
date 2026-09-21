@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OllamaDirectCaptureProvider } from './ollamaDirect';
+import EXTRACTION_JSON_SCHEMA from './extractionSchema.json';
 import { CaptureEndpointError } from './extractClient';
 import { CaptureExtractionError } from './parseInsightCards';
 import type { PublicConfig } from '../../config/publicConfig';
@@ -261,7 +262,8 @@ describe('OllamaDirectCaptureProvider — the request it makes', () => {
     const body = requests[0].body;
     expect(requests[0].method).toBe('POST');
     expect(body.stream).toBe(false);
-    expect(body.format).toBe('json');
+    // The exact card schema, so Ollama cannot flatten details onto the card.
+    expect(body.format).toEqual(EXTRACTION_JSON_SCHEMA);
     expect(body.options).toMatchObject({ temperature: 0 });
     expect(typeof body.options).toBe('object');
   });

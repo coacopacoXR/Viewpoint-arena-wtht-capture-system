@@ -16,6 +16,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import {
+  NO_MICROPHONE_MESSAGE,
   RECORDING_MIME_CANDIDATES,
   assembleRecording,
   createMixingGraph,
@@ -43,7 +44,10 @@ interface FakeContextState {
 function fakeStream(label: string): MediaStream {
   // Identity is all the mixer uses a stream for: it is the Map key, and it is
   // what gets handed to createMediaStreamSource.
-  return { label } as unknown as MediaStream;
+  // A live audio track too, so the recorder treats it as a usable microphone
+  // and does not open its own.
+  const track = { kind: 'audio', readyState: 'live', stop: vi.fn() };
+  return { label, getAudioTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream;
 }
 
 function fakeNode(stream: MediaStream): FakeNode {
@@ -345,14 +349,14 @@ describe('useMeetingRecorder', () => {
     expect(result.current.state).toBe('unsupported');
   });
 
-  it('start() does nothing when unsupported, so no half-recording is promised', () => {
+  it('start() does nothing when unsupported, so no half-recording is promised', async () => {
     vi.stubGlobal('MediaRecorder', undefined);
     vi.stubGlobal('AudioContext', undefined);
 
     const { result } = renderRecorder(null, new Map());
 
-    act(() => {
-      result.current.start();
+    await act(async () => {
+      await result.current.start();
     });
 
     expect(result.current.state).toBe('unsupported');
@@ -381,8 +385,8 @@ describe('useMeetingRecorder', () => {
 
     expect(result.current.state).toBe('idle');
 
-    act(() => {
-      result.current.start();
+    await act(async () => {
+      await result.current.start();
     });
 
     expect(result.current.state).toBe('recording');
@@ -411,7 +415,7 @@ describe('useMeetingRecorder', () => {
     }
   });
 
-  it('mixes in a participant who joins after recording started', () => {
+  it('mixes in a participant who joins after recording started', async () => {
     const { FakeAudioContext, state } = installFakeAudioContext();
     const { FakeMediaRecorder, instances } = installedRecorderFakes();
     vi.stubGlobal('AudioContext', FakeAudioContext);
@@ -421,8 +425,8 @@ describe('useMeetingRecorder', () => {
     const latecomer = fakeStream('latecomer');
     const { result, rerender } = renderRecorder(local, new Map());
 
-    act(() => {
-      result.current.start();
+    await act(async () => {
+      await result.current.start();
     });
     expect(state.sources).toHaveLength(1);
 
@@ -444,12 +448,12 @@ describe('useMeetingRecorder', () => {
 
     const stopTrack = vi.fn();
     const local = {
-      getAudioTracks: () => [{ kind: 'audio', stop: stopTrack }],
+      getAudioTracks: () => [{ kind: 'audio', readyState: 'live', stop: stopTrack }],
     } as unknown as MediaStream;
     const { result, unmount } = renderRecorder(local, new Map());
 
-    act(() => {
-      result.current.start();
+    await act(async () => {
+      await result.current.start();
     });
     await act(async () => {
       await result.current.stop();
@@ -461,7 +465,7 @@ describe('useMeetingRecorder', () => {
     expect(stopTrack).not.toHaveBeenCalled();
   });
 
-  it('tears the recorder down on unmount while recording', () => {
+  it('tears the recorder down on unmount while recording', async () => {
     const { FakeAudioContext, state } = installFakeAudioContext();
     const { FakeMediaRecorder, instances } = installedRecorderFakes();
     vi.stubGlobal('AudioContext', FakeAudioContext);
@@ -469,8 +473,8 @@ describe('useMeetingRecorder', () => {
 
     const { result, unmount } = renderRecorder(fakeStream('local'), new Map());
 
-    act(() => {
-      result.current.start();
+    await act(async () => {
+      await result.current.start();
     });
     expect(instances[0].state).toBe('recording');
 
@@ -495,5 +499,104 @@ describe('useMeetingRecorder', () => {
 
     expect(result.current.start).toBe(firstStart);
     expect(result.current.stop).toBe(firstStop);
+  });
+
+  // ── No call audio: the recorder opens (and owns) its own microphone ──────
+  // A live test found a 0-byte recording: the host had not joined the call's
+  // audio, so the mixer had no input at all.
+
+  function stubMediaDevices(getUserMedia: () => Promise<MediaStream>) {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia: vi.fn(getUserMedia) },
+      configurable: true,
+    });
+    return (navigator.mediaDevices as unknown as { getUserMedia: ReturnType<typeof vi.fn> })
+      .getUserMedia;
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'mediaDevices');
+  });
+
+  it('opens its own microphone when the call provides no audio, and stops it after', async () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const { FakeMediaRecorder } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    const ownMic = fakeStream('own-mic');
+    const getUserMedia = stubMediaDevices(async () => ownMic);
+
+    const { result } = renderRecorder(null, new Map());
+    await act(async () => {
+      await result.current.start();
+    });
+
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
+    expect(state.sources.map((s) => s.stream)).toEqual([ownMic]);
+
+    await act(async () => {
+      await result.current.stop();
+    });
+    // Its own stream, so it is released: the browser's mic indicator goes off.
+    expect(ownMic.getAudioTracks()[0].stop).toHaveBeenCalled();
+  });
+
+  it('rejects with a readable message when no microphone is available', async () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder, instances } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    stubMediaDevices(async () => {
+      throw new DOMException('denied', 'NotAllowedError');
+    });
+
+    const { result } = renderRecorder(null, new Map());
+    await act(async () => {
+      await expect(result.current.start()).rejects.toThrow(NO_MICROPHONE_MESSAGE);
+    });
+
+    // Nothing half-started: no recorder, still idle, so the user can retry.
+    expect(instances).toHaveLength(0);
+    expect(result.current.state).toBe('idle');
+  });
+
+  it('does not mix the call mic in as well while its own mic is open', async () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const { FakeMediaRecorder } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    const ownMic = fakeStream('own-mic');
+    stubMediaDevices(async () => ownMic);
+
+    const { result, rerender } = renderRecorder(null, new Map());
+    await act(async () => {
+      await result.current.start();
+    });
+    // The host joins the call mid-recording: same physical microphone.
+    rerender({ local: fakeStream('call-mic'), remote: new Map() });
+
+    expect(state.sources.map((s) => s.stream)).toEqual([ownMic]);
+  });
+
+  it('keeps the audio when the browser stops the recorder on its own', async () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder, instances } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+
+    const { result } = renderRecorder(fakeStream('local'), new Map());
+    await act(async () => {
+      await result.current.start();
+    });
+    // e.g. every input track ended: the recorder flushes and stops by itself.
+    act(() => {
+      instances[0].stop();
+    });
+
+    let blob: Blob | undefined;
+    await act(async () => {
+      blob = await result.current.stop();
+    });
+    expect(blob?.size).toBeGreaterThan(0);
   });
 });

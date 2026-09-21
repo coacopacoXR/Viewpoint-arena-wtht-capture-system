@@ -24,6 +24,7 @@ from typing import Protocol
 
 import httpx
 
+from .prompt import EXTRACTION_JSON_SCHEMA
 from .errors import (
     LlmEndpointUnavailable,
     LlmModelNotFound,
@@ -98,9 +99,11 @@ class OllamaClient:
             # Non-negotiable: a streaming reply would have to be reassembled
             # before it could be parsed, and there is nothing to stream to.
             "stream": False,
-            # Ollama's structured-output mode. It constrains the reply to valid
-            # JSON; parse_cards is still the authority on the schema.
-            "format": "json",
+            # Ollama's structured-output mode with the exact card schema, not
+            # just "some JSON": a live run with plain "json" got the details
+            # fields flattened onto the card, and the strict parser rightly
+            # refused the lot. parse_cards is still the authority on the shape.
+            "format": EXTRACTION_JSON_SCHEMA,
             "options": {"temperature": 0, "num_predict": MAX_OUTPUT_TOKENS},
             "messages": [
                 {"role": "system", "content": system},

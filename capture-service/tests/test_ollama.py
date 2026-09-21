@@ -26,6 +26,7 @@ from capture_service.errors import (
     LlmUnreachable,
 )
 from capture_service.ollama import CHAT_PATH, MAX_OUTPUT_TOKENS, OllamaClient
+from capture_service.prompt import EXTRACTION_JSON_SCHEMA
 
 BASE_URL = "http://ollama.internal:11434"
 MODEL = "deepseek-r1:7b"
@@ -80,7 +81,7 @@ def test_the_request_is_a_non_streaming_json_mode_chat_completion() -> None:
     assert seen["body"] == {
         "model": MODEL,
         "stream": False,
-        "format": "json",
+        "format": EXTRACTION_JSON_SCHEMA,
         "options": {"temperature": 0, "num_predict": MAX_OUTPUT_TOKENS},
         "messages": [
             {"role": "system", "content": SYSTEM},
