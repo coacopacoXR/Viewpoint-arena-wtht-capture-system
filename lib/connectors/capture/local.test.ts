@@ -292,6 +292,26 @@ describe('LocalCaptureProvider — errors', () => {
     expect(err.message).toContain('upload_too_large');
   });
 
+  it("explains the front proxy's rate limit and never echoes its HTML", async () => {
+    const stub = stubFetch(
+      () =>
+        new Response(`<html><body>429 ${UPSTREAM_MARKER}</body></html>`, {
+          status: 429,
+          headers: { 'content-type': 'text/html' },
+        }),
+    );
+    const provider = new LocalCaptureProvider({ fetchFn: stub.fetchFn });
+
+    const err = (await expectRejection(
+      provider.captureRecording(audioBlob(), CONTEXT),
+    )) as LocalCaptureError;
+
+    expect(err.code).toBe('rate_limited');
+    expect(err.message).toMatch(/too many capture requests/);
+    expect(err.message).toMatch(/recording is kept/);
+    expect(err.message).not.toContain(UPSTREAM_MARKER);
+  });
+
   it('accepts a `code` key as well as the `error` key capture-service uses', async () => {
     const stub = stubFetch(() => jsonResponse({ code: 'empty_transcript' }, 422));
     const provider = new LocalCaptureProvider({ fetchFn: stub.fetchFn });

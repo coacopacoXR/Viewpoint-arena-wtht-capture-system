@@ -269,6 +269,17 @@ async function toLocalCaptureError(
   const where = `capture/local: ${endpoint} returned ${response.status}` +
     (code === null ? '' : ` (${code})`);
 
+  // The self-hosted front proxy rate-limits capture per client
+  // (deploy/nginx/proxy.conf). Its 429 body is nginx HTML, so there is no code.
+  if (response.status === 429) {
+    return new LocalCaptureError(
+      'rate_limited',
+      `${where}: too many capture requests from this address in the last ` +
+        `minute. Wait a moment and press Retry — the recording is kept.`,
+      response.status,
+    );
+  }
+
   switch (code) {
     case 'not_configured':
       return new LocalCaptureError(
