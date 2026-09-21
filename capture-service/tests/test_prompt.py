@@ -14,6 +14,7 @@ from capture_service.prompt import (
     build_extraction_user_prompt,
     format_ms,
     format_transcript,
+    upcoming_days,
 )
 from capture_service.schemas import SlideContext
 from conftest import make_chunk
@@ -71,8 +72,11 @@ def test_the_context_comes_before_the_transcript() -> None:
             hovered_part_name="Bracket",
             laser_target_part_name="Seat stay",
         ),
+        today="2026-09-21",
     )
     assert prompt == (
+        "Today's date: 2026-09-21 (Monday)\n"
+        f"Next 14 days: {upcoming_days('2026-09-21', 14)}\n"
         "Agenda item 3: Rear triangle weld\n"
         "A speaker was hovering over: Bracket\n"
         "The laser pointer was on: Seat stay\n"
@@ -84,11 +88,43 @@ def test_the_context_comes_before_the_transcript() -> None:
 
 def test_absent_spatial_context_is_omitted_not_rendered_blank() -> None:
     prompt = build_extraction_user_prompt(
-        [make_chunk("Hello.")], SlideContext(agenda_idx=0, slide_title="Kickoff")
+        [make_chunk("Hello.")],
+        SlideContext(agenda_idx=0, slide_title="Kickoff"),
+        today="2026-09-21",
     )
     assert "hovering" not in prompt
     assert "laser" not in prompt
-    assert prompt.startswith("Agenda item 0: Kickoff\n\nTranscript window:\n")
+    assert prompt.startswith("Today's date: 2026-09-21 (Monday)\nNext 14 days: ")
+    assert "\nAgenda item 0: Kickoff\n\nTranscript window:\n" in prompt
+
+
+def test_today_defaults_to_the_current_utc_date() -> None:
+    from datetime import datetime, timezone
+
+    prompt = build_extraction_user_prompt(
+        [make_chunk("Hello.")], SlideContext(agenda_idx=0, slide_title="Kickoff")
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert prompt.startswith(f"Today's date: {today} (")
+
+
+def test_weekday_is_english_and_locale_independent() -> None:
+    from capture_service.prompt import weekday_of
+
+    assert weekday_of("2026-09-21") == "Monday"
+    assert weekday_of("2026-09-25") == "Friday"
+    assert weekday_of("2024-02-29") == "Thursday"
+    assert weekday_of("not-a-date") == "unknown"
+
+
+def test_the_calendar_lists_the_next_days_for_lookup() -> None:
+    days = upcoming_days("2026-09-21", 14).split(", ")
+    assert len(days) == 14
+    assert days[0] == "Tuesday 2026-09-22"
+    # "by Friday" said on Monday 21st is the 25th: it must be in the table.
+    assert "Friday 2026-09-25" in days
+    assert days[-1] == "Monday 2026-10-05"
+    assert upcoming_days("nope", 3) == "unknown"
 
 
 def test_the_system_prompt_asks_for_the_envelope_the_parser_enforces() -> None:

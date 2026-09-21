@@ -152,6 +152,10 @@ def test_the_transcript_is_rendered_with_the_same_labels_the_prompt_promises() -
 def test_the_user_prompt_layout_matches_the_typescript_builder() -> None:
     source = read_typescript(CAPTURE_TS / "extractionPrompt.ts")
     for fragment in (
+        "`Today's date: ${today} (${weekdayOf(today)})`",
+        "`Next 14 days: ${upcomingDays(today, 14)}`",
+        "days.push(`${weekdayOf(d)} ${d}`)",
+        "new Date().toISOString().slice(0, 10)",
         "`Agenda item ${context.agendaIdx}: ${context.slideTitle}`",
         "`A speaker was hovering over: ${context.hoveredPartName}`",
         "`The laser pointer was on: ${context.laserTargetPartName}`",

@@ -15,6 +15,7 @@ keep a contract that crosses a language boundary.
 from __future__ import annotations
 
 import math
+from datetime import date, datetime, timedelta, timezone
 
 from .schemas import SlideContext, TranscriptChunk
 
@@ -56,7 +57,7 @@ Reply with a single raw JSON object and nothing else. No markdown, no code fence
         "tradeoffAnalysis": "RATIONALE only: what was given up",
         "department": "ACTION only: owning department",
         "assignee": "ACTION only: owning person",
-        "dueDate": "ACTION only: ISO 8601 date, only if one was stated"
+        "dueDate": "ACTION only: YYYY-MM-DD. Resolve a relative deadline ("by Friday") against today's date given above the transcript; omit if no deadline was stated"
       }
     }
   ]
@@ -98,15 +99,52 @@ def format_transcript(transcript: list[TranscriptChunk]) -> str:
     )
 
 
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def weekday_of(iso_date: str) -> str:
+    """English weekday of a YYYY-MM-DD date, independent of locale (as weekdayOf in TS)."""
+    try:
+        return WEEKDAYS[date.fromisoformat(iso_date).weekday()]
+    except ValueError:
+        return "unknown"
+
+
+def upcoming_days(iso_date: str, count: int) -> str:
+    """"Tuesday 2026-09-22, Wednesday 2026-09-23, …" (as upcomingDays in TS).
+
+    A calendar to look up, because small models get "by Friday" wrong when
+    asked to compute it from today's date alone.
+    """
+    try:
+        start = date.fromisoformat(iso_date)
+    except ValueError:
+        return "unknown"
+    days = []
+    for i in range(1, count + 1):
+        d = (start + timedelta(days=i)).isoformat()
+        days.append(f"{weekday_of(d)} {d}")
+    return ", ".join(days)
+
+
 def build_extraction_user_prompt(
-    transcript: list[TranscriptChunk], context: SlideContext
+    transcript: list[TranscriptChunk],
+    context: SlideContext,
+    today: str | None = None,
 ) -> str:
-    """Build the user turn: spatial context first, then the labelled transcript.
+    """Build the user turn: today's date and spatial context, then the transcript.
 
     Context comes first so the model can attribute a comment to the part that
-    was on screen, exactly as the TypeScript builder does.
+    was on screen, exactly as the TypeScript builder does. Today's date (UTC,
+    same as the TS default) lets it resolve "by Friday" to a real date.
     """
-    lines = [f"Agenda item {context.agenda_idx}: {context.slide_title}"]
+    if today is None:
+        today = datetime.now(timezone.utc).date().isoformat()
+    lines = [
+        f"Today's date: {today} ({weekday_of(today)})",
+        f"Next 14 days: {upcoming_days(today, 14)}",
+        f"Agenda item {context.agenda_idx}: {context.slide_title}",
+    ]
     if context.hovered_part_name:
         lines.append(f"A speaker was hovering over: {context.hovered_part_name}")
     if context.laser_target_part_name:

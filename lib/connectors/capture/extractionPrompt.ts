@@ -53,7 +53,7 @@ Reply with a single raw JSON object and nothing else. No markdown, no code fence
         "tradeoffAnalysis": "RATIONALE only: what was given up",
         "department": "ACTION only: owning department",
         "assignee": "ACTION only: owning person",
-        "dueDate": "ACTION only: ISO 8601 date, only if one was stated"
+        "dueDate": "ACTION only: YYYY-MM-DD. Resolve a relative deadline ("by Friday") against today's date given above the transcript; omit if no deadline was stated"
       }
     }
   ]
@@ -84,6 +84,25 @@ function formatMs(ms: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** English weekday of a YYYY-MM-DD date, independent of locale and timezone. */
+export function weekdayOf(isoDate: string): string {
+  return WEEKDAYS[new Date(`${isoDate}T00:00:00Z`).getUTCDay()] ?? 'unknown';
+}
+
+/** "Tuesday 2026-09-22, Wednesday 2026-09-23, …" for the `count` days after isoDate. */
+export function upcomingDays(isoDate: string, count: number): string {
+  const start = new Date(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(start.getTime())) return 'unknown';
+  const days: string[] = [];
+  for (let i = 1; i <= count; i++) {
+    const d = new Date(start.getTime() + i * 86_400_000).toISOString().slice(0, 10);
+    days.push(`${weekdayOf(d)} ${d}`);
+  }
+  return days.join(', ');
+}
+
 /**
  * Builds the user turn: spatial context first (so the model can attribute a
  * comment to the part that was on screen), then the labelled transcript.
@@ -91,8 +110,16 @@ function formatMs(ms: number): string {
 export function buildExtractionUserPrompt(
   transcript: TranscriptChunk[],
   context: SlideContext,
+  today: string = new Date().toISOString().slice(0, 10),
 ): string {
+  // Today's date plus a two-week calendar lets the model turn "by Friday" into
+  // a real date by LOOKUP rather than arithmetic. Live runs with qwen2.5:7b:
+  // no date -> wrong year (2023-10-06); date + weekday -> right year, wrong day
+  // every time (2026-09-28 for a Monday's "by Friday"). Small models do date
+  // arithmetic badly and table lookup well.
   const lines = [
+    `Today's date: ${today} (${weekdayOf(today)})`,
+    `Next 14 days: ${upcomingDays(today, 14)}`,
     `Agenda item ${context.agendaIdx}: ${context.slideTitle}`,
   ];
   if (context.hoveredPartName) {

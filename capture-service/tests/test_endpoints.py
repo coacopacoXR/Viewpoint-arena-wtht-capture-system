@@ -176,7 +176,10 @@ def test_the_transcript_reaches_the_llm_as_a_labelled_window(service: Service) -
         }
     )
     prompt = service.llm.last_user_prompt
-    assert prompt.startswith("Agenda item 4: Rear triangle weld")
+    lines = prompt.split("\n")
+    assert lines[0].startswith("Today's date: ")
+    assert lines[1].startswith("Next 14 days: ")
+    assert lines[2] == "Agenda item 4: Rear triangle weld"
     assert "A speaker was hovering over: Bracket" in prompt
     assert "The laser pointer was on: Seat stay" in prompt
     assert "Transcript window:" in prompt
@@ -186,7 +189,10 @@ def test_the_transcript_reaches_the_llm_as_a_labelled_window(service: Service) -
 def test_context_fields_are_optional(service: Service) -> None:
     service.post_capture()
     prompt = service.llm.last_user_prompt
-    assert prompt.startswith(f"Agenda item 0: {DEFAULT_SLIDE_TITLE}")
+    lines = prompt.split("\n")
+    assert lines[0].startswith("Today's date: ")
+    assert lines[1].startswith("Next 14 days: ")
+    assert lines[2] == f"Agenda item 0: {DEFAULT_SLIDE_TITLE}"
     assert "hovering" not in prompt
     assert "laser" not in prompt
 
