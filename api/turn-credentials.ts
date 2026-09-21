@@ -12,24 +12,38 @@
 // so the client just passes it through verbatim.
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { CloudflareTurnAdapter } from '../lib/connectors/turn/cloudflare.ts';
+import { SelfHostedCoturnAdapter } from '../lib/connectors/turn/selfHostedCoturn.ts';
 
 const DEFAULT_TOKEN_ID_ENV = 'CF_TURN_TOKEN_ID';
 const DEFAULT_API_TOKEN_ENV = 'CF_TURN_API_TOKEN';
 
-async function resolveEnvNames(): Promise<{ tokenIdEnv: string; apiTokenEnv: string }> {
+type TurnPlan =
+  | { provider: 'cloudflare'; tokenIdEnv: string; apiTokenEnv: string }
+  | { provider: 'selfHostedCoturn'; host: string; port: number; sharedSecretEnv: string };
+
+// Which TURN provider the master config selected. Without a loadable config,
+// the conventional Cloudflare env names, exactly as before.
+async function resolveTurnPlan(): Promise<TurnPlan> {
   try {
     const { loadConfig } = await import('../lib/config/loadConfig.ts');
     const config = await loadConfig();
     if (config.turn.provider === 'cloudflare') {
       return {
+        provider: 'cloudflare',
         tokenIdEnv: config.turn.tokenIdEnv,
         apiTokenEnv: config.turn.apiTokenEnv,
       };
     }
+    return {
+      provider: 'selfHostedCoturn',
+      host: config.turn.host,
+      port: config.turn.port,
+      sharedSecretEnv: config.turn.sharedSecretEnv,
+    };
   } catch {
     // Config not available — fall back to defaults.
   }
-  return { tokenIdEnv: DEFAULT_TOKEN_ID_ENV, apiTokenEnv: DEFAULT_API_TOKEN_ENV };
+  return { provider: 'cloudflare', tokenIdEnv: DEFAULT_TOKEN_ID_ENV, apiTokenEnv: DEFAULT_API_TOKEN_ENV };
 }
 
 // Static override for a non-Cloudflare TURN provider (self-hosted coturn, or
@@ -68,7 +82,21 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
     return;
   }
 
-  const { tokenIdEnv, apiTokenEnv } = await resolveEnvNames();
+  const plan = await resolveTurnPlan();
+
+  if (plan.provider === 'selfHostedCoturn') {
+    if (!process.env[plan.sharedSecretEnv]) {
+      res.status(500).json({ error: 'turn_not_configured' });
+      return;
+    }
+    const iceServers = await new SelfHostedCoturnAdapter(plan).getIceServers();
+    // Well under the credential's 24 h lifetime, same as the Cloudflare path.
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.status(200).json({ iceServers });
+    return;
+  }
+
+  const { tokenIdEnv, apiTokenEnv } = plan;
 
   if (!process.env[tokenIdEnv] || !process.env[apiTokenEnv]) {
     res.status(500).json({ error: 'turn_not_configured' });

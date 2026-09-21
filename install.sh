@@ -572,12 +572,10 @@ collect_answers() {
     *)
       A_COTURN_HOST="$(ask 'coturn host' "$A_HOSTNAME")"
       A_COTURN_PORT="$(ask 'coturn port' '3478')"
-      say '  Caveat: lib/connectors/turn/selfHostedCoturn.ts is still a stub and'
-      say '  docker-compose.yml has no coturn service. This writes a valid config'
-      say '  and generates the secret, but /api/health reports turn degraded until'
-      say '  that adapter is implemented. To use a coturn you run yourself TODAY,'
-      say '  set TURN_URL / TURN_USERNAME / TURN_CREDENTIAL instead — see the'
-      say '  static override in api/turn-credentials.ts.'
+      say '  The app mints short-lived coturn credentials (TURN REST API) from'
+      say '  COTURN_SHARED_SECRET, generated below. Your coturn must run with'
+      say '  use-auth-secret and static-auth-secret set to that same value.'
+      say '  /api/health checks coturn answers on that host and port.'
       ;;
   esac
 
@@ -1041,14 +1039,9 @@ SECRETS
   env_comment '# ── 6. TURN relay ──────────────────────────────────────────────────────────'
   if [[ "$A_TURN" == 'selfHostedCoturn' ]]; then
     printf 'COTURN_SHARED_SECRET=%s\n' "$S_COTURN_SECRET"
-    env_comment '# turn.provider is "selfHostedCoturn". NOTE: that adapter is still a stub'
-    env_comment '# (lib/connectors/turn/selfHostedCoturn.ts) and this compose file has no'
-    env_comment '# coturn service, so /api/health reports turn degraded until both exist.'
-    env_comment '# To use a coturn you run yourself TODAY, set these three instead and'
-    env_comment "# api/turn-credentials.ts's static override will serve them:"
-    env_comment '#   TURN_URL=turn:your-host:3478'
-    env_comment '#   TURN_USERNAME=...'
-    env_comment '#   TURN_CREDENTIAL=...'
+    env_comment '# turn.provider is "selfHostedCoturn": the app mints 24 h credentials from'
+    env_comment '# this secret (TURN REST API). coturn must run with use-auth-secret and'
+    env_comment '# static-auth-secret=<this value>. /api/health probes coturn over STUN.'
   else
     if [[ -n "$A_TURN_TOKEN_ID" ]]; then
       printf 'CF_TURN_TOKEN_ID=%s\n' "$A_TURN_TOKEN_ID"

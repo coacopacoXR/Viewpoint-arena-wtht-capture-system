@@ -337,7 +337,12 @@ export function buildChecks(config: ViewpointConfig, deps: HealthDeps): Check[] 
       run: () => callHealthCheck(adapter),
     });
   } else if (config.turn.provider === 'selfHostedCoturn') {
-    const adapter = new SelfHostedCoturnAdapter();
+    const adapter = new SelfHostedCoturnAdapter({
+      host: config.turn.host,
+      port: config.turn.port,
+      sharedSecretEnv: config.turn.sharedSecretEnv,
+      env,
+    });
     checks.push({
       slot: 'turn',
       provider: 'selfHostedCoturn',

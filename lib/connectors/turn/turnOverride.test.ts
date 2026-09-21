@@ -65,3 +65,39 @@ describe('TURN static override', () => {
     expect(state.body).toEqual({ error: 'turn_not_configured' });
   });
 });
+
+describe('TURN via self-hosted coturn', () => {
+  const COTURN_CONFIG = {
+    turn: { provider: 'selfHostedCoturn', host: 'turn.example.org', port: 3478, sharedSecretEnv: 'COTURN_SECRET' },
+  };
+
+  it('mints a coturn REST credential when the config selects selfHostedCoturn', async () => {
+    delete process.env.TURN_URL;
+    process.env.COTURN_SECRET = 'coturn-shared-secret';
+    vi.doMock('../../config/loadConfig.ts', () => ({ loadConfig: async () => COTURN_CONFIG }));
+
+    const { default: handler } = await import('../../../api/turn-credentials.ts');
+    const { res, state } = makeRes();
+    await handler({} as never, res as never);
+
+    expect(state.status).toBe(200);
+    const body = JSON.stringify(state.body);
+    expect(body).toContain('turn:turn.example.org:3478?transport=udp');
+    // A derived credential, never the secret or its variable name.
+    expect(body).not.toContain('coturn-shared-secret');
+    expect(body).not.toContain('COTURN_SECRET');
+  });
+
+  it('answers turn_not_configured when the coturn secret is missing', async () => {
+    delete process.env.TURN_URL;
+    delete process.env.COTURN_SECRET;
+    vi.doMock('../../config/loadConfig.ts', () => ({ loadConfig: async () => COTURN_CONFIG }));
+
+    const { default: handler } = await import('../../../api/turn-credentials.ts');
+    const { res, state } = makeRes();
+    await handler({} as never, res as never);
+
+    expect(state.status).toBe(500);
+    expect(state.body).toEqual({ error: 'turn_not_configured' });
+  });
+});

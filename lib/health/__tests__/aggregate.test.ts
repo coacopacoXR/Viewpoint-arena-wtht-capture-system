@@ -136,7 +136,7 @@ describe('aggregateHealth — failure isolation', () => {
     const report = await aggregateHealth(
       {
         ...BASE_CONFIG,
-        // The stub adapter, which reports not-implemented rather than throwing.
+        // coturn with no secret in the environment: degraded, not thrown.
         turn: {
           provider: 'selfHostedCoturn',
           host: 'turn.example',
@@ -151,7 +151,7 @@ describe('aggregateHealth — failure isolation', () => {
     expect(report.connectors.turn).toEqual({
       provider: 'selfHostedCoturn',
       status: 'degraded',
-      detail: HEALTH_DETAILS.notImplemented,
+      detail: HEALTH_DETAILS.notConfigured,
     });
     // The point of the ticket: the rest of the report survived.
     expect(report.connectors.capture?.status).toBe('ok');

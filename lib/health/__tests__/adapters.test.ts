@@ -58,7 +58,20 @@ const ADAPTERS: AdapterCase[] = [
         env: { CF_TURN_TOKEN_ID: 'token-id', CF_TURN_API_TOKEN: 'api-token' },
       }),
   },
-  { name: 'SelfHostedCoturnAdapter', make: () => new SelfHostedCoturnAdapter() },
+  {
+    name: 'SelfHostedCoturnAdapter',
+    make: () =>
+      new SelfHostedCoturnAdapter({
+        host: 'turn.example',
+        port: 3478,
+        sharedSecretEnv: 'COTURN_SHARED_SECRET',
+        env: { COTURN_SHARED_SECRET: 'coturn-secret' },
+        // Unreachable, like every network in this suite.
+        probe: async () => {
+          throw new Error('network down');
+        },
+      }),
+  },
   { name: 'MockTurnAdapter', make: () => new MockTurnAdapter() },
   { name: 'TeamsNotifyAdapter', make: () => new TeamsNotifyAdapter() },
   { name: 'MockNotificationSink', make: () => new MockNotificationSink() },
@@ -227,16 +240,32 @@ describe('specific adapter behaviour', () => {
     expect(JSON.stringify(result)).not.toContain('CF_TURN_API_TOKEN');
   });
 
-  it('SelfHostedCoturnAdapter reports its stub state instead of throwing', async () => {
-    // getIceServers() throws. If healthCheck delegated to it, a deployment that
-    // chose this provider would surface an exception rather than a degraded
-    // connector.
-    const adapter = new SelfHostedCoturnAdapter();
-    await expect(adapter.getIceServers()).rejects.toThrow(/not implemented/);
-    await expect(adapter.healthCheck()).resolves.toEqual({
-      ok: false,
-      detail: HEALTH_DETAILS.notImplemented,
+  it('SelfHostedCoturnAdapter reports a missing secret without probing or naming it', async () => {
+    const probe = vi.fn(async () => true);
+    const adapter = new SelfHostedCoturnAdapter({
+      host: 'turn.example',
+      port: 3478,
+      sharedSecretEnv: 'COTURN_SHARED_SECRET',
+      env: {},
+      probe,
     });
+    const result = await adapter.healthCheck();
+    expect(result).toEqual({ ok: false, detail: HEALTH_DETAILS.notConfigured });
+    expect(probe).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('COTURN_SHARED_SECRET');
+  });
+
+  it('SelfHostedCoturnAdapter is ok only when coturn answers the STUN probe', async () => {
+    const make = (up: boolean) =>
+      new SelfHostedCoturnAdapter({
+        host: 'turn.example',
+        port: 3478,
+        sharedSecretEnv: 'S',
+        env: { S: 'x' },
+        probe: async () => up,
+      });
+    await expect(make(true).healthCheck()).resolves.toEqual({ ok: true, detail: HEALTH_DETAILS.reachable });
+    await expect(make(false).healthCheck()).resolves.toEqual({ ok: false, detail: HEALTH_DETAILS.unreachable });
   });
 
   it('OllamaDirectCaptureProvider accepts an untagged configured model', async () => {
