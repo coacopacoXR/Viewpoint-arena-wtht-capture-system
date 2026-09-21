@@ -117,7 +117,7 @@ describe('OnshapeBrowser without the launch props', () => {
 
     // A failed import returns to the picker with the reason, as before.
     expect(await screen.findByText(/Onshape import failed \(500\)/)).toBeInTheDocument();
-    expect(screen.getByText('Main Assembly')).toBeInTheDocument();
+    expect(await screen.findByText('Main Assembly')).toBeInTheDocument();
   });
 
   it('explains a document that has no default workspace', async () => {
@@ -183,7 +183,7 @@ describe('OnshapeBrowser in launch mode', () => {
     );
 
     expect(await screen.findByText(/not in this document/i)).toBeInTheDocument();
-    expect(screen.getByText('Something Else')).toBeInTheDocument();
+    expect(await screen.findByText('Something Else')).toBeInTheDocument();
     expect(started(urls)).toBeUndefined();
   });
 
@@ -205,7 +205,7 @@ describe('OnshapeBrowser in launch mode', () => {
     );
 
     expect(await screen.findByText(/pick an assembly or part studio/i)).toBeInTheDocument();
-    expect(screen.getByText('Main Assembly')).toBeInTheDocument();
+    expect(await screen.findByText('Main Assembly')).toBeInTheDocument();
     expect(started(urls)).toBeUndefined();
   });
 
@@ -250,7 +250,9 @@ describe('OnshapeBrowser in launch mode', () => {
     expect(await screen.findByText(/did not name a workspace/i)).toBeInTheDocument();
     // The user is left somewhere useful: the document list, ready to search.
     expect(await screen.findByPlaceholderText(/search your documents/i)).toBeInTheDocument();
-    expect(screen.getByText('Other Document')).toBeInTheDocument();
+    // findBy, not getBy: the list loads asynchronously after the search box
+    // renders, so a synchronous query races it (failed on the slower CI runner).
+    expect(await screen.findByText('Other Document')).toBeInTheDocument();
   });
 
   it('still requires a session: a launch with no Onshape sign-in shows the auth step', async () => {
