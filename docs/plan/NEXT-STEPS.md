@@ -23,7 +23,9 @@ files in git history; removing them fully needs a history rewrite
 (`git filter-repo --path-glob '*.glb' --invert-paths`), as was done for commit
 attribution on 2026-09-17.
 
-## 2. Enforcement contact for the Code of Conduct
+## 2. Enforcement contact for the Code of Conduct — DONE 2026-09-21
+
+Set to fgarciarivera94@gmail.com.
 
 `CODE_OF_CONDUCT.md` line 66 reads `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`.
 The Contributor Covenant requires a real address for reporting. A placeholder

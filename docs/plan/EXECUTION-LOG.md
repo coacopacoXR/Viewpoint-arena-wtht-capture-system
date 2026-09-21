@@ -331,12 +331,6 @@ Actions** (run on `5c144b2`). Branch pushed to origin; nothing on `main`.
 - **Nothing in T4.4 has run end to end.** nginx has never parsed the new
   template (no Docker on this machine), and no real recording has gone
   browser -> capture-service.
-- **`CODE_OF_CONDUCT.md` line 66** still has
-  `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`. **User decision**, blocks going
-  public.
-- **No CI run has ever happened.** Every check was local. The first real
-  Actions run is where the gitleaks licence question gets answered, and where
-  the two Windows-skipped installer tests actually execute.
 - **The WebRTC change is unverified against a live call** (`30458db`). Given
   two ICE-related reverts in recent history, worth a manual two-browser test.
 - **capture-service has no CORS policy yet** and relies on the compose
@@ -393,7 +387,7 @@ is missing against the ticket's acceptance criteria — batch O was ~90% complet
 and needed one duplicated const removed plus the one test the run never reached.
 
 **Highest-value work remaining**, roughly in order:
-1. **T0.1** — decided (cube at release). Plus the Code of Conduct email.
+1. **T0.1** — decided (cube at release). Code of Conduct email set 2026-09-21.
 2. **CI** — done, green. Housekeeping: actions/checkout@v4 and setup-node@v4
    run on the deprecated Node 20 runtime (warning only); bump to current.
 3. **A real end-to-end capture run** under docker compose (T4.4 is untested
