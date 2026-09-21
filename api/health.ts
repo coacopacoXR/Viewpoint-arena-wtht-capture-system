@@ -24,21 +24,11 @@
 // because "which one is down" is the entire value of the response.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { loadConfig } from '../lib/config/loadConfig.ts';
+import { defaultConfigPath, loadConfig } from '../lib/config/loadConfig.ts';
 import { aggregateHealth } from '../lib/health/aggregate.ts';
 
-// An absolute file URL, not loadConfig's './viewpoint.config.ts' default.
-//
-// A bare relative specifier in a dynamic import resolves against the IMPORTING
-// module — lib/config/loadConfig.ts — so the default looks for
-// lib/config/viewpoint.config.ts, which is not where the file lives. The config
-// sits at the deployment root next to package.json, which is process.cwd() both
-// under `vercel dev`/the Vercel runtime and in the self-hosted app container.
-const CONFIG_PATH = pathToFileURL(
-  resolve(process.cwd(), 'viewpoint.config.ts'),
-).href;
+// Explicit rather than defaulted so the path is visible at the call site.
+const CONFIG_PATH = defaultConfigPath();
 
 export async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {

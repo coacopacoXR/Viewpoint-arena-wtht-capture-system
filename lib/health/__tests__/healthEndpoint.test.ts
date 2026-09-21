@@ -15,7 +15,9 @@ import type { Mock } from 'vitest';
 import type { ViewpointConfig } from '../../config/schema.ts';
 import type { HealthReport } from '../types.ts';
 
-vi.mock('../../config/loadConfig.ts', () => ({
+vi.mock('../../config/loadConfig.ts', async (importOriginal) => ({
+  // Keeps the real defaultConfigPath: the path is what one test asserts on.
+  ...(await importOriginal<typeof import('../../config/loadConfig.ts')>()),
   loadConfig: vi.fn(),
 }));
 
@@ -208,13 +210,12 @@ describe('GET /api/health', () => {
     expect(captured.headers['cache-control']).toBe('no-store');
   });
 
-  it('loads the config by absolute path, not loadConfig’s relative default', async () => {
+  it('loads the config from the deployment root by absolute file URL', async () => {
     await call('GET');
 
-    // loadConfig's own default is './viewpoint.config.ts', which a dynamic
-    // import resolves against lib/config/ — not where the file lives. Without
-    // this, /api/health would report config_not_available on every deployment
-    // that is configured correctly.
+    // A relative specifier would resolve against lib/config/, not where the
+    // file lives, and /api/health would report config_not_available on every
+    // correctly configured deployment.
     const passed = String(loadConfig.mock.calls[0][0]);
     expect(passed).toMatch(/^file:\/\//);
     expect(passed).toContain('viewpoint.config.ts');
