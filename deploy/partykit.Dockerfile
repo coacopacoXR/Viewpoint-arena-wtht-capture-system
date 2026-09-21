@@ -33,6 +33,9 @@ ENV PARTYKIT_PORT=1999 \
 
 EXPOSE 1999
 
-# --no-open: there is no browser in a container, and without it the dev server
-# tries to launch one and logs a failure on every start.
-CMD ["npx", "--no-install", "partykit", "dev", "--host", "0.0.0.0", "--port", "1999", "--no-open"]
+# `partykit dev` has NO --host and NO --no-open option (checked against
+# `partykit dev --help` for the pinned 0.0.115). Passing either makes the CLI
+# exit with "unknown option" before listening, so the container could never
+# start. It already binds 0.0.0.0 by default (verified: LISTENING 0.0.0.0:1999).
+# --no-hotkeys: there is no TTY in a container for its keyboard shortcuts.
+CMD ["npx", "--no-install", "partykit", "dev", "--port", "1999", "--no-hotkeys"]

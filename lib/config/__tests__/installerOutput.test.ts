@@ -71,11 +71,19 @@ describe.skipIf(!RUNS_INSTALLER)('install.sh --defaults output', () => {
       );
       const env = readFileSync(join(dir, '.env'), 'utf8');
       expect(env.length).toBeGreaterThan(0);
-      // Every VITE_-prefixed name it writes must be one the guard allows,
-      // otherwise the installer itself would plant a secret in the bundle.
+      // Every VITE_-prefixed name it writes is inlined into the browser bundle,
+      // so each one must be deliberately approved here, otherwise the installer
+      // itself could plant a secret in the bundle. The Supabase pair is the
+      // documented db exception; VITE_PARTYKIT_HOST is a public hostname the
+      // browser must know to open its WebSocket (see deploy/app.Dockerfile).
+      const PUBLIC_VITE_NAMES = [
+        'VITE_SUPABASE_URL',
+        'VITE_SUPABASE_ANON_KEY',
+        'VITE_PARTYKIT_HOST',
+      ];
       const viteNames = env.match(/^VITE_[A-Z0-9_]+/gm) ?? [];
       for (const name of viteNames) {
-        expect(['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY']).toContain(name);
+        expect(PUBLIC_VITE_NAMES).toContain(name);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -1,0 +1,12 @@
+# Deliberately secret-SHAPED fixtures in the /api/health no-leak tests
+# (edd21bf). Fake values: the tests plant them and assert they never appear
+# in a response. Listed by fingerprint, not by path, so a NEW secret-shaped
+# string anywhere, including these test files, is still flagged.
+edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/sanitize.test.ts:generic-api-key:16
+edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/sanitize.test.ts:generic-api-key:20
+edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/adapters.test.ts:generic-api-key:74
+edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/adapters.test.ts:generic-api-key:77
+edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/aggregate.test.ts:generic-api-key:235
+edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/aggregate.test.ts:generic-api-key:243
+edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/aggregate.test.ts:generic-api-key:245
+edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/aggregate.test.ts:generic-api-key:246
