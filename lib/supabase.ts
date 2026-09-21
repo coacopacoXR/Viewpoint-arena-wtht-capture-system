@@ -9,10 +9,23 @@ export const supabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 // createClient THROWS on an empty URL, and this module is imported by the
 // lobby, so an unconfigured build used to be a blank white page — including
 // the default self-hosted install, which leaves VITE_SUPABASE_URL as a TODO.
-// Unconfigured, the client points at a reserved .invalid host (RFC 6761, never
-// resolves): every query fails fast as an ordinary `{ error }` result, which
-// callers already handle as a network failure, and the rest of the app works.
+// Unconfigured, the client gets a placeholder URL on the reserved .invalid TLD
+// (RFC 6761) and a fetch that never touches the network: every query resolves
+// at once as an ordinary `{ error }` result, which callers already handle.
+//
+// The fetch answers 501 rather than throwing on purpose. postgrest-js retries
+// a thrown network error (1s + 2s + 4s of backoff), which kept the review setup
+// page on "Loading draft…" for ~8 seconds; it does not retry a 501.
 const UNCONFIGURED_URL = 'https://supabase-not-configured.invalid';
+
+const notConfiguredFetch: typeof fetch = async () =>
+  new Response(
+    JSON.stringify({
+      code: 'not_configured',
+      message: 'Supabase is not configured for this deployment',
+    }),
+    { status: 501, headers: { 'Content-Type': 'application/json' } },
+  );
 
 if (!supabaseConfigured) {
   console.warn(
@@ -21,10 +34,11 @@ if (!supabaseConfigured) {
   );
 }
 
-export const supabase = createClient(
-  supabaseConfigured ? (supabaseUrl as string) : UNCONFIGURED_URL,
-  supabaseConfigured ? (supabaseAnonKey as string) : 'not-configured',
-);
+export const supabase = supabaseConfigured
+  ? createClient(supabaseUrl as string, supabaseAnonKey as string)
+  : createClient(UNCONFIGURED_URL, 'not-configured', {
+      global: { fetch: notConfiguredFetch },
+    });
 
 export type TrackerSession = {
   id: string;

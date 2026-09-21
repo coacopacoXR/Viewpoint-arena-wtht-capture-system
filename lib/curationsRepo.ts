@@ -11,7 +11,7 @@
 // to 'imported' but the file is gone, so ImportedModel renders nothing).
 // Consider also writing back the previous preset on strip.
 
-import { supabase } from './supabase';
+import { supabase, supabaseConfigured } from './supabase';
 import type { ReviewDraft } from './reviewSetupStore';
 
 export interface CurationSummary {
@@ -159,6 +159,9 @@ export function trackCurationPresence(
   self: Omit<CurationPresence, 'joinedAt'>,
   onSync: (peers: CurationPresence[]) => void,
 ): () => void {
+  // No database, no realtime server: don't open a WebSocket that can only
+  // fail and reconnect forever.
+  if (!supabaseConfigured) return () => {};
   const channel = supabase.channel(`curation-presence:${id}`, {
     config: { presence: { key: self.userId } },
   });
@@ -197,6 +200,10 @@ export function subscribeCuration(
   onChange: (draft: ReviewDraft) => void,
   onStatus?: (status: SyncStatus) => void,
 ): () => void {
+  if (!supabaseConfigured) {
+    onStatus?.('offline');
+    return () => {};
+  }
   let cancelled = false;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let realtimeOk = false;
