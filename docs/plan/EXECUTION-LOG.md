@@ -285,6 +285,38 @@ Qwen quota had reset; delegation resumed. A stray `cla` typed at the top of
     query for an async-loaded list); failed only on the slower runner.
   Final run on `5c144b2`: all 9 jobs green, e2e included.
 
+- **"Make it work well" pass (user asked 2026-09-21; wants to install via Docker
+  and test it themselves).** Driven by running the real app, not by tests:
+  - `785a031` — **api/* runs outside Vercel.** `server/vercelShim.ts` gives the
+    handlers Vercel's req/res helpers; `npm run dev` now serves /api/* (it used
+    to return index.html for every API call). **Supabase unconfigured no longer
+    stalls**: a local 501 fetch avoids postgrest-js's ~8 s retry backoff.
+    **No runtime CDNs**: Tailwind built in (was the Play CDN, unstyled offline),
+    fonts bundled; screenshots pixel-identical before/after.
+  - `8dd05b3` — **`api` service in docker-compose**; nginx proxies /api/* to it
+    instead of answering 501. The self-hosted stack had NO working /api at all.
+  - `d6f209d` — `.gitattributes` forces LF (a Windows checkout would have put
+    CRLF in install.sh and the Dockerfiles).
+  - **First real end-to-end capture** (spoken WAV -> Whisper -> Ollama):
+    `b95bd9d` due dates were wrong (model guessed the year, then the day);
+    fixed with today's date + a 14-day calendar in the prompt, 3/3 correct.
+    `a8a899c` **browser recordings were 0 bytes** whenever the host was not in
+    the call's audio (mixer had no input): the recorder now opens its own mic;
+    and Ollama is sent the exact JSON Schema (the model had flattened fields
+    and the strict parser refused the whole meeting). `2a026ab` the mock
+    simulation kept inventing cards next to real ones; now runs only when
+    capture is 'mock'. `3fdd644` default model qwen2.5:7b (head-to-head vs
+    deepseek-r1:7b on the same recording: 3/3 complete vs never an assignee
+    or date, ~20 s vs ~44 s). Final browser run: "3 insights added".
+  - `0db1d08` — **coturn implemented** (TURN REST credentials, real STUN probe
+    for /api/health); it was a stub that threw.
+  - `b64960d` — front proxy rate-limits /api/capture/ (30/min/client) and no
+    longer cuts long captures at 300 s.
+  - **Found, not code:** the Supabase project in the user's `.env.local`
+    (`ckdtbqtuqvurkzcderms.supabase.co`) **no longer exists** (NXDOMAIN), so
+    saved reviews/tracker cannot work anywhere that uses it.
+  - CI green on everything through `3fdd644`.
+
 ### Resolved: Qwen token plan quota
 
 The weekly quota exhausted during batch O reset on 2026-09-14; batches P and
@@ -303,16 +335,67 @@ or have Claude implement directly at higher credit cost.
 - Nothing running.
 
 ### Repo state
-Phases 0-5 complete except T0.1, T4.7, T4.8. Phase 6 not started.
-789 JS tests (2 skipped on Windows), 421 pytest tests. lint 0 errors / 101
-warnings, typecheck, check:env, build, e2e all green, **and green in GitHub
-Actions** (run on `5c144b2`). Branch pushed to origin; nothing on `main`.
+Phases 0-5 complete except T0.1, T4.7, T4.8. Phase 6 not started. 826 JS tests,
+425 pytest. CI green. Branch pushed; nothing on `main`. **The Docker stack has
+never been started**: Docker was installed 2026-09-21 but needs a reboot.
 
 ### Not started
 - **T0.1 (asset swap)** — user decided 2026-09-17: keep the branded models for
   now; at public release replace them with a cube and strip the originals from
   history. See `NEXT-STEPS.md` §1.
 - T4.7 (live streaming), T4.8 (n8n, optional), Phase 6 (docs and polish).
+
+
+## NEXT SESSION: bring up and verify the Docker install
+
+The user wants to install the self-hosted stack and test it themselves. Docker
+Desktop is installed; the machine needed a reboot first. Everything below is
+written but UNTESTED in Docker. Do it in this order; each step names what
+"done" means. Do not hand the user an install that has not been run end to end.
+
+1. **Sanity.** `docker version`, `wsl -l -v` (WSL2 running), GPU visible to
+   Docker if GPU capture is wanted. install.sh refuses a /mnt/c checkout
+   (slow): clone into the WSL home, or run compose directly from Windows.
+2. **Validate configs before starting anything.** `docker compose config`;
+   `nginx -t` on BOTH `deploy/nginx/proxy.conf` (new `limit_req_zone`, capture
+   block) and the rendered `app.conf` template (`/api/` proxy, envsubst). None
+   of these edits has ever been parsed by a real nginx.
+3. **Base stack.** `./install.sh --defaults`, then `docker compose up -d`.
+   Done = every container healthy; `https://localhost/` shows the lobby;
+   `/api/public-config` returns JSON (proves the new `api` service + nginx
+   proxy); `/api/health` lists connectors; partykit starts (its CMD flags were
+   fixed in d3a6973 but never run in a container) and two tabs see each other.
+4. **Database layer. NOT BUILT YET, the biggest remaining gap.** Plain postgres
+   cannot serve supabase-js, so saved reviews, the tracker and "who is
+   editing" do not work self-hosted. Plan: replace `postgres:16` with
+   `supabase/postgres`, add `postgrest/postgrest` (tables) and
+   `supabase/realtime` (presence + live sync; the app already falls back to
+   5 s polling without it); nginx-proxy routes `/rest/v1/` to postgrest and
+   `/realtime/v1/` to realtime (WebSocket; realtime derives its tenant from the
+   Host header, e.g. `realtime-dev`); install.sh generates JWT_SECRET and an
+   HS256 anon key (role=anon) and writes VITE_SUPABASE_URL=https://<host> and
+   VITE_SUPABASE_ANON_KEY; apply docs/supabase-schema.sql at init (its
+   supabase_realtime DO block works on the supabase image). Iterate live: the
+   image's init-script order and role names must be checked, not assumed.
+   Done = create a review, reload, it is still there; tracker page loads.
+5. **Capture in Docker.** `--profile capture-local` (+ docker-compose.gpu.yml
+   for the GPU), `ollama pull qwen2.5:7b`, capture.provider 'local'. Re-run the
+   browser test (Playwright with `--use-file-for-fake-audio-capture=<wav>`,
+   espeak-ng for the WAV, manager panel opened via activeReviewStore) against
+   https://localhost. Done = "N insights added" through nginx, not the dev
+   server.
+6. **TURN (optional for one LAN).** Add a `coturn` service (profile) with
+   use-auth-secret / static-auth-secret=COTURN_SHARED_SECRET and a small relay
+   port range; the adapter is done and tested (0db1d08). Docker Desktop NAT
+   makes relay addresses tricky: verify with a real two-browser call.
+7. **Two-browser call.** WebRTC has never been verified live since 30458db.
+8. **Write the user's guide** (T6.2): prerequisites (Docker Desktop + WSL2,
+   optional NVIDIA), the exact commands, what to click to test each feature,
+   and how to reset. Walk it once exactly as written before handing it over.
+
+Known small issues, not blocking: "Enter XR" button overlaps "AR" in the room
+header (pre-existing); 101 lint warnings of type debt; T4.7 live transcript,
+T4.8 n8n and Phase 6 docs not started.
 
 ### Follow-ups
 - **`/api/capture/local` is open to anyone who can reach the app.** The
@@ -352,7 +435,7 @@ Read this file top to bottom first — it is the only place the findings,
 overrides and reasoning live. Then:
 
 ```bash
-git log --oneline -8          # 30 commits on planning/oss-enterprise-readiness
+git log --oneline -8          # ~45 commits on planning/oss-enterprise-readiness
 git status --short            # should be clean
 ```
 
@@ -363,7 +446,7 @@ was verified locally, never in CI:
 npm ci
 npm run lint                  # 0 errors, ~100 warnings (expected, tracked debt)
 npm run typecheck
-npm run test                  # 789 passing, 2 skipped on Windows
+npm run test                  # 826 passing, 2 skipped on Windows
 npm run check:env             # KNOWN map is EMPTY and must stay empty
 npm run build
 npm run test:e2e

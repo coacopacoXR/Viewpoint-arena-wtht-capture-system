@@ -58,6 +58,19 @@ Neither blocks anything, but both are unverified in a way tests cannot fix:
   four fixes (see EXECUTION-LOG). The gitleaks action ran without a licence
   prompt on this personal-account repo.
 
+## 5. Your Supabase project no longer exists
+
+`.env.local` points at `ckdtbqtuqvurkzcderms.supabase.co`, which does not
+resolve any more (probably deleted, or paused too long). Anywhere that uses it
+cannot save reviews or use the tracker. The Docker install will bring its own
+database; for Vercel you would need a new Supabase project.
+
+## 6. Next session: Docker
+
+Docker Desktop is installed and needs a reboot. The step-by-step plan for
+bringing the stack up, finishing the database layer, and writing your install
+guide is in EXECUTION-LOG.md under "NEXT SESSION".
+
 ---
 
 Everything else — what was built, what was overridden and why, what is still
