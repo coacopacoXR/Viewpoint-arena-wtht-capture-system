@@ -84,6 +84,12 @@
 #     gateway in front of it, so the db connector reports degraded until one is
 #     added or VITE_SUPABASE_URL points at a hosted project.
 #
+# ONE EXCEPTION: /api/capture/local is served, by nginx rather than by a Node
+# runtime. It needs no handler logic — it is `proxy_pass` to capture-service
+# plus the X-Capture-Token header (see deploy/nginx/app.conf) — and without it
+# the local capture flow (T4.4) would have no server-side path at all in the
+# deployment that is the whole point of running capture-service.
+#
 # These are tracked, not overlooked. Nothing above is a reason to expose
 # capture-service.
 
@@ -189,10 +195,22 @@ services:
     # No ports. Reached only through nginx-proxy.
     networks:
       - edge
-      # Attached so the app CAN reach capture-service and postgres when an API
-      # runtime exists. `internal: true` means that reachability never extends
-      # to the host.
+      # Attached so the app CAN reach capture-service and postgres.
+      # `internal: true` means that reachability never extends to the host.
       - backend
+    environment:
+      # Read by the nginx entrypoint's envsubst when it renders
+      # /etc/nginx/templates/default.conf.template, so the value lives in the
+      # container's environment and never in an image layer. It is what lets
+      # nginx add X-Capture-Token to /api/capture/local: the browser posts to a
+      # same-origin URL and never learns the secret, which is the only reason
+      # capture-service can keep publishing no port at all.
+      #
+      # `${VAR:-}`, not `${VAR:?}`: an empty value is valid and means
+      # authentication off (capture-service's own reading of an empty secret),
+      # and `proxy_set_header X-Capture-Token ""` makes nginx omit the header
+      # rather than send an empty one. install.sh always sets a real value.
+      CAPTURE_SHARED_SECRET: ${CAPTURE_SHARED_SECRET:-}
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1/nginx-health']
       interval: 30s

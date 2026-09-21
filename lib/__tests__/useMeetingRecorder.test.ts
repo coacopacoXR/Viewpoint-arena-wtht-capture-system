@@ -1,0 +1,499 @@
+// Tests for useMeetingRecorder (T4.4) — the browser recording half.
+//
+// jsdom has neither MediaRecorder nor an AudioContext, so everything here runs
+// against fakes: the pure helpers take their environment as an argument, and the
+// hook is exercised with both globals stubbed. That is the point of keeping the
+// mixing and the mime selection out of the hook body.
+//
+// What is pinned:
+//   * 'unsupported' is reported when either global is missing — a MediaRecorder
+//     with no AudioContext would record the host and nobody else;
+//   * the recorder is pointed at the MIXED stream, not at the microphone;
+//   * a participant who joins mid-recording is mixed in, and the recorder is not
+//     rebuilt (which would discard the meeting so far);
+//   * stopping closes the graph, and nothing here ever stops a WebRTC track.
+
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import {
+  RECORDING_MIME_CANDIDATES,
+  assembleRecording,
+  createMixingGraph,
+  isRecordingSupported,
+  selectRecordingMimeType,
+  useMeetingRecorder,
+  type MixingAudioContext,
+} from '../useMeetingRecorder';
+
+// ─── Fakes ──────────────────────────────────────────────────────────────────
+
+interface FakeNode {
+  readonly stream: MediaStream;
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+}
+
+interface FakeContextState {
+  sources: FakeNode[];
+  destination: FakeNode;
+  closeCalls: number;
+  closeRejectsWith: Error | null;
+}
+
+function fakeStream(label: string): MediaStream {
+  // Identity is all the mixer uses a stream for: it is the Map key, and it is
+  // what gets handed to createMediaStreamSource.
+  return { label } as unknown as MediaStream;
+}
+
+function fakeNode(stream: MediaStream): FakeNode {
+  return { stream, connect: vi.fn(), disconnect: vi.fn() };
+}
+
+function installFakeAudioContext() {
+  const state: FakeContextState = {
+    sources: [],
+    destination: fakeNode(fakeStream('mixed-output')),
+    closeCalls: 0,
+    closeRejectsWith: null,
+  };
+
+  class FakeAudioContext {
+    createMediaStreamSource(stream: MediaStream): MediaStreamAudioSourceNode {
+      const node = fakeNode(stream);
+      state.sources.push(node);
+      return node as unknown as MediaStreamAudioSourceNode;
+    }
+    createMediaStreamDestination(): MediaStreamAudioDestinationNode {
+      return state.destination as unknown as MediaStreamAudioDestinationNode;
+    }
+    close(): Promise<void> {
+      state.closeCalls += 1;
+      return state.closeRejectsWith === null
+        ? Promise.resolve()
+        : Promise.reject(state.closeRejectsWith);
+    }
+  }
+
+  return { FakeAudioContext, state };
+}
+
+function installedRecorderFakes() {
+  const instances: FakeMediaRecorder[] = [];
+
+  class FakeMediaRecorder {
+    static isTypeSupported = (mimeType: string): boolean =>
+      mimeType === 'audio/webm;codecs=opus';
+
+    state: 'inactive' | 'recording' = 'inactive';
+    ondataavailable: ((event: { data: Blob }) => void) | null = null;
+    onstop: (() => void) | null = null;
+    readonly stream: MediaStream;
+    readonly options: MediaRecorderOptions | undefined;
+    startCalls: number[] = [];
+
+    constructor(stream: MediaStream, options?: MediaRecorderOptions) {
+      this.stream = stream;
+      this.options = options;
+      instances.push(this);
+    }
+
+    start(timeslice?: number): void {
+      this.state = 'recording';
+      this.startCalls.push(timeslice ?? -1);
+    }
+
+    /** Flushes synchronously, which is what lets stop() be awaited in a test. */
+    stop(): void {
+      if (this.state === 'inactive') throw new Error('InvalidStateError');
+      this.state = 'inactive';
+      this.ondataavailable?.({
+        data: new Blob(['meeting-audio'], { type: 'audio/webm' }),
+      });
+      this.onstop?.();
+    }
+  }
+
+  return { FakeMediaRecorder, instances };
+}
+
+// ─── isRecordingSupported ───────────────────────────────────────────────────
+
+describe('isRecordingSupported', () => {
+  it('is true only when BOTH MediaRecorder and AudioContext exist', () => {
+    class Present {}
+    expect(isRecordingSupported({ MediaRecorder: Present, AudioContext: Present })).toBe(
+      true,
+    );
+  });
+
+  it('is false when AudioContext is missing', () => {
+    // A MediaRecorder on its own can only record one stream. Pointed at the
+    // microphone that is the host and none of the remote participants — most of
+    // a design review missing, silently. Better to say "unsupported".
+    class Present {}
+    expect(isRecordingSupported({ MediaRecorder: Present })).toBe(false);
+    expect(isRecordingSupported({ MediaRecorder: Present, AudioContext: undefined })).toBe(
+      false,
+    );
+  });
+
+  it('is false when MediaRecorder is missing', () => {
+    class Present {}
+    expect(isRecordingSupported({ AudioContext: Present })).toBe(false);
+  });
+
+  it('is false for an empty environment, which is what jsdom provides', () => {
+    expect(isRecordingSupported({})).toBe(false);
+    expect(isRecordingSupported()).toBe(false);
+  });
+
+  it('is false when the globals exist but are not constructors', () => {
+    expect(isRecordingSupported({ MediaRecorder: {}, AudioContext: 'nope' })).toBe(
+      false,
+    );
+  });
+});
+
+// ─── selectRecordingMimeType ────────────────────────────────────────────────
+
+describe('selectRecordingMimeType', () => {
+  it('pins the candidate list, best first', () => {
+    expect([...RECORDING_MIME_CANDIDATES]).toEqual([
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+    ]);
+  });
+
+  it('takes the first candidate the browser can encode', () => {
+    expect(selectRecordingMimeType(() => true)).toBe('audio/webm;codecs=opus');
+  });
+
+  it('falls through to plain WebM when the Opus variant is refused', () => {
+    expect(selectRecordingMimeType((t) => t === 'audio/webm')).toBe('audio/webm');
+  });
+
+  it('falls through to OGG/Opus for an older Firefox', () => {
+    expect(selectRecordingMimeType((t) => t === 'audio/ogg;codecs=opus')).toBe(
+      'audio/ogg;codecs=opus',
+    );
+  });
+
+  it('returns undefined when nothing is supported, so MediaRecorder picks its own default', () => {
+    const seen: string[] = [];
+    const result = selectRecordingMimeType((t) => {
+      seen.push(t);
+      return false;
+    });
+    expect(result).toBeUndefined();
+    // Every candidate was offered, in order, before giving up.
+    expect(seen).toEqual([...RECORDING_MIME_CANDIDATES]);
+  });
+});
+
+// ─── assembleRecording ──────────────────────────────────────────────────────
+
+describe('assembleRecording', () => {
+  it('concatenates every chunk into one Blob', () => {
+    const blob = assembleRecording(['aa', 'bbb', 'c'], 'audio/webm');
+    expect(blob.size).toBe(6);
+    expect(blob.type).toBe('audio/webm');
+  });
+
+  it('labels the Blob with the container the recorder actually used', () => {
+    expect(assembleRecording(['a'], 'audio/ogg;codecs=opus').type).toBe(
+      'audio/ogg;codecs=opus',
+    );
+  });
+
+  it('falls back to a WebM label when the recorder reported none', () => {
+    expect(assembleRecording(['a'], undefined).type).toBe('audio/webm');
+  });
+});
+
+// ─── createMixingGraph ──────────────────────────────────────────────────────
+
+describe('createMixingGraph', () => {
+  it('routes every stream into one shared destination', () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const local = fakeStream('local');
+    const remote = fakeStream('remote');
+
+    const graph = createMixingGraph(
+      new FakeAudioContext() as unknown as MixingAudioContext,
+      [local, remote],
+    );
+
+    expect(state.sources).toHaveLength(2);
+    expect(state.sources.map((s) => s.stream)).toEqual([local, remote]);
+    for (const source of state.sources) {
+      expect(source.connect).toHaveBeenCalledWith(state.destination);
+    }
+    // One mixed output, which is what the MediaRecorder is pointed at.
+    expect(graph.output).toBe(state.destination.stream);
+  });
+
+  it('starts with no sources when handed no streams', () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    createMixingGraph(new FakeAudioContext() as unknown as MixingAudioContext);
+    expect(state.sources).toHaveLength(0);
+  });
+
+  it('attach is idempotent, so a caller can re-attach on every render', () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const stream = fakeStream('remote');
+    const graph = createMixingGraph(
+      new FakeAudioContext() as unknown as MixingAudioContext,
+    );
+
+    graph.attach(stream);
+    graph.attach(stream);
+    graph.attach(stream);
+
+    expect(state.sources).toHaveLength(1);
+  });
+
+  it('mixes whole streams and never touches their tracks', () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const getAudioTracks = vi.fn();
+    const getVideoTracks = vi.fn();
+    const stream = { getAudioTracks, getVideoTracks } as unknown as MediaStream;
+
+    const graph = createMixingGraph(
+      new FakeAudioContext() as unknown as MixingAudioContext,
+    );
+    graph.attach(stream);
+
+    // A MediaStreamAudioSourceNode only ever reads the audio tracks, so
+    // "video tracks ignored" needs no filtering here — and filtering by hand
+    // would drop tracks added after the fact.
+    expect(getAudioTracks).not.toHaveBeenCalled();
+    expect(getVideoTracks).not.toHaveBeenCalled();
+  });
+
+  it('dispose disconnects every node and closes the context', () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const graph = createMixingGraph(
+      new FakeAudioContext() as unknown as MixingAudioContext,
+      [fakeStream('a'), fakeStream('b')],
+    );
+
+    graph.dispose();
+
+    expect(state.sources).toHaveLength(2);
+    for (const source of state.sources) {
+      expect(source.disconnect).toHaveBeenCalledTimes(1);
+    }
+    expect(state.closeCalls).toBe(1);
+  });
+
+  it('dispose is safe to call twice', () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const graph = createMixingGraph(
+      new FakeAudioContext() as unknown as MixingAudioContext,
+      [fakeStream('a')],
+    );
+
+    graph.dispose();
+    graph.dispose();
+
+    // The node list is the CONTEXT's record of what it built; the graph forgets
+    // its own nodes on the first dispose, so the second has nothing to
+    // disconnect and does not disconnect the same node twice.
+    expect(state.sources).toHaveLength(1);
+    expect(state.sources[0].disconnect).toHaveBeenCalledTimes(1);
+    expect(state.closeCalls).toBe(2);
+  });
+
+  it('swallows a rejection from closing an already-closed context', async () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    state.closeRejectsWith = new Error('already closed');
+    const graph = createMixingGraph(
+      new FakeAudioContext() as unknown as MixingAudioContext,
+    );
+
+    // A double dispose is the normal path (stop(), then the unmount cleanup), so
+    // it must not surface as an unhandled rejection.
+    expect(() => graph.dispose()).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+});
+
+// ─── The hook ───────────────────────────────────────────────────────────────
+
+describe('useMeetingRecorder', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function renderRecorder(localStream: MediaStream | null, remoteStreams: Map<string, MediaStream>) {
+    return renderHook(
+      ({ local, remote }: { local: MediaStream | null; remote: Map<string, MediaStream> }) =>
+        useMeetingRecorder({ localStream: local, remoteStreams: remote }),
+      { initialProps: { local: localStream, remote: remoteStreams } },
+    );
+  }
+
+  it("reports 'unsupported' when the browser cannot record", () => {
+    vi.stubGlobal('MediaRecorder', undefined);
+    vi.stubGlobal('AudioContext', undefined);
+
+    const { result } = renderRecorder(null, new Map());
+
+    expect(result.current.state).toBe('unsupported');
+  });
+
+  it('start() does nothing when unsupported, so no half-recording is promised', () => {
+    vi.stubGlobal('MediaRecorder', undefined);
+    vi.stubGlobal('AudioContext', undefined);
+
+    const { result } = renderRecorder(null, new Map());
+
+    act(() => {
+      result.current.start();
+    });
+
+    expect(result.current.state).toBe('unsupported');
+  });
+
+  it('stop() rejects when nothing was recording rather than hanging', async () => {
+    vi.stubGlobal('MediaRecorder', undefined);
+    vi.stubGlobal('AudioContext', undefined);
+
+    const { result } = renderRecorder(null, new Map());
+
+    await expect(result.current.stop()).rejects.toThrow(
+      /no recording in progress/,
+    );
+  });
+
+  it('records the MIXED stream and hands back one Blob on stop', async () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const { FakeMediaRecorder, instances } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+
+    const local = fakeStream('local');
+    const remote = fakeStream('remote');
+    const { result } = renderRecorder(local, new Map([['peer-1', remote]]));
+
+    expect(result.current.state).toBe('idle');
+
+    act(() => {
+      result.current.start();
+    });
+
+    expect(result.current.state).toBe('recording');
+    expect(instances).toHaveLength(1);
+    // The whole point of the mixer: the recorder sees one stream containing
+    // everybody, not the microphone alone.
+    expect(instances[0].stream).toBe(state.destination.stream);
+    expect(instances[0].options?.mimeType).toBe('audio/webm;codecs=opus');
+    expect(state.sources.map((s) => s.stream)).toEqual([local, remote]);
+    // Chunked rather than one buffer at the end.
+    expect(instances[0].startCalls[0]).toBeGreaterThan(0);
+
+    let blob: Blob | undefined;
+    await act(async () => {
+      blob = await result.current.stop();
+    });
+
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob?.type).toBe('audio/webm;codecs=opus');
+    expect(blob?.size).toBeGreaterThan(0);
+    expect(result.current.state).toBe('idle');
+    // The graph is torn down, and the context closed with it.
+    expect(state.closeCalls).toBe(1);
+    for (const source of state.sources) {
+      expect(source.disconnect).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('mixes in a participant who joins after recording started', () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const { FakeMediaRecorder, instances } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+
+    const local = fakeStream('local');
+    const latecomer = fakeStream('latecomer');
+    const { result, rerender } = renderRecorder(local, new Map());
+
+    act(() => {
+      result.current.start();
+    });
+    expect(state.sources).toHaveLength(1);
+
+    // useWebRTC replaces the Map (not its streams) when a peer joins.
+    rerender({ local, remote: new Map([['peer-2', latecomer]]) });
+
+    expect(state.sources.map((s) => s.stream)).toEqual([local, latecomer]);
+    // Crucially, the recorder was NOT rebuilt: everything already recorded
+    // would have been thrown away.
+    expect(instances).toHaveLength(1);
+    expect(result.current.state).toBe('recording');
+  });
+
+  it('never stops the WebRTC tracks it was given', async () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+
+    const stopTrack = vi.fn();
+    const local = {
+      getAudioTracks: () => [{ kind: 'audio', stop: stopTrack }],
+    } as unknown as MediaStream;
+    const { result, unmount } = renderRecorder(local, new Map());
+
+    act(() => {
+      result.current.start();
+    });
+    await act(async () => {
+      await result.current.stop();
+    });
+    unmount();
+
+    // These streams belong to useWebRTC. Navigating away from the manager panel
+    // or ending a summary must not mute anybody or end the call.
+    expect(stopTrack).not.toHaveBeenCalled();
+  });
+
+  it('tears the recorder down on unmount while recording', () => {
+    const { FakeAudioContext, state } = installFakeAudioContext();
+    const { FakeMediaRecorder, instances } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+
+    const { result, unmount } = renderRecorder(fakeStream('local'), new Map());
+
+    act(() => {
+      result.current.start();
+    });
+    expect(instances[0].state).toBe('recording');
+
+    unmount();
+
+    expect(instances[0].state).toBe('inactive');
+    expect(state.closeCalls).toBe(1);
+  });
+
+  it('returns stable start and stop callbacks', () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+
+    const local = fakeStream('local');
+    const { result, rerender } = renderRecorder(local, new Map());
+    const firstStart = result.current.start;
+    const firstStop = result.current.stop;
+
+    rerender({ local, remote: new Map([['peer-1', fakeStream('remote')]]) });
+
+    expect(result.current.start).toBe(firstStart);
+    expect(result.current.stop).toBe(firstStop);
+  });
+});

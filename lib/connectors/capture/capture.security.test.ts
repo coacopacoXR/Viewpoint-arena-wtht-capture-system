@@ -23,10 +23,18 @@ const BROWSER_MODULES = [
   'lib/connectors/capture/openai.ts',
   'lib/connectors/capture/anthropic.ts',
   'lib/connectors/capture/ollamaDirect.ts',
+  // T4.4: the recording provider. Same rule, different secret — the browser must
+  // never hold capture-service's shared token, so this module may not read an env
+  // var or set an auth header either.
+  'lib/connectors/capture/local.ts',
+  'lib/useMeetingRecorder.ts',
 ];
 
 /** The one module allowed to hold the key. */
 const SERVER_MODULE = 'api/capture/extract.ts';
+
+/** The module allowed to hold capture-service's shared secret (T4.4). */
+const LOCAL_SERVER_MODULE = 'api/capture/local.ts';
 
 function read(relativePath: string): string {
   return readFileSync(join(__dirname, '..', '..', '..', relativePath), 'utf8');
@@ -133,6 +141,45 @@ describe('capture credential isolation — the server module', () => {
 
   it('redacts the key before anything is logged', () => {
     const source = read(SERVER_MODULE);
+    expect(source).toMatch(/redact\(/);
+    expect(source).toContain('<redacted>');
+  });
+});
+
+describe('capture credential isolation — the local-capture server module', () => {
+  it('reads the shared secret from process.env, which is where it belongs', () => {
+    const source = code(read(LOCAL_SERVER_MODULE));
+    expect(source).toMatch(/process\.env\[/);
+    // Via the shared constant, so the name stays pinned in one place and
+    // capture-service's parity test still covers it.
+    expect(source).toContain('CAPTURE_SHARED_SECRET_ENV');
+  });
+
+  it('sends the secret only in an upstream request header', () => {
+    const source = code(read(LOCAL_SERVER_MODULE));
+    expect(source).toContain('headers[CAPTURE_AUTH_HEADER] = secret');
+    // And only when one is configured: an empty header would be rejected as a
+    // bad token rather than read as "authentication off".
+    expect(source).toMatch(/if \(secret\)/);
+  });
+
+  it('never interpolates the secret, the serviceUrl or upstream text into a response', () => {
+    const source = code(read(LOCAL_SERVER_MODULE));
+    const responses = source.match(/\bres\s*\.[^;]*;/g) ?? [];
+    expect(responses.length).toBeGreaterThan(4);
+    for (const statement of responses) {
+      expect(statement).not.toMatch(/\bsecret\b/);
+      expect(statement).not.toMatch(/serviceUrl/);
+      expect(statement).not.toMatch(/CAPTURE_SHARED_SECRET/);
+      // The raw upstream body, which can quote the request, and therefore the
+      // meeting. `code` is allowed because it passed SAFE_UPSTREAM_CODE.
+      expect(statement).not.toMatch(/\btext\b/);
+      expect(statement).not.toMatch(/\.message/);
+    }
+  });
+
+  it('redacts the secret and the internal URL before anything is logged', () => {
+    const source = read(LOCAL_SERVER_MODULE);
     expect(source).toMatch(/redact\(/);
     expect(source).toContain('<redacted>');
   });

@@ -1,6 +1,6 @@
 // Shared CaptureProvider contract test suite.
 //
-// CaptureProvider has two capabilities (see types.ts), so there are two
+// CaptureProvider has three capabilities (see types.ts), so there are three
 // runners. Any implementation — ours or a corp's custom adapter — is verified
 // by handing a factory to the runner for the capability it provides:
 //
@@ -8,12 +8,15 @@
 //                                        (generateDialogue / generateInsightDetails)
 //   runTranscriptCaptureContractTests()  the TRANSCRIPT capability
 //                                        (extractInsights)
+//   runRecordingCaptureContractTests()   the RECORDING capability
+//                                        (captureRecording)
 //
-// A provider that offers both runs through both.
+// A provider that offers more than one runs through each of them.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type {
     DialogueOutput,
+    RecordingCaptureProvider,
     SimulationCaptureProvider,
     SlideContext,
     TranscriptCaptureProvider,
@@ -23,6 +26,7 @@ import { MockCaptureProvider } from './mock';
 import { OpenAICaptureProvider } from './openai';
 import { AnthropicCaptureProvider } from './anthropic';
 import { OllamaDirectCaptureProvider } from './ollamaDirect';
+import { LocalCaptureProvider } from './local';
 import { CaptureExtractionError, parseInsightCards } from './parseInsightCards';
 
 const VALID_TEMPLATE_TYPES = new Set([
@@ -508,4 +512,347 @@ describe('TranscriptCaptureProvider contract suite', () => {
     runTranscriptCaptureContractTests('OpenAICaptureProvider', cloudHarness('openai'));
     runTranscriptCaptureContractTests('AnthropicCaptureProvider', cloudHarness('anthropic'));
     runTranscriptCaptureContractTests('OllamaDirectCaptureProvider', ollamaHarness());
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// The RECORDING capability (T4.4).
+//
+// A third flavour, not a variant of the transcript one: the caller hands over
+// AUDIO and the service transcribes internally, so there is no TranscriptChunk[]
+// to send and no model text to parse client-side. capture-service is the only
+// backend in this repo that works this way, and LocalCaptureProvider is its
+// browser client.
+//
+// What is guaranteed, transport-independently:
+//   1. the recording travels as multipart `audio` plus the SlideContext form
+//      fields, and nothing else is put on the wire;
+//   2. a well-formed answer becomes validated InsightCard[];
+//   3. "nothing to capture" resolves to [] rather than failing;
+//   4. a malformed answer REJECTS with a `reason` from
+//      CaptureParseFailureReason and never yields a partial list. Only the
+//      value-level reasons can occur here — 'prose' and 'truncated_json'
+//      describe unparseable model TEXT, and this transport carries JSON that
+//      the service already parsed;
+//   5. no credential goes on the wire, in a header, a URL or a body — and the
+//      provider does not even have an option that would accept one;
+//   6. an upstream failure names the status and a VALIDATED code, and echoes no
+//      other upstream text, which for this endpoint means no part of a meeting;
+//   7. an unreachable service produces an error that says more than the
+//      transport's own opaque message.
+// ═══════════════════════════════════════════════════════════════════════
+
+const CONTRACT_AUDIO = new Blob([new Uint8Array([26, 69, 223, 163])], {
+    type: 'audio/webm',
+});
+
+const CONTRACT_UPSTREAM_MARKER = 'UPSTREAM-BODY-MARKER-do-not-echo';
+
+export interface RecordingContractRequest {
+    url: string;
+    method: string;
+    headers: Record<string, string> | undefined;
+    /** The multipart body as the provider built it. */
+    form: FormData;
+}
+
+export interface RecordingContractSetup {
+    provider: RecordingCaptureProvider;
+    /** Arranges the transport so the service answers with this JSON body. */
+    serviceReplies(payload: unknown, status?: number): void;
+    /** Arranges a reply that is not JSON at all (a proxy, an SPA fallback). */
+    serviceRepliesNotJson(contentType: string, body: string, status?: number): void;
+    /** Arranges a transport-level failure: the service cannot be reached. */
+    transportFails(): void;
+    /** The last request the provider put on the wire. */
+    lastRequest(): RecordingContractRequest;
+}
+
+export function runRecordingCaptureContractTests(
+    name: string,
+    setup: () => RecordingContractSetup,
+): void {
+    describe(`RecordingCaptureProvider contract: ${name}`, () => {
+        let ctx: RecordingContractSetup;
+
+        beforeEach(() => {
+            ctx = setup();
+        });
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        async function expectReason(payload: unknown, reason: string): Promise<unknown> {
+            ctx.serviceReplies(payload);
+            let caught: unknown;
+            try {
+                await ctx.provider.captureRecording(CONTRACT_AUDIO, CONTRACT_CONTEXT);
+            } catch (err) {
+                caught = err;
+            }
+            expect(caught, `expected "${reason}"`).toBeInstanceOf(Error);
+            expect((caught as { reason?: string }).reason).toBe(reason);
+            return caught;
+        }
+
+        it('captureRecording turns a complete recording into InsightCards', async () => {
+            ctx.serviceReplies({ cards: [CONTRACT_CARD] });
+
+            const cards = await ctx.provider.captureRecording(
+                CONTRACT_AUDIO,
+                CONTRACT_CONTEXT,
+            );
+
+            expect(cards).toHaveLength(1);
+            expect(cards[0].type).toBe('RISK');
+            expect(cards[0].title).toBe(CONTRACT_CARD.title);
+            expect(cards[0].details.priority).toBe('High');
+            expect(cards[0].details.status).toBe('Open');
+        });
+
+        it('mints id and timestamp rather than trusting the service', async () => {
+            ctx.serviceReplies({ cards: [CONTRACT_CARD] });
+
+            const cards = await ctx.provider.captureRecording(
+                CONTRACT_AUDIO,
+                CONTRACT_CONTEXT,
+            );
+
+            expect(typeof cards[0].id).toBe('string');
+            expect(cards[0].id.length).toBeGreaterThan(0);
+            expect(Number.isFinite(cards[0].timestamp)).toBe(true);
+        });
+
+        it('resolves to [] when nothing in the meeting was worth capturing', async () => {
+            ctx.serviceReplies({ cards: [] });
+
+            await expect(
+                ctx.provider.captureRecording(CONTRACT_AUDIO, CONTRACT_CONTEXT),
+            ).resolves.toEqual([]);
+        });
+
+        it('sends the recording as multipart audio plus the SlideContext fields', async () => {
+            ctx.serviceReplies({ cards: [] });
+
+            await ctx.provider.captureRecording(CONTRACT_AUDIO, CONTRACT_CONTEXT);
+
+            const request = ctx.lastRequest();
+            expect(request.method).toBe('POST');
+            expect(request.form).toBeInstanceOf(FormData);
+            expect(request.form.get('audio')).toBeInstanceOf(Blob);
+            expect(request.form.get('agendaIdx')).toBe(String(CONTRACT_CONTEXT.agendaIdx));
+            expect(request.form.get('slideTitle')).toBe(CONTRACT_CONTEXT.slideTitle);
+            expect(request.form.get('hoveredPartName')).toBe(
+                CONTRACT_CONTEXT.hoveredPartName,
+            );
+            // The one optional field this context omits must be absent, not the
+            // string "undefined": it would end up inside the extraction prompt.
+            expect(request.form.has('laserTargetPartName')).toBe(false);
+        });
+
+        it('MALFORMED: rejects a renamed envelope with reason "wrong_envelope"', async () => {
+            await expectReason({ insights: [CONTRACT_CARD] }, 'wrong_envelope');
+        });
+
+        it('MALFORMED: rejects extra fields with reason "extra_fields"', async () => {
+            await expectReason(
+                { cards: [{ ...CONTRACT_CARD, confidence: 0.87 }] },
+                'extra_fields',
+            );
+        });
+
+        it('MALFORMED: rejects an invalid enum with reason "invalid_card"', async () => {
+            await expectReason(
+                { cards: [{ ...CONTRACT_CARD, type: 'OBSERVATION' }] },
+                'invalid_card',
+            );
+        });
+
+        it('never returns a partial list when one card of several is invalid', async () => {
+            ctx.serviceReplies({
+                cards: [CONTRACT_CARD, { ...CONTRACT_CARD, type: 'NOT_A_TYPE' }],
+            });
+
+            let resolved: unknown = 'DID NOT REJECT';
+            try {
+                resolved = await ctx.provider.captureRecording(
+                    CONTRACT_AUDIO,
+                    CONTRACT_CONTEXT,
+                );
+            } catch {
+                resolved = 'rejected';
+            }
+
+            expect(resolved).toBe('rejected');
+        });
+
+        it('rejects a non-JSON 2xx instead of throwing a bare SyntaxError', async () => {
+            // What a static host does for an unknown /api path: the SPA fallback
+            // answers 200 text/html. Without an explicit content-type check the
+            // failure surfaces as a SyntaxError that looks like a client bug.
+            ctx.serviceRepliesNotJson(
+                'text/html',
+                `<!doctype html>${CONTRACT_UPSTREAM_MARKER}`,
+            );
+
+            let caught: unknown;
+            try {
+                await ctx.provider.captureRecording(CONTRACT_AUDIO, CONTRACT_CONTEXT);
+            } catch (err) {
+                caught = err;
+            }
+
+            expect(caught).toBeInstanceOf(Error);
+            const failure = caught as Error;
+            expect(failure.name).not.toBe('SyntaxError');
+            expect(failure.message.length).toBeGreaterThan(60);
+            expect(failure.message).not.toContain(CONTRACT_UPSTREAM_MARKER);
+        });
+
+        it('puts no credential on the wire', async () => {
+            ctx.serviceReplies({ cards: [CONTRACT_CARD] });
+
+            const cards = await ctx.provider.captureRecording(
+                CONTRACT_AUDIO,
+                CONTRACT_CONTEXT,
+            );
+            const request = ctx.lastRequest();
+
+            const headerNames = Object.keys(request.headers ?? {}).map((n) =>
+                n.toLowerCase(),
+            );
+            // The shared secret that guards capture-service is added by the
+            // server-side hop; a browser provider that sent it would have had
+            // to be given it first.
+            expect(headerNames).not.toContain('authorization');
+            expect(headerNames).not.toContain('x-capture-token');
+            expect(headerNames).not.toContain('x-api-key');
+            expect(request.url).not.toMatch(CONTRACT_CREDENTIAL_PATTERN);
+            // No query string: a secret in a URL lands in every access log.
+            expect(request.url).not.toContain('?');
+            expect(JSON.stringify(cards)).not.toMatch(CONTRACT_CREDENTIAL_PATTERN);
+        });
+
+        it('names the status and a validated code, and echoes no other upstream text', async () => {
+            ctx.serviceReplies(
+                { error: 'transcription_failed', detail: CONTRACT_UPSTREAM_MARKER },
+                500,
+            );
+
+            let caught: unknown;
+            try {
+                await ctx.provider.captureRecording(CONTRACT_AUDIO, CONTRACT_CONTEXT);
+            } catch (err) {
+                caught = err;
+            }
+
+            expect(caught).toBeInstanceOf(Error);
+            const failure = caught as Error;
+            expect(failure.message).toContain('500');
+            expect(failure.message).toContain('transcription_failed');
+            expect(failure.message).not.toContain(CONTRACT_UPSTREAM_MARKER);
+        });
+
+        it('drops an upstream code that is not machine-readable', async () => {
+            // A code is the one part of a failure that is safe to repeat, and
+            // only if it looks like one. Anything else — HTML, prose, a stack —
+            // can quote the request, which is a meeting recording.
+            ctx.serviceReplies(
+                { error: `<html>${CONTRACT_UPSTREAM_MARKER}</html>` },
+                502,
+            );
+
+            let caught: unknown;
+            try {
+                await ctx.provider.captureRecording(CONTRACT_AUDIO, CONTRACT_CONTEXT);
+            } catch (err) {
+                caught = err;
+            }
+
+            const failure = caught as Error;
+            expect(failure.message).toContain('502');
+            expect(failure.message).not.toContain(CONTRACT_UPSTREAM_MARKER);
+            expect(failure.message).not.toContain('<html>');
+        });
+
+        it('fails with more information than the transport did', async () => {
+            ctx.transportFails();
+
+            let caught: unknown;
+            try {
+                await ctx.provider.captureRecording(CONTRACT_AUDIO, CONTRACT_CONTEXT);
+            } catch (err) {
+                caught = err;
+            }
+
+            expect(caught, 'expected the provider to reject').toBeInstanceOf(Error);
+            const failure = caught as Error;
+            expect(failure.message).not.toContain('Failed to fetch');
+            expect(failure.message.length).toBeGreaterThan(60);
+            expect(failure.message).not.toMatch(CONTRACT_CREDENTIAL_PATTERN);
+        });
+    });
+}
+
+// ─── Harness ──────────────────────────────────────────────────────────
+
+/**
+ * LocalCaptureProvider goes through a same-origin proxy, so the harness
+ * simulates capture-service faithfully: the exact `{cards}` envelope on success
+ * and a `{error: code}` body on failure, both over the real fetch signature.
+ */
+function localRecordingHarness(): () => RecordingContractSetup {
+    return () => {
+        const requests: RecordingContractRequest[] = [];
+        let nextReply: () => Response = () => jsonResponse({ cards: [] });
+
+        const fetchFn = vi.fn(
+            async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+                requests.push({
+                    url: String(input),
+                    method: init?.method ?? 'GET',
+                    headers: init?.headers
+                        ? Object.fromEntries(new Headers(init.headers).entries())
+                        : undefined,
+                    form: init?.body as FormData,
+                });
+                return nextReply();
+            },
+        );
+
+        return {
+            // No `endpoint` override on purpose: the default must already be a
+            // same-origin relative URL, because an absolute one would mean the
+            // browser knows where capture-service lives.
+            provider: new LocalCaptureProvider({
+                fetchFn: fetchFn as unknown as typeof globalThis.fetch,
+            }),
+            serviceReplies(payload: unknown, status = 200): void {
+                nextReply = () => jsonResponse(payload, status);
+            },
+            serviceRepliesNotJson(
+                contentType: string,
+                body: string,
+                status = 200,
+            ): void {
+                nextReply = () =>
+                    new Response(body, {
+                        status,
+                        headers: { 'content-type': contentType },
+                    });
+            },
+            transportFails(): void {
+                nextReply = () => {
+                    throw new TypeError('Failed to fetch');
+                };
+            },
+            lastRequest(): RecordingContractRequest {
+                return requests[requests.length - 1];
+            },
+        };
+    };
+}
+
+describe('RecordingCaptureProvider contract suite', () => {
+    runRecordingCaptureContractTests('LocalCaptureProvider', localRecordingHarness());
 });

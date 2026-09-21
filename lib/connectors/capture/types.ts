@@ -61,9 +61,9 @@ export interface DialogueOutput {
 }
 
 /**
- * CaptureProvider — a capture backend, of either flavour.
+ * CaptureProvider — a capture backend, of any of three flavours.
  *
- * There are two genuinely different kinds of capture provider and they do not
+ * There are three genuinely different kinds of capture provider and they do not
  * share a single method:
  *
  *  1. SIMULATION-driven (`generateDialogue` + `generateInsightDetails`) —
@@ -71,21 +71,28 @@ export interface DialogueOutput {
  *     MockProvider does, extracted verbatim from DialogueEngine.tsx. It is
  *     synchronous because nothing leaves the process.
  *  2. TRANSCRIPT-driven (`extractInsights`) — turns a real, already-spoken
- *     meeting transcript into insight cards. This is what every real backend
- *     (OpenAI, Anthropic, Ollama, capture-service) does. It is async because
- *     it crosses a network.
+ *     meeting transcript into insight cards. This is what the text-in backends
+ *     (OpenAI, Anthropic, Ollama) do. It is async because it crosses a network.
+ *  3. RECORDING-driven (`captureRecording`) — takes the meeting's AUDIO and
+ *     returns insight cards, transcribing internally. This is what
+ *     capture-service does, and it is a flavour of its own rather than a
+ *     TranscriptCaptureProvider for one concrete reason: the caller has no
+ *     transcript to hand over. A provider that accepted `TranscriptChunk[]`
+ *     would be promising something capture-service cannot be given, and a
+ *     provider that accepted a Blob cannot be handed chunks.
  *
- * Neither flavour can implement the other honestly: a transcript provider has
- * no phrase library to invent dialogue from, and the simulation has no
- * transcript to read. Making both sets of methods OPTIONAL — and naming each
- * capability precisely with SimulationCaptureProvider / TranscriptCaptureProvider
- * below — is what lets one interface cover both without either side growing a
- * method it would have to stub or throw from.
+ * No flavour can implement another honestly: a transcript provider has no
+ * phrase library to invent dialogue from, the simulation has no transcript to
+ * read, and the recording provider has neither until it has transcribed.
+ * Making every capability OPTIONAL — and naming each one precisely with
+ * SimulationCaptureProvider / TranscriptCaptureProvider /
+ * RecordingCaptureProvider below — is what lets one interface cover all three
+ * without any side growing a method it would have to stub or throw from.
  *
  * Call sites must feature-detect before use:
- * `typeof provider.extractInsights === 'function'`. An object with none of the
- * three satisfies this type but fails the contract suite, which is where that
- * mistake gets caught.
+ * `typeof provider.extractInsights === 'function'`. An object with none of
+ * these capabilities satisfies this type but fails the contract suite, which is
+ * where that mistake gets caught.
  */
 export interface CaptureProvider {
   /**
@@ -141,10 +148,33 @@ export interface CaptureProvider {
   ): Promise<InsightCard[]>;
 
   /**
+   * Turn a complete meeting RECORDING plus the spatial context it was made in
+   * into insight cards. Audio in, cards out: transcription happens inside the
+   * backend, so the caller never has to produce a transcript first. Resolves to
+   * `[]` when nothing in the recording was worth capturing; rejects with a
+   * descriptive Error rather than returning partially-built cards.
+   *
+   * Batch mode only — one recording, one context, one answer. There is no live
+   * partial transcript here, because capture-service has no streaming route
+   * (that is T4.7).
+   *
+   * No implementation of this method may accept or return a credential. The
+   * shared secret that guards capture-service is added SERVER-SIDE — by
+   * api/capture/local.ts on Vercel, by the `app` container's nginx in the
+   * self-hosted stack — so a browser provider posts to a same-origin URL and
+   * holds nothing.
+   */
+  captureRecording?(
+    audio: Blob,
+    context: SlideContext,
+    options?: { signal?: AbortSignal },
+  ): Promise<InsightCard[]>;
+
+  /**
    * Is this connector usable right now? Called by GET /api/health
    * (docs/plan/05-observability-and-metrics.md §1).
    *
-   * Optional like the other two capabilities, and implemented by every
+   * Optional like the other capabilities, and implemented by every
    * provider in this repo — including MockCaptureProvider, which has nothing
    * to reach and says so. Must never reject, and must never run an extraction:
    * a health check that spends tokens or uploads audio is not a health check.
@@ -165,9 +195,21 @@ export type SimulationCaptureProvider = Required<
 
 /**
  * The transcript capability, stated precisely. OpenAICaptureProvider,
- * AnthropicCaptureProvider, OllamaDirectCaptureProvider and (in T4.4)
- * LocalCaptureProvider all satisfy this.
+ * AnthropicCaptureProvider and OllamaDirectCaptureProvider all satisfy this.
+ *
+ * LocalCaptureProvider deliberately does NOT: capture-service takes audio, not
+ * a transcript, so it is a RecordingCaptureProvider below. Listing it here
+ * would have promised a capability it cannot honour.
  */
 export type TranscriptCaptureProvider = Required<
   Pick<CaptureProvider, 'extractInsights'>
+>;
+
+/**
+ * The recording capability, stated precisely. LocalCaptureProvider (T4.4)
+ * satisfies this and nothing else — no phrase library to simulate with, and no
+ * transcript to extract from until the service has produced one internally.
+ */
+export type RecordingCaptureProvider = Required<
+  Pick<CaptureProvider, 'captureRecording'>
 >;

@@ -36,9 +36,35 @@ RUN npm run build
 # ── Stage 2: serve ──────────────────────────────────────────────────────────
 FROM nginx:alpine AS runtime
 
+# The config is an envsubst TEMPLATE, not a plain conf.d file, and the
+# distinction is a security property: ${CAPTURE_SHARED_SECRET} is substituted at
+# CONTAINER START from the environment docker-compose passes in, so the secret
+# never enters a layer. A value baked in at build time is readable by anyone who
+# can `docker history` the image — the same reason the VITE_ build args above
+# carry only client-safe values.
+#
+# NGINX_ENVSUBST_FILTER restricts substitution to CAPTURE_* names. Without it
+# envsubst would also eat nginx's own $uri, $host and $proxy_add_x_forwarded_for,
+# which are not environment variables and must survive into the served config.
+#
+# Declared here as well as passed by compose so the variable is always DEFINED:
+# envsubst only substitutes names it was given, and an unlisted ${...} would
+# reach nginx verbatim, where it is an unknown-variable start-up failure. Empty
+# is a valid value — capture-service treats an empty secret as authentication
+# off, and `proxy_set_header X-Capture-Token ""` makes nginx omit the header.
+ENV CAPTURE_SHARED_SECRET=""
+ENV NGINX_ENVSUBST_FILTER=^CAPTURE_
+
 # Replaces the stock welcome-page site. See deploy/nginx/app.conf for why /api/*
-# is handled explicitly instead of falling through to the SPA.
-COPY deploy/nginx/app.conf /etc/nginx/conf.d/default.conf
+# is handled explicitly instead of falling through to the SPA. The entrypoint
+# writes /etc/nginx/conf.d/default.conf from this template.
+COPY deploy/nginx/app.conf /etc/nginx/templates/default.conf.template
+
+# The base image ships its own /etc/nginx/conf.d/default.conf. The entrypoint
+# overwrites it with the substituted template, but removing it means a container
+# started with an entrypoint that skips template processing serves nothing
+# rather than the stock welcome page on :80.
+RUN rm -f /etc/nginx/conf.d/default.conf
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
