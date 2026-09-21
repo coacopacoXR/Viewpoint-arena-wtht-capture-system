@@ -209,11 +209,60 @@ and build all green.
   got to. Verified by hand first that `install.sh --defaults --configure-only`
   produces a config `configSchema.parse` accepts.
 
-## BLOCKED: Qwen token plan quota exhausted
+## Session 2026-09-21
 
-The ModelStudio token-plan weekly quota was exhausted during batch O.
-**It resets 2026-09-14 19:53 UTC.** Until then `qwen` returns
-`insufficient_quota` (429) and no delegated batch can run.
+Qwen quota had reset; delegation resumed. A stray `cla` typed at the top of
+`docs/local-capture-plan.md` was reverted (uncommitted, accidental).
+
+- **`affb257` — found during batch P review: loadConfig's default path never
+  worked.** The default `'./viewpoint.config.ts'` is a relative specifier in a
+  dynamic import, so it resolves against `lib/config/loadConfig.ts` and looks
+  in `lib/config/`, where the file never is. `/api/public-config`,
+  `/api/turn-credentials` and `/api/capture/extract` all relied on it, so
+  **none of them ever read the master config** — they fell back to defaults
+  (and public-config always 500'd, so the T3.7 wiring was always in fail-safe
+  mode). Batch O had noticed and worked around it in `api/health.ts` only.
+  Every test mocked `loadConfig`, which is why 531 green tests never saw it.
+  Fixed at the source (`defaultConfigPath()` resolves against `process.cwd()`)
+  with the first test that does a real import; restoring the old default
+  fails it.
+- **Batch P — `b5138ba`. T4.4 LocalCaptureProvider.** Recording hook mixing
+  local + remote audio, `LocalCaptureProvider`, Vercel proxy
+  `api/capture/local.ts`, nginx `location = /api/capture/local` as an envsubst
+  template filtered to `CAPTURE_*` (secret substituted at container start, not
+  in an image layer), Post-meeting summary section in ManagerPanel shown only
+  for `capture: 'local'`. 132 tests. Independently mutation-tested: removing
+  the provider gate fails 5 tests; loosening the browser client's error-code
+  filter fails 2; Qwen's own check on the proxy's scrubbing fails 3. `dist/`
+  contains neither the secret nor the header name. No override needed beyond
+  simplifying its loadConfig workaround onto the fix above.
+  **Not verified:** nginx never parsed the template (no Docker here), and no
+  real recording has gone browser -> capture-service end to end.
+
+- **Batch Q — `573f347`. T5.3 PLM deep link.** `/launch?plmSource=...`
+  validates ids, strips any credential query param (no token is ever accepted
+  in a URL, overriding the plan's `token=<short-lived>` sketch: URLs leak via
+  history, logs and Referer), resolves only through the configured adapter,
+  and opens a NEW review with a random id. `roomHint` is a label, never a room
+  id: a room derived from a document id would be guessable. Onshape imports
+  the linked element directly and sign-in returns to `/launch`; Teamcenter
+  records a reference and says geometry import is not available yet.
+  **Security fixes found while writing the spec:** an open redirect in the
+  Onshape OAuth callback (`startsWith('/')` accepted `//evil.com`), and
+  unencoded ids in `lib/onshape.ts`. Mutation-tested: reverting
+  `safeReturnPath` fails 8 tests; using `roomHint` as the id fails 2.
+  **One review fix:** the setup-page draft store is persisted, so a previous
+  review's draft is on screen for a moment and the launch reference was
+  written into it, then discarded when the fresh draft replaced it. Launch
+  handling now waits for the draft whose id matches. Untested by a render
+  test (the page cannot mount in jsdom: supabase import, WebGL canvas).
+  **Known consequence:** signing in to Onshape mid-launch returns to
+  `/launch` and mints a second review id; the first is abandoned.
+
+### Resolved: Qwen token plan quota
+
+The weekly quota exhausted during batch O reset on 2026-09-14; batches P and
+Q ran on `qwen3.8-max`. History of the block, for context:
 
 `qwen3.8-max` was used for batches L-O and consumed the remaining quota
 quickly; the cheaper default `qwen3.7-plus` handled batches A-K. If the loop
@@ -228,19 +277,34 @@ or have Claude implement directly at higher credit cost.
 - Nothing running.
 
 ### Repo state
-Phases 0-5 substantially complete except T0.1, T4.4, T4.7, T4.8, T5.3 and
-Phase 6. 531 JS tests (2 skipped on Windows), 421 pytest tests. lint 0 errors,
-typecheck, check:env, build and e2e all green — ALL RUN LOCALLY. No CI run has
-ever executed.
+Phases 0-5 complete except T0.1, T4.7, T4.8. Phase 6 not started.
+789 JS tests (2 skipped on Windows), 421 pytest tests. lint 0 errors / 101
+warnings, typecheck, check:env, build all green — ALL RUN LOCALLY. No CI run
+has ever executed. Nothing pushed.
 
 ### Not started
-- **T0.1 (asset swap)** — last Phase 0 ticket. User decided 2026-09-17: keep
-  the branded models for now; at public release replace them with a cube and
-  strip the originals from history. See `NEXT-STEPS.md` §1.
-- T4.4 (LocalCaptureProvider frontend), T4.7 (live streaming), T4.8 (n8n),
-  T5.3 (PLM deep link), Phase 6 (docs and polish).
+- **T0.1 (asset swap)** — user decided 2026-09-17: keep the branded models for
+  now; at public release replace them with a cube and strip the originals from
+  history. See `NEXT-STEPS.md` §1.
+- T4.7 (live streaming), T4.8 (n8n, optional), Phase 6 (docs and polish).
 
 ### Follow-ups
+- **`/api/capture/local` is open to anyone who can reach the app.** The
+  shared secret stops direct access to capture-service, but the proxy adds it
+  for every caller, so any visitor can make the server transcribe audio. Same
+  shape as `/api/capture/extract` spending an API key. The app has no user
+  auth to gate on yet; needs rate limiting or auth before a public deploy.
+- **Vercel limits vs capture:** Functions accept 100 MB bodies, capture-service
+  allows 200 MB, and the proxy waits up to 15 minutes. A long meeting on
+  Vercel will hit the platform limit first. Self-hosted nginx has no such cap.
+- **`viewpoint.config.ts` on Vercel:** it is git-ignored, and the config is
+  imported by a runtime-computed path the bundler cannot trace. A Vercel
+  deploy from git will not have it, so those endpoints fall back to defaults.
+  Now that `loadConfig` actually works, this is the next thing between the
+  config file and a Vercel deployment.
+- **Nothing in T4.4 has run end to end.** nginx has never parsed the new
+  template (no Docker on this machine), and no real recording has gone
+  browser -> capture-service.
 - **`CODE_OF_CONDUCT.md` line 66** still has
   `[TODO: INSERT ENFORCEMENT CONTACT EMAIL]`. **User decision**, blocks going
   public.
@@ -268,7 +332,7 @@ Read this file top to bottom first — it is the only place the findings,
 overrides and reasoning live. Then:
 
 ```bash
-git log --oneline -8          # 26 commits on planning/oss-enterprise-readiness
+git log --oneline -8          # 30 commits on planning/oss-enterprise-readiness
 git status --short            # should be clean
 ```
 
@@ -279,7 +343,7 @@ was verified locally, never in CI:
 npm ci
 npm run lint                  # 0 errors, ~100 warnings (expected, tracked debt)
 npm run typecheck
-npm run test                  # 531 passing, 2 skipped on Windows
+npm run test                  # 789 passing, 2 skipped on Windows
 npm run check:env             # KNOWN map is EMPTY and must stay empty
 npm run build
 npm run test:e2e
@@ -303,15 +367,13 @@ is missing against the ticket's acceptance criteria — batch O was ~90% complet
 and needed one duplicated const removed plus the one test the run never reached.
 
 **Highest-value work remaining**, roughly in order:
-1. **T0.1** — the last Phase 0 ticket, and the only thing blocking a public
-   push. Needs the user's answer on model redistribution rights.
+1. **T0.1** — decided (cube at release). Plus the Code of Conduct email.
 2. **Run CI for real.** Nothing has ever run in GitHub Actions. Expect the
    gitleaks licence question and the two Windows-skipped installer tests to
    surface there first.
-3. **T4.4** — LocalCaptureProvider on the frontend, which connects the built
-   capture-service to the UI. The service and the interface both exist; nothing
-   joins them.
-4. **T5.3**, Phase 6 docs, then the type-debt ratchet (100 lint warnings).
+3. **A real end-to-end capture run** under docker compose (T4.4 is untested
+   outside jsdom), and the Vercel config-file question above.
+4. Phase 6 docs, then the type-debt ratchet (101 lint warnings).
 
 **Do not trust a green test run as evidence on its own.** The review method that
 actually found problems is written up in `delegation/README.md`.
