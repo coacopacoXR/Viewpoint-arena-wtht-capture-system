@@ -108,7 +108,7 @@ describe('RecordingIndicator', () => {
     );
     render(<RecordingIndicator />);
     expect(screen.queryByRole('button', { name: /stop sharing my mic/i })).toBeNull();
-    expect(screen.getByText(/mic muted/i)).toBeInTheDocument();
+    expect(screen.getByText(/you are muted/i)).toBeInTheDocument();
   });
 
   it('shows "mic unavailable" when the mic is blocked', () => {

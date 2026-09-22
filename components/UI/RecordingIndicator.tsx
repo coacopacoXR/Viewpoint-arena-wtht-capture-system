@@ -11,6 +11,7 @@ import React from 'react';
 import { Mic, MicOff, StopCircle } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useRecordingContext } from '../../lib/RecordingContext';
+import { useWebRTCContext } from '../../lib/WebRTCContext';
 
 function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -25,6 +26,7 @@ interface RecordingIndicatorProps {
 
 const RecordingIndicator: React.FC<RecordingIndicatorProps> = ({ theme = 'dark' }) => {
   const ctx = useRecordingContext();
+  const webrtc = useWebRTCContext();
   if (!ctx) return null;
 
   const { recordingState, ownMicStatus, elapsedMs, stopSharingMic } = ctx;
@@ -59,9 +61,32 @@ const RecordingIndicator: React.FC<RecordingIndicatorProps> = ({ theme = 'dark' 
         started by {byName}
       </span>
 
+      {/* Muted is the state people fall into without noticing: everyone
+          arrives muted, so a participant who never unmutes contributes
+          nothing and every line ends up labelled with whoever DID unmute
+          (reported 2026-09-23 — all lines carried the host's name). Say it
+          plainly and make unmuting one click. */}
       {ownMicStatus === 'muted' && (
-        <span className={clsx('flex items-center gap-1 text-[10px]', dark ? 'text-amber-300' : 'text-amber-600')}>
-          <MicOff size={10} /> mic muted
+        <span
+          className={clsx(
+            'flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] font-bold',
+            dark
+              ? 'bg-amber-500/15 border-amber-400/40 text-amber-200'
+              : 'bg-amber-50 border-amber-300 text-amber-700',
+          )}
+        >
+          <MicOff size={10} /> You are muted — your words are not in the transcript
+          <button
+            onClick={webrtc?.toggleMic}
+            className={clsx(
+              'ml-1 px-1.5 py-0.5 rounded uppercase tracking-wider border transition-colors',
+              dark
+                ? 'bg-amber-400/20 hover:bg-amber-400/30 border-amber-300/40'
+                : 'bg-amber-100 hover:bg-amber-200 border-amber-300',
+            )}
+          >
+            Unmute
+          </button>
         </span>
       )}
 
