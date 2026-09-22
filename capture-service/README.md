@@ -88,7 +88,7 @@ three requests into a meeting.
 | `CAPTURE_WHISPER_LANGUAGE` | *(empty)* | Language hint, e.g. `en` or `de`. Empty means auto-detect, which is slower and occasionally wrong on a mixed-language review. |
 | `CAPTURE_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | The Ollama **root** URL. Must have a scheme and host and **no path** — the service appends `/api/chat` itself. Must be reachable *from this service*, and must not contain a username or password. |
 | `CAPTURE_OLLAMA_MODEL` | `qwen2.5:7b` | A model that is already pulled on that Ollama instance (`ollama list`). Chosen over the plan's `deepseek-r1:7b` by a head-to-head on a real recording: qwen found all three insights with assignee and the correct due date in 3 of 3 runs in ~20 s; deepseek-r1 missed the assignee and due date every time, titled cards just "RISK"/"ACTION" in 2 of 3, and took ~44 s. |
-| `CAPTURE_TIMEOUT_SECONDS` | `120` | Per-request Ollama timeout. A 7B model on CPU takes 5–10s per extraction, and much longer while it cold-loads into RAM. |
+| `CAPTURE_TIMEOUT_SECONDS` | `600` | Per-request Ollama timeout. qwen2.5:7b took ~20 s per extraction fully on a GPU, and over 120 s when a 6 GB laptop GPU could hold only part of it; CPU-only is slower still. Keep it under the 900 s nginx timeout. |
 | `CAPTURE_MAX_UPLOAD_BYTES` | `209715200` (200 MiB) | Hard ceiling on one uploaded recording — about four hours of Opus/WebM, under two hours of 16-bit mono WAV. Enforced while streaming the body, so an oversized upload costs no inference. |
 | `CAPTURE_HOST` | `127.0.0.1` | Bind address for `python -m capture_service`. |
 | `CAPTURE_PORT` | `8080` | Bind port for `python -m capture_service`. |

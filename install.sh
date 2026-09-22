@@ -660,10 +660,20 @@ collect_answers() {
   # Generated fresh on EVERY run. Never a default, and never carried over from
   # an existing .env: re-running the installer rotates them, and a rotated
   # secret that stops working is a visible, fixable problem — a stale one nobody
-  # rotated is not.
+  # rotated is not. Safe to rotate because both ends read them from .env when
+  # `compose up` recreates the containers.
   S_CAPTURE_SECRET="$(generate_secret)"
-  S_POSTGRES_PASSWORD="$(generate_secret)"
-  S_N8N_KEY="$(generate_secret)"
+
+  # NOT rotated, because rotating them destroys data. Postgres stores its
+  # password when the data volume is first initialised and never reads
+  # POSTGRES_PASSWORD again: a new value here locks rest and realtime out of
+  # the existing database (found live: a re-run to switch on local capture
+  # left the stack unable to answer). And n8n encrypts its stored credentials
+  # with N8N_ENCRYPTION_KEY. Rotating either is a manual, deliberate job.
+  S_POSTGRES_PASSWORD="$(load_existing_env_var POSTGRES_PASSWORD)"
+  [[ -n "$S_POSTGRES_PASSWORD" ]] || S_POSTGRES_PASSWORD="$(generate_secret)"
+  S_N8N_KEY="$(load_existing_env_var N8N_ENCRYPTION_KEY)"
+  [[ -n "$S_N8N_KEY" ]] || S_N8N_KEY="$(generate_secret)"
   if [[ "$A_TURN" == 'selfHostedCoturn' || "$A_TURN" == 'bundled' ]]; then
     S_COTURN_SECRET="$(generate_secret)"
   fi
@@ -1099,13 +1109,11 @@ SECRETS
       printf 'CAPTURE_OLLAMA_BASE_URL=%s\n' "${CAPTURE_OLLAMA_BASE_URL:-http://ollama:11434}"
       printf 'CAPTURE_OLLAMA_MODEL=%s\n' "$A_OLLAMA_MODEL"
       printf 'CAPTURE_WHISPER_MODEL=%s\n' "$A_WHISPER_MODEL"
-      if [[ "$A_GPU" == 'yes' ]]; then
-        printf 'CAPTURE_WHISPER_DEVICE=cuda\n'
-        printf 'CAPTURE_WHISPER_COMPUTE_TYPE=float16\n'
-      else
-        printf 'CAPTURE_WHISPER_DEVICE=cpu\n'
-        printf 'CAPTURE_WHISPER_COMPUTE_TYPE=int8\n'
-      fi
+      # CPU even with the GPU override: the GPU goes to Ollama, and the
+      # capture-service image has no cuBLAS/cuDNN (see docker-compose.gpu.yml).
+      # cuda here failed every capture with transcriber_unavailable.
+      printf 'CAPTURE_WHISPER_DEVICE=cpu\n'
+      printf 'CAPTURE_WHISPER_COMPUTE_TYPE=int8\n'
       env_comment '# CAPTURE_SHARED_SECRET in section 1 is the token the app sends. The URL'
       env_comment '# above is the compose-internal name on the internal:true backend network,'
       env_comment '# so it deliberately does not resolve from outside the stack.'
@@ -1559,8 +1567,13 @@ print_summary() {
   say '    docker compose exec capture-service curl -sS \'
   say '      -H "X-Capture-Token: $CAPTURE_SHARED_SECRET" http://127.0.0.1:8080/health'
   say ''
-  say "  Next: point DNS (or your hosts file) at this box for ${A_HOSTNAME},"
-  say '  then open the app. A self-signed certificate means one browser warning.'
+  if [[ "$A_HOSTNAME" == 'localhost' || "$A_HOSTNAME" == '127.0.0.1' ]]; then
+    say "  Next: open https://${A_HOSTNAME}/ in a browser on this machine. The"
+    say '  certificate is self-signed, so expect one browser warning.'
+  else
+    say "  Next: point DNS (or your hosts file) at this box for ${A_HOSTNAME},"
+    say '  then open the app. A self-signed certificate means one browser warning.'
+  fi
   if [[ "$A_TURN" == 'bundled' ]]; then
     say ''
     say '  TURN_EXTERNAL_IP is empty in .env. For a same-machine install that is'

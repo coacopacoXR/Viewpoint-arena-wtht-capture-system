@@ -33,8 +33,12 @@ import { HEALTH_DETAILS } from '../../health/details';
 
 type FetchFn = typeof globalThis.fetch;
 
-/** Extraction on a CPU-only 7B model takes 5-10s; a cold load takes longer. */
-const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * Same ceiling as capture-service (DEFAULT_TIMEOUT_SECONDS, parity-tested):
+ * the same model on the same hardware. qwen2.5:7b took ~20 s fully on a GPU
+ * and over 120 s on a 6 GB laptop GPU that could hold only part of it.
+ */
+const DEFAULT_TIMEOUT_MS = 600_000;
 /**
  * A health poll gets seconds, not the extraction budget. Listing models is a
  * local metadata read even while a model is cold-loading, so anything slower
@@ -276,7 +280,7 @@ export class OllamaDirectCaptureProvider implements TranscriptCaptureProvider {
    */
   async healthCheck(): Promise<HealthCheckResult> {
     const controller = new AbortController();
-    // A health poll must not inherit the 120s extraction budget: a hung model
+    // A health poll must not inherit the 600s extraction budget: a hung model
     // host would otherwise hold the whole /api/health response open.
     const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
     let response: Response;

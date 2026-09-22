@@ -31,7 +31,7 @@ Variables (all optional; the defaults are the documented local-install values):
                                   appended.  Default: http://127.0.0.1:11434
     CAPTURE_OLLAMA_MODEL          Model that must already be pulled on that
                                   Ollama instance.  Default: qwen2.5:7b
-    CAPTURE_TIMEOUT_SECONDS       Per-request Ollama timeout.  Default: 120
+    CAPTURE_TIMEOUT_SECONDS       Per-request Ollama timeout.  Default: 600
     CAPTURE_MAX_UPLOAD_BYTES      Hard ceiling on one uploaded recording.
                                   Default: 209715200 (200 MiB)
     CAPTURE_HOST                  Bind address for `python -m capture_service`.
@@ -84,10 +84,14 @@ DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 # The plan's default extraction model: solid output, and CPU-viable in a pinch.
 DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
 
-# A 7B model on CPU takes 5–10s per extraction and much longer while it
-# cold-loads into RAM. Same ceiling as the TypeScript Ollama provider
-# (DEFAULT_TIMEOUT_MS = 120_000).
-DEFAULT_TIMEOUT_SECONDS = 120.0
+# Measured with qwen2.5:7b on one short meeting: ~20 s fully on a GPU, and
+# over 120 s on a 6 GB laptop GPU whose desktop apps pushed 4 of 29 layers
+# onto the CPU (the old 120 s ceiling failed every capture there). CPU-only
+# is slower still. 600 s stays inside the 900 s proxy_read_timeout both nginx
+# layers give /api/capture/local, leaving room for transcription. Same
+# ceiling as the TypeScript Ollama provider (ollamaDirect DEFAULT_TIMEOUT_MS),
+# checked by tests/test_typescript_parity.py.
+DEFAULT_TIMEOUT_SECONDS = 600.0
 
 # 200 MiB: roughly four hours of Opus/WebM at meeting quality, or under two
 # hours of 16-bit mono 16 kHz WAV. Enough for a real design review, small

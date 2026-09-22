@@ -63,7 +63,7 @@ def test_defaults_are_the_documented_local_install_values() -> None:
         whisper_language=None,
         ollama_base_url="http://127.0.0.1:11434",
         ollama_model="qwen2.5:7b",
-        timeout_seconds=120.0,
+        timeout_seconds=600.0,
         max_upload_bytes=200 * 1024 * 1024,
         host="127.0.0.1",
         port=8080,

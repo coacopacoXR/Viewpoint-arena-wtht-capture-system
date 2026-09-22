@@ -50,6 +50,21 @@ const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; 
 const PARTYKIT_HOST: string =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
 
+/**
+ * 'wss' whenever the page itself is https, else undefined (partysocket decides).
+ *
+ * partysocket picks plain ws:// for any host that looks local: localhost:,
+ * 127.0.0.1:, 192.168., 10., 172.16-31. That suits `partykit dev`, but the
+ * self-hosted stack serves the app over https at https://localhost/ (the
+ * installer's default) or a LAN IP, with PartyKit behind TLS on :8443. There
+ * the ws:// guess fails the handshake, and a browser would block ws:// from an
+ * https page anyway. Found on the first live Docker run.
+ */
+export function partykitProtocol(pageProtocol?: string): 'wss' | undefined {
+  const proto = pageProtocol ?? (typeof window !== 'undefined' ? window.location.protocol : undefined);
+  return proto === 'https:' ? 'wss' : undefined;
+}
+
 function getUserInfo(): { userId: string; name: string; color: string } {
   const stored = localStorage.getItem('vp_user');
   const user = stored ? JSON.parse(stored) : { name: 'Guest', color: '#4F8EF7' };
@@ -129,7 +144,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   useEffect(() => {
     if (!roomId) return;
 
-    const socket = new PartySocket({ host: PARTYKIT_HOST, room: roomId });
+    const socket = new PartySocket({ host: PARTYKIT_HOST, room: roomId, protocol: partykitProtocol() });
     socketRef.current = socket;
 
     socket.addEventListener('message', (event: MessageEvent) => {
