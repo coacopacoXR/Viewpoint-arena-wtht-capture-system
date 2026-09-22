@@ -36,7 +36,21 @@ import {
 // See lib/people.ts.
 const EMPTY_TEAM: never[] = [];
 
-type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda' | 'requirements' | 'people';
+export type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda' | 'requirements' | 'people';
+
+// Vertical icon rail configuration. The visible label is shortened to fit the
+// 56 px rail without clipping; ariaLabel carries the full section name for
+// screen readers. `divider` inserts a thin separator BEFORE this item.
+export const RAIL_TABS: {
+  id: TabId; label: string; ariaLabel: string; icon: React.ReactNode; divider?: boolean;
+}[] = [
+  { id: 'asset',        label: 'Model',  ariaLabel: 'Asset',        icon: <Box size={18} /> },
+  { id: 'viewpoints',   label: 'Views',  ariaLabel: 'Viewpoints',   icon: <Camera size={18} />, divider: true },
+  { id: 'pins',         label: 'Pins',   ariaLabel: 'Pins',         icon: <MapPin size={18} /> },
+  { id: 'agenda',       label: 'Agenda', ariaLabel: 'Agenda',       icon: <ListOrdered size={18} /> },
+  { id: 'requirements', label: 'Reqs',   ariaLabel: 'Requirements', icon: <Scale size={18} />, divider: true },
+  { id: 'people',       label: 'People', ariaLabel: 'People',       icon: <Users size={18} /> },
+];
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
@@ -337,43 +351,50 @@ const ReviewSetupPage: React.FC = () => {
           </button>
         </div>
 
-        {/* Right: Sidebar */}
+        {/* Right: Sidebar — vertical icon rail + panel */}
         <aside className="w-[400px] shrink-0 border-l border-white/10 flex flex-col bg-[#111]">
-          <nav className="flex border-b border-white/10 shrink-0">
-            <TabButton id="asset" current={tab} onSelect={setTab} icon={<Box size={13} />}>Asset</TabButton>
-            <TabButton id="viewpoints" current={tab} onSelect={setTab} icon={<Camera size={13} />} count={draft.viewpoints.length}>Viewpoints</TabButton>
-            <TabButton id="pins" current={tab} onSelect={setTab} icon={<MapPin size={13} />} count={draft.pins.length}>Pins</TabButton>
-            <TabButton id="agenda" current={tab} onSelect={setTab} icon={<ListOrdered size={13} />} count={draft.agenda.length}>Agenda</TabButton>
-            <TabButton id="requirements" current={tab} onSelect={setTab} icon={<Scale size={13} />} count={draft.requirements.length}>Reqs</TabButton>
-            <TabButton id="people" current={tab} onSelect={setTab} icon={<Users size={13} />} count={draft.team.length}>People</TabButton>
-          </nav>
-          <div className="flex-1 overflow-y-auto">
-            {tab === 'asset' && <AssetTab />}
-            {tab === 'viewpoints' && (
-              <ViewpointsTab
-                viewpoints={draft.viewpoints}
-                onJump={(vp) => canvasRef.current?.jumpTo({ position: vp.position, lookAt: vp.lookAt })}
-              />
-            )}
-            {tab === 'pins' && (
-              <PinsTab
-                pins={draft.pins}
-                selectedId={selectedPinId}
-                onSelect={setSelectedPinId}
-                onEnterPinMode={() => setPinMode(true)}
-              />
-            )}
-            {tab === 'agenda' && (
-              <AgendaTab
-                agenda={draft.agenda}
-                viewpoints={draft.viewpoints}
-                pins={draft.pins}
-                onJumpViewpoint={(vp) => canvasRef.current?.jumpTo({ position: vp.position, lookAt: vp.lookAt })}
-                onSelectPin={(id) => { setSelectedPinId(id); setTab('pins'); }}
-              />
-            )}
-            {tab === 'requirements' && <RequirementsTab requirements={draft.requirements} />}
-            {tab === 'people' && <PeopleTab />}
+          <div className="flex flex-1 min-h-0">
+            <SidebarRail
+              tab={tab}
+              onSelect={setTab}
+              counts={{
+                viewpoints: draft.viewpoints.length,
+                pins: draft.pins.length,
+                agenda: draft.agenda.length,
+                requirements: draft.requirements.length,
+                people: draft.team.length,
+              }}
+            />
+            <div role="tabpanel" aria-label={RAIL_TABS.find((t) => t.id === tab)?.ariaLabel} className="flex-1 flex flex-col min-h-0">
+              <div className="flex-1 overflow-y-auto">
+                {tab === 'asset' && <AssetTab />}
+                {tab === 'viewpoints' && (
+                  <ViewpointsTab
+                    viewpoints={draft.viewpoints}
+                    onJump={(vp) => canvasRef.current?.jumpTo({ position: vp.position, lookAt: vp.lookAt })}
+                  />
+                )}
+                {tab === 'pins' && (
+                  <PinsTab
+                    pins={draft.pins}
+                    selectedId={selectedPinId}
+                    onSelect={setSelectedPinId}
+                    onEnterPinMode={() => setPinMode(true)}
+                  />
+                )}
+                {tab === 'agenda' && (
+                  <AgendaTab
+                    agenda={draft.agenda}
+                    viewpoints={draft.viewpoints}
+                    pins={draft.pins}
+                    onJumpViewpoint={(vp) => canvasRef.current?.jumpTo({ position: vp.position, lookAt: vp.lookAt })}
+                    onSelectPin={(id) => { setSelectedPinId(id); setTab('pins'); }}
+                  />
+                )}
+                {tab === 'requirements' && <RequirementsTab requirements={draft.requirements} />}
+                {tab === 'people' && <PeopleTab />}
+              </div>
+            </div>
           </div>
         </aside>
       </div>
@@ -381,25 +402,82 @@ const ReviewSetupPage: React.FC = () => {
   );
 };
 
-// ─── Tab button ─────────────────────────────────────────────────────────────
+// ─── Sidebar rail ───────────────────────────────────────────────────────────
 
-const TabButton: React.FC<{
-  id: TabId; current: TabId; onSelect: (id: TabId) => void;
-  icon: React.ReactNode; count?: number; children: React.ReactNode;
-}> = ({ id, current, onSelect, icon, count, children }) => (
+export const SidebarRail: React.FC<{
+  tab: TabId; onSelect: (id: TabId) => void;
+  counts: Partial<Record<TabId, number>>;
+}> = ({ tab, onSelect, counts }) => {
+  const railRef = useRef<HTMLElement>(null);
+  const handleKey = (e: React.KeyboardEvent) => {
+    const ids = RAIL_TABS.map((t) => t.id);
+    const idx = ids.indexOf(tab);
+    let next: number | null = null;
+    if (e.key === 'ArrowDown') next = (idx + 1) % ids.length;
+    else if (e.key === 'ArrowUp') next = (idx - 1 + ids.length) % ids.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = ids.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    onSelect(ids[next]);
+    railRef.current?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
+  };
+  return (
+    <nav
+      ref={railRef}
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label="Review sections"
+      onKeyDown={handleKey}
+      className="w-14 shrink-0 border-r border-white/10 flex flex-col items-center py-2 gap-0.5 overflow-y-auto"
+    >
+      {RAIL_TABS.map((t) => (
+        <React.Fragment key={t.id}>
+          {t.divider && <div className="w-8 h-px bg-white/10 my-1" role="separator" />}
+          <RailTab
+            id={t.id}
+            label={t.label}
+            ariaLabel={t.ariaLabel}
+            icon={t.icon}
+            count={counts[t.id] || undefined}
+            active={tab === t.id}
+            onSelect={onSelect}
+          />
+        </React.Fragment>
+      ))}
+    </nav>
+  );
+};
+
+// ─── Rail tab button ────────────────────────────────────────────────────────
+
+const RailTab: React.FC<{
+  id: TabId; label: string; ariaLabel: string; icon: React.ReactNode;
+  count?: number; active: boolean; onSelect: (id: TabId) => void;
+}> = ({ id, label, ariaLabel, icon, count, active, onSelect }) => (
   <button
+    role="tab"
+    aria-selected={active}
+    aria-label={ariaLabel}
+    tabIndex={active ? 0 : -1}
     onClick={() => onSelect(id)}
     className={clsx(
-      'flex-1 py-3 text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-1.5 transition-colors',
-      current === id
-        ? 'bg-white/5 text-white border-b-2 border-emerald-400'
-        : 'text-gray-500 hover:text-gray-300'
+      'w-12 flex flex-col items-center gap-0.5 py-2 rounded-md transition-colors relative',
+      active
+        ? 'bg-white/10 text-white'
+        : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
     )}
   >
-    {icon} {children}
-    {typeof count === 'number' && count > 0 && (
-      <span className="text-[9px] font-mono bg-white/10 px-1.5 rounded">{count}</span>
-    )}
+    {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-emerald-400" />}
+    <span className="relative">
+      {icon}
+      {typeof count === 'number' && count > 0 && (
+        <span className="absolute -top-1 -right-2.5 text-[8px] font-mono bg-emerald-500 text-black min-w-[14px] h-3.5 flex items-center justify-center rounded-full px-0.5 leading-none">
+          {count}
+        </span>
+      )}
+    </span>
+    <span className="text-[9px] font-bold uppercase tracking-wider leading-tight">{label}</span>
   </button>
 );
 
