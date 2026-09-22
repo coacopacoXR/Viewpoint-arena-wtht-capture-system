@@ -334,68 +334,75 @@ or have Claude implement directly at higher credit cost.
 ### In progress
 - Nothing running.
 
+## Session 2026-09-22: the Docker install, run for real
+
+The user had installed Docker Desktop and asked to continue with Qwen. The
+machine had no WSL at all (Docker could not start); the user installed it and
+Claude added Ubuntu 24.04 and turned on Docker Desktop's WSL integration, so
+everything below ran exactly the way docs/INSTALL.md tells a user to: a clone
+in the WSL home, `./install.sh`, a browser on Windows.
+
+Qwen drafted three tickets (batch R: database layer, S: bundled TURN and
+installer defaults, T: layout). Each was then run live, and most of what made
+it work was found that way, not by the tests:
+
+- `a25c253` **database layer**: supabase/postgres + PostgREST + Realtime behind
+  nginx. Live fixes: nginx does not strip the location prefix when proxy_pass
+  uses a variable (every /rest/v1/ call reached PostgREST as "/"); upstream
+  roles.sql aborted the whole init on a role this stack does not have; the
+  image leaves POSTGRES_USER empty so _realtime needed an explicit owner.
+  Qwen could not read `.qwen-tasks/ref-supabase/` (git-ignored) and improvised
+  the init wiring; replaced from the upstream reference.
+  Also: partykit on node:24-slim (workerd is glibc-only; on alpine nothing
+  listened and every room socket got 502), install.sh stored 100644.
+- `6d6b4eb` **default install needs no account**: bundled coturn is the TURN
+  default. Qwen passed denied-peer-ip as one comma list, which coturn rejects
+  and then drops the whole deny list; its `-n` also made coturn ignore the
+  config file. Now a generated config file, verified with turnutils_uclient:
+  public peers allowed, 10/8, 172.16/12, 192.168/16, 127/8 and
+  169.254.169.254 refused. `turn.probeHost` / `db.probeUrl` so /api/health
+  probes by service name. Default hostname localhost; health poll exits 4 when
+  the stack never answers (it exited 0); Whisper cache owned by the service
+  user; Whisper on CPU (no cuBLAS/cuDNN in the image).
+- `1b18f77` **capture end to end in Docker**: "3 insights added" in 48 s
+  (browser -> nginx -> Whisper CPU -> qwen2.5:7b GPU). partysocket picks ws://
+  for localhost/LAN hosts, so an https page now forces wss. nginx-proxy
+  resolves app/partykit per request (an installer re-run recreated app and the
+  site answered 502). Re-running install.sh no longer rotates
+  POSTGRES_PASSWORD (it locked rest/realtime out) or N8N_ENCRYPTION_KEY.
+  Extraction timeout 120 -> 600 s: the 6 GB laptop GPU also drives the
+  desktop and held only 25/29 layers.
+- `2c0d1ca` **UI**: the Active Review card opened under the insights sidebar
+  (Open Manager view unclickable); the "Enter XR" pill was @react-three/xr's
+  emulator, injected on hostname localhost, now dev-only.
+- `d924290`..`9e5b1b2` **docs/INSTALL.md**, walked end to end from a wiped
+  machine state (volumes and images removed, fresh clone): install exit 0,
+  all ten services healthy, then every step of section 6 in a browser as
+  written (saved review survives reload, share link + guest join +
+  participants, boardroom call with video, recording -> "3 insights added",
+  END SESSION -> tracker, health all ok) and section 7 (stop/start/down/up
+  keep the data). The walk found: `72cf059` leaving the setup page inside the
+  800 ms autosave window dropped the edit; `3808043` the setup page rendered
+  the previous review's persisted draft while loading. install.sh now writes
+  COMPOSE_FILE/COMPOSE_PROFILES to .env so plain `docker compose ...` covers
+  the right services, and streams build output live.
+
+**Verified live:** two-browser WebRTC call connects (host->host candidates,
+bundled TURN offered). **Not verified:** a call forced through the TURN relay;
+under Docker Desktop relay-to-relay fails with or without TURN_EXTERNAL_IP
+(hairpin through Docker Desktop's UDP forwarding). Written into INSTALL.md
+known limits; needs a Linux host with a public IP to test properly.
+
 ### Repo state
-Phases 0-5 complete except T0.1, T4.7, T4.8. Phase 6 not started. 826 JS tests,
-425 pytest. CI green. Branch pushed; nothing on `main`. **The Docker stack has
-never been started**: Docker was installed 2026-09-21 but needs a reboot.
+Phases 0-5 complete except T0.1, T4.7, T4.8. 881 JS tests (5 skipped on
+Windows: they execute install.sh; all 110 deploy/config tests pass in a Linux
+node:24 container), 425 pytest, lint 0 errors / 101 warnings. Branch has ~15
+commits since the last push; **not pushed** (INSTALL.md tells users to clone
+this branch from GitHub, so it must be pushed before anyone follows it).
 
 ### Not started
-- **T0.1 (asset swap)** — user decided 2026-09-17: keep the branded models for
-  now; at public release replace them with a cube and strip the originals from
-  history. See `NEXT-STEPS.md` §1.
-- T4.7 (live streaming), T4.8 (n8n, optional), Phase 6 (docs and polish).
-
-
-## NEXT SESSION: bring up and verify the Docker install
-
-The user wants to install the self-hosted stack and test it themselves. Docker
-Desktop is installed; the machine needed a reboot first. Everything below is
-written but UNTESTED in Docker. Do it in this order; each step names what
-"done" means. Do not hand the user an install that has not been run end to end.
-
-1. **Sanity.** `docker version`, `wsl -l -v` (WSL2 running), GPU visible to
-   Docker if GPU capture is wanted. install.sh refuses a /mnt/c checkout
-   (slow): clone into the WSL home, or run compose directly from Windows.
-2. **Validate configs before starting anything.** `docker compose config`;
-   `nginx -t` on BOTH `deploy/nginx/proxy.conf` (new `limit_req_zone`, capture
-   block) and the rendered `app.conf` template (`/api/` proxy, envsubst). None
-   of these edits has ever been parsed by a real nginx.
-3. **Base stack.** `./install.sh --defaults`, then `docker compose up -d`.
-   Done = every container healthy; `https://localhost/` shows the lobby;
-   `/api/public-config` returns JSON (proves the new `api` service + nginx
-   proxy); `/api/health` lists connectors; partykit starts (its CMD flags were
-   fixed in d3a6973 but never run in a container) and two tabs see each other.
-4. **Database layer. NOT BUILT YET, the biggest remaining gap.** Plain postgres
-   cannot serve supabase-js, so saved reviews, the tracker and "who is
-   editing" do not work self-hosted. Plan: replace `postgres:16` with
-   `supabase/postgres`, add `postgrest/postgrest` (tables) and
-   `supabase/realtime` (presence + live sync; the app already falls back to
-   5 s polling without it); nginx-proxy routes `/rest/v1/` to postgrest and
-   `/realtime/v1/` to realtime (WebSocket; realtime derives its tenant from the
-   Host header, e.g. `realtime-dev`); install.sh generates JWT_SECRET and an
-   HS256 anon key (role=anon) and writes VITE_SUPABASE_URL=https://<host> and
-   VITE_SUPABASE_ANON_KEY; apply docs/supabase-schema.sql at init (its
-   supabase_realtime DO block works on the supabase image). Iterate live: the
-   image's init-script order and role names must be checked, not assumed.
-   Done = create a review, reload, it is still there; tracker page loads.
-5. **Capture in Docker.** `--profile capture-local` (+ docker-compose.gpu.yml
-   for the GPU), `ollama pull qwen2.5:7b`, capture.provider 'local'. Re-run the
-   browser test (Playwright with `--use-file-for-fake-audio-capture=<wav>`,
-   espeak-ng for the WAV, manager panel opened via activeReviewStore) against
-   https://localhost. Done = "N insights added" through nginx, not the dev
-   server.
-6. **TURN (optional for one LAN).** Add a `coturn` service (profile) with
-   use-auth-secret / static-auth-secret=COTURN_SHARED_SECRET and a small relay
-   port range; the adapter is done and tested (0db1d08). Docker Desktop NAT
-   makes relay addresses tricky: verify with a real two-browser call.
-7. **Two-browser call.** WebRTC has never been verified live since 30458db.
-8. **Write the user's guide** (T6.2): prerequisites (Docker Desktop + WSL2,
-   optional NVIDIA), the exact commands, what to click to test each feature,
-   and how to reset. Walk it once exactly as written before handing it over.
-
-Known small issues, not blocking: "Enter XR" button overlaps "AR" in the room
-header (pre-existing); 101 lint warnings of type debt; T4.7 live transcript,
-T4.8 n8n and Phase 6 docs not started.
+- **T0.1 (asset swap)**: decided 2026-09-17, cube at public release.
+- T4.7 (live streaming), T4.8 (n8n, optional), rest of Phase 6.
 
 ### Follow-ups
 - **`/api/capture/local` is open to anyone who can reach the app.** The
@@ -411,11 +418,15 @@ T4.8 n8n and Phase 6 docs not started.
   deploy from git will not have it, so those endpoints fall back to defaults.
   Now that `loadConfig` actually works, this is the next thing between the
   config file and a Vercel deployment.
-- **Nothing in T4.4 has run end to end.** nginx has never parsed the new
-  template (no Docker on this machine), and no real recording has gone
-  browser -> capture-service.
-- **The WebRTC change is unverified against a live call** (`30458db`). Given
-  two ICE-related reverts in recent history, worth a manual two-browser test.
+- **TURN relay path unverified** (see the 2026-09-22 session). Direct calls
+  are verified.
+- **CAPTURE VIEW silently does nothing** until the setup canvas has
+  initialised (`captureViewpoint()` returns null). A person rarely clicks that
+  fast; a disabled state or a toast would be better.
+- **"AGENTS ON" overlaps the playback controls** at 1280x720 (bottom left).
+- **A shell with .env exported overrides it**: compose interpolation prefers
+  the environment, so `set -a; . ./.env` before a re-run left capture-service
+  and coturn on the old secrets. Test-harness trap, not a user path.
 - **capture-service has no CORS policy yet** and relies on the compose
   network plus a shared secret. Fine for the self-hosted stack; revisit if the
   browser is ever pointed at it directly.

@@ -65,11 +65,16 @@ resolve any more (probably deleted, or paused too long). Anywhere that uses it
 cannot save reviews or use the tracker. The Docker install will bring its own
 database; for Vercel you would need a new Supabase project.
 
-## 6. Next session: Docker
+## 6. The Docker install works; try it yourself
 
-Docker Desktop is installed and needs a reboot. The step-by-step plan for
-bringing the stack up, finishing the database layer, and writing your install
-guide is in EXECUTION-LOG.md under "NEXT SESSION".
+Done 2026-09-22 and walked end to end on this machine: follow
+[`docs/INSTALL.md`](../INSTALL.md). WSL2, Ubuntu 24.04 and Docker Desktop's
+WSL integration are set up here already (Ubuntu user `coaco`, no password
+yet: run `passwd` in Ubuntu to set one). A working install is running now
+in `~/viewpoint-arena` inside Ubuntu, so https://localhost/ opens it.
+
+Before anyone else follows the guide, the branch has to be pushed: the
+guide clones it from GitHub.
 
 ---
 
