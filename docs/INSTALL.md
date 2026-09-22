@@ -167,6 +167,38 @@ system, whether it is working.
 
 ---
 
+## 6b. Running it on a server, for a team
+
+Nothing is installed on anyone's laptop. The machine running Docker does all
+the work; everyone else just opens it in a browser:
+
+- the browsers record audio and send short clips to that machine;
+- **transcription (Whisper) and the AI extraction (qwen2.5:7b) run there**,
+  on its CPU and GPU;
+- the text, the cards and the database live there too.
+
+So put it on the beefiest machine available, not on the laptop of whoever
+chairs the meeting. On that machine: install Docker, follow steps 3 and 4,
+and answer its **network address** (or DNS name) at the hostname question.
+Everyone opens `https://<that address>/`. A GPU in the server speeds up
+extraction for everybody; laptops only record and display.
+
+What the server needs open to the people using it: **443** (the app),
+**8443** (live rooms) and, if calls cross networks, **3478** plus the relay
+range for TURN. What it does NOT need: any inbound connection to the
+participants' machines.
+
+Nothing leaves that machine in a default install. Audio clips, transcripts,
+cards and the database all stay on it; data only goes outside if you choose a
+cloud option during install (OpenAI/Anthropic extraction, Cloudflare TURN, a
+Teams webhook).
+
+One current limit: only the host's browser records, mixing their microphone
+with the call audio, so remote voices arrive through the call rather than
+from each person's own microphone.
+
+---
+
 ## 7. Everyday commands
 
 Run these in the Ubuntu window from `~/viewpoint-arena`:
