@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '../../store';
 import { 
     AlertTriangle, CheckCircle2, Lightbulb, X, Calendar, User, Flag, Activity, Box,
@@ -36,8 +37,13 @@ const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, age
         });
     };
     
-    return (
-        <div 
+    // Rendered into <body>, not where it is mounted. `position: fixed` is
+    // relative to the nearest ancestor with a transform, filter or
+    // backdrop-filter, and every panel that opens this modal (the insights
+    // sidebar, the manager workspace, the boardroom) has one — so the modal
+    // was trapped inside the ~320px panel instead of covering the viewport.
+    return createPortal(
+        <div
             className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200 pointer-events-auto"
             onClick={(e) => {
                 if (e.target === e.currentTarget) onClose();
@@ -279,7 +285,8 @@ const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, age
                     </button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 };
 
