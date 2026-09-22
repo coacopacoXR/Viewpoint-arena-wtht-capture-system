@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import {
   ChevronLeft, Camera, MapPin, ListOrdered, Box, Trash2,
   Play, Plus, GripVertical, X, AlertTriangle, Info, ShieldAlert,
-  FileBox, Layers, Cloud, CloudOff, Check, Link2, Move3D, RotateCcw
+  FileBox, Layers, Cloud, CloudOff, Check, Link2, Move3D, RotateCcw, Scale
 } from 'lucide-react';
 import ReviewSetupCanvas, { type ReviewSetupCanvasHandle, type GizmoMode } from '../components/Scene/ReviewSetupCanvas';
 import {
@@ -17,7 +17,7 @@ import {
   IDENTITY_TRANSFORM,
 } from '../lib/reviewSetupStore';
 import { useStore } from '../store';
-import type { ModelType } from '../types';
+import type { ModelType, Requirement } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { getIdentity } from '../lib/identity';
@@ -31,7 +31,7 @@ import {
   type PLMLaunch,
 } from '../lib/connectors/plm/launchParams';
 
-type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda';
+type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda' | 'requirements';
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
@@ -76,6 +76,7 @@ const ReviewSetupPage: React.FC = () => {
     return JSON.stringify({
       title: d.title, description: d.description, asset,
       viewpoints: d.viewpoints, pins: d.pins, agenda: d.agenda,
+      requirements: d.requirements,
     });
   };
 
@@ -264,6 +265,8 @@ const ReviewSetupPage: React.FC = () => {
           <span>{draft.pins.length} PINS</span>
           <span>·</span>
           <span>{draft.agenda.length} AGENDA</span>
+          <span>·</span>
+          <span>{draft.requirements.length} REQS</span>
         </div>
         <PresenceStack peers={otherPeers} />
         {modelImport === 'onshape' && <OnshapeStatusPill />}
@@ -334,6 +337,7 @@ const ReviewSetupPage: React.FC = () => {
             <TabButton id="viewpoints" current={tab} onSelect={setTab} icon={<Camera size={13} />} count={draft.viewpoints.length}>Viewpoints</TabButton>
             <TabButton id="pins" current={tab} onSelect={setTab} icon={<MapPin size={13} />} count={draft.pins.length}>Pins</TabButton>
             <TabButton id="agenda" current={tab} onSelect={setTab} icon={<ListOrdered size={13} />} count={draft.agenda.length}>Agenda</TabButton>
+            <TabButton id="requirements" current={tab} onSelect={setTab} icon={<Scale size={13} />} count={draft.requirements.length}>Reqs</TabButton>
           </nav>
           <div className="flex-1 overflow-y-auto">
             {tab === 'asset' && <AssetTab />}
@@ -360,6 +364,7 @@ const ReviewSetupPage: React.FC = () => {
                 onSelectPin={(id) => { setSelectedPinId(id); setTab('pins'); }}
               />
             )}
+            {tab === 'requirements' && <RequirementsTab requirements={draft.requirements} />}
           </div>
         </aside>
       </div>
@@ -1019,6 +1024,103 @@ const SlideCard: React.FC<{
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+// ─── Requirements tab ──────────────────────────────────────────────────────
+
+const REQ_CATEGORIES: Requirement['category'][] = ['MECHANICAL', 'ELECTRICAL', 'ERGONOMIC', 'SAFETY'];
+const REQ_STATUSES: Requirement['status'][] = ['MET', 'PENDING', 'AT_RISK'];
+
+const STATUS_STYLE: Record<Requirement['status'], string> = {
+  MET: 'bg-green-500/20 text-green-400',
+  PENDING: 'bg-yellow-500/20 text-yellow-400',
+  AT_RISK: 'bg-red-500/20 text-red-400',
+};
+
+const RequirementsTab: React.FC<{ requirements: Requirement[] }> = ({ requirements }) => {
+  const addRequirement = useReviewSetupStore((s) => s.addRequirement);
+  const updateRequirement = useReviewSetupStore((s) => s.updateRequirement);
+  const removeRequirement = useReviewSetupStore((s) => s.removeRequirement);
+  const reorderRequirements = useReviewSetupStore((s) => s.reorderRequirements);
+  const insertSampleRequirements = useReviewSetupStore((s) => s.insertSampleRequirements);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+
+  return (
+    <div className="p-5 flex flex-col gap-3">
+      <p className="text-[11px] text-gray-500 leading-relaxed">
+        Define the requirements this review is checking against. Edit code, description, category, and status. Drag to reorder.
+      </p>
+
+      {requirements.length === 0 && (
+        <div className="text-center py-10 flex flex-col items-center gap-3 text-gray-500 text-xs italic">
+          <Scale size={28} className="opacity-30" />
+          No requirements yet
+          <button
+            onClick={insertSampleRequirements}
+            className="mt-1 flex items-center gap-2 px-3 py-1.5 rounded border border-emerald-400/40 bg-emerald-500/10 text-emerald-200 text-[11px] font-bold uppercase tracking-wide hover:bg-emerald-500/20 transition-colors"
+          >
+            <Plus size={12} /> Start from the sample set
+          </button>
+        </div>
+      )}
+
+      {requirements.map((req, idx) => (
+        <div
+          key={req.id}
+          draggable
+          onDragStart={() => setDragIdx(idx)}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={() => { if (dragIdx !== null) { reorderRequirements(dragIdx, idx); setDragIdx(null); } }}
+          className="rounded border border-white/10 bg-white/5 overflow-hidden"
+        >
+          <div className="flex items-center gap-2 p-2">
+            <GripVertical size={12} className="text-gray-600 cursor-grab shrink-0" />
+            <span className="text-[10px] font-mono text-gray-500 tabular-nums w-6 shrink-0">{String(idx + 1).padStart(2, '0')}</span>
+            <input
+              value={req.code}
+              onChange={(e) => updateRequirement(req.id, { code: e.target.value })}
+              placeholder="REQ-001"
+              className="w-24 bg-transparent text-[11px] font-mono font-bold text-orange-400 outline-none placeholder:text-gray-600 shrink-0"
+            />
+            <input
+              value={req.description}
+              onChange={(e) => updateRequirement(req.id, { description: e.target.value })}
+              placeholder="Requirement description"
+              className="flex-1 bg-transparent text-xs outline-none placeholder:text-gray-600 min-w-0"
+            />
+            <button onClick={() => removeRequirement(req.id)} className="text-gray-500 hover:text-red-400 shrink-0">
+              <Trash2 size={13} />
+            </button>
+          </div>
+          <div className="flex items-center gap-2 px-2 pb-2 ml-8">
+            <select
+              value={req.category}
+              onChange={(e) => updateRequirement(req.id, { category: e.target.value as Requirement['category'] })}
+              className="bg-white/5 text-[10px] font-bold uppercase rounded px-1.5 py-0.5 border border-white/10 outline-none text-gray-300"
+            >
+              {REQ_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select
+              value={req.status}
+              onChange={(e) => updateRequirement(req.id, { status: e.target.value as Requirement['status'] })}
+              className={clsx('text-[10px] font-bold uppercase rounded px-1.5 py-0.5 border outline-none', STATUS_STYLE[req.status])}
+            >
+              {REQ_STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+            </select>
+          </div>
+        </div>
+      ))}
+
+      {requirements.length > 0 && (
+        <button
+          onClick={() => addRequirement({ code: '', description: 'New requirement', category: 'MECHANICAL', status: 'PENDING' })}
+          className="mt-1 flex items-center justify-center gap-2 p-3 rounded border-2 border-dashed border-white/15 hover:border-emerald-400/50 hover:bg-emerald-500/5 text-xs font-bold uppercase tracking-wide text-gray-400 hover:text-emerald-200 transition-colors"
+        >
+          <Plus size={14} /> Add requirement
+        </button>
+      )}
     </div>
   );
 };

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ModelType } from '../types';
+import type { ModelType, Requirement } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,9 +76,21 @@ export interface ReviewDraft {
   viewpoints: ReviewViewpoint[];
   pins: ReviewPin[];
   agenda: AgendaItem[];
+  requirements: Requirement[];
   createdAt: number;
   updatedAt: number;
 }
+
+// Seed set offered by the "Start from the sample set" button on an empty
+// requirements tab. Moved here from store.ts so it travels with the review
+// instead of being a global constant.
+export const SAMPLE_REQUIREMENTS: Requirement[] = [
+  { id: 'r1', code: 'REQ-M-042', description: 'Rotary knobs must withstand 50N shear force.', category: 'MECHANICAL', status: 'MET' },
+  { id: 'r2', code: 'REQ-E-101', description: 'Main display assembly must be removable within 60s.', category: 'ELECTRICAL', status: 'PENDING' },
+  { id: 'r3', code: 'REQ-U-305', description: 'Primary controls must be reachable from 5th %ile female hand size.', category: 'ERGONOMIC', status: 'AT_RISK' },
+  { id: 'r4', code: 'REQ-S-900', description: 'No sharp edges < 0.5mm radius on user interface surfaces.', category: 'SAFETY', status: 'MET' },
+  { id: 'r5', code: 'REQ-M-200', description: 'Total unit weight must not exceed 3.2kg.', category: 'MECHANICAL', status: 'PENDING' },
+];
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
@@ -123,6 +135,13 @@ interface ReviewSetupState {
   detachViewpointFromAgendaItem: (itemId: string, viewpointId: string) => void;
   attachPinToAgendaItem: (itemId: string, pinId: string) => void;
   detachPinFromAgendaItem: (itemId: string, pinId: string) => void;
+
+  // Requirements
+  addRequirement: (req: Omit<Requirement, 'id'>) => string;
+  updateRequirement: (id: string, patch: Partial<Requirement>) => void;
+  removeRequirement: (id: string) => void;
+  reorderRequirements: (fromIdx: number, toIdx: number) => void;
+  insertSampleRequirements: () => void;
 }
 
 const uid = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
@@ -140,6 +159,7 @@ const emptyDraft = (reviewId: string): ReviewDraft => ({
   viewpoints: [],
   pins: [],
   agenda: [],
+  requirements: [],
   createdAt: Date.now(),
   updatedAt: Date.now(),
 });
@@ -422,6 +442,59 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         };
         return { draft: touch(next) };
       }),
+
+      addRequirement: (req) => {
+        const id = uid();
+        const code = req.code.trim() || `REQ-${id.slice(0, 4).toUpperCase()}`;
+        set((s) => {
+          if (!s.draft) return s;
+          const next: ReviewDraft = {
+            ...s.draft,
+            requirements: [...s.draft.requirements, { ...req, id, code }],
+          };
+          return { draft: touch(next) };
+        });
+        return id;
+      },
+
+      updateRequirement: (id, patch) => set((s) => {
+        if (!s.draft) return s;
+        const cleaned = patch.code !== undefined
+          ? { ...patch, code: patch.code.trim() || s.draft.requirements.find((r) => r.id === id)?.code || '' }
+          : patch;
+        const next: ReviewDraft = {
+          ...s.draft,
+          requirements: s.draft.requirements.map((r) => r.id === id ? { ...r, ...cleaned } : r),
+        };
+        return { draft: touch(next) };
+      }),
+
+      removeRequirement: (id) => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          requirements: s.draft.requirements.filter((r) => r.id !== id),
+        };
+        return { draft: touch(next) };
+      }),
+
+      reorderRequirements: (fromIdx, toIdx) => set((s) => {
+        if (!s.draft) return s;
+        const arr = [...s.draft.requirements];
+        if (fromIdx < 0 || fromIdx >= arr.length || toIdx < 0 || toIdx >= arr.length) return s;
+        const [moved] = arr.splice(fromIdx, 1);
+        arr.splice(toIdx, 0, moved);
+        return { draft: touch({ ...s.draft, requirements: arr }) };
+      }),
+
+      insertSampleRequirements: () => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          requirements: [...s.draft.requirements, ...SAMPLE_REQUIREMENTS],
+        };
+        return { draft: touch(next) };
+      }),
     }),
     {
       name: 'vp_review_draft',
@@ -429,15 +502,22 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
       // v0 → v1: agenda items moved from { refType, refId } to { viewpointIds, pinIds }.
       // Old single-ref items become slides with that one item attached.
       migrate: (persisted: any, fromVersion: number) => {
-        if (!persisted?.draft || fromVersion >= 1) return persisted;
-        const agenda = (persisted.draft.agenda ?? []).map((raw: any) => {
-          if (Array.isArray(raw?.viewpointIds) && Array.isArray(raw?.pinIds)) return raw;
-          const viewpointIds = raw?.refType === 'viewpoint' && raw?.refId ? [raw.refId] : [];
-          const pinIds = raw?.refType === 'pin' && raw?.refId ? [raw.refId] : [];
-          const { refType: _rt, refId: _ri, ...rest } = raw ?? {};
-          return { ...rest, viewpointIds, pinIds };
-        });
-        return { ...persisted, draft: { ...persisted.draft, agenda } };
+        if (!persisted?.draft) return persisted;
+        let draft = persisted.draft;
+        if (fromVersion < 1) {
+          const agenda = (draft.agenda ?? []).map((raw: any) => {
+            if (Array.isArray(raw?.viewpointIds) && Array.isArray(raw?.pinIds)) return raw;
+            const viewpointIds = raw?.refType === 'viewpoint' && raw?.refId ? [raw.refId] : [];
+            const pinIds = raw?.refType === 'pin' && raw?.refId ? [raw.refId] : [];
+            const { refType: _rt, refId: _ri, ...rest } = raw ?? {};
+            return { ...rest, viewpointIds, pinIds };
+          });
+          draft = { ...draft, agenda };
+        }
+        if (!Array.isArray(draft.requirements)) {
+          draft = { ...draft, requirements: [] };
+        }
+        return { ...persisted, draft };
       },
     },
   ),

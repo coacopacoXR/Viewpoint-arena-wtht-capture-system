@@ -227,7 +227,7 @@ const DialogueEngine: React.FC = () => {
 
                     const sourceIds = [...messageBuffer.current];
                     const affectedReqs: string[] = [];
-                    if ((type === 'RISK' || type === 'ACTION') && Math.random() > 0.4) {
+                    if ((type === 'RISK' || type === 'ACTION') && Math.random() > 0.4 && requirements.length > 0) {
                         affectedReqs.push(requirements[Math.floor(Math.random() * requirements.length)].id);
                     }
 

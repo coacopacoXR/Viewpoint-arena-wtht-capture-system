@@ -94,7 +94,8 @@ const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, age
                             <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
                             <input 
                                 type="text" 
-                                value={details.componentReference || "General Assembly"}
+                                value={details.componentReference ?? ''}
+                                placeholder="No component linked"
                                 onChange={(e) => handleDetailUpdate('componentReference', e.target.value)}
                                 className="text-xs font-mono font-bold text-gray-700 bg-transparent outline-none w-full"
                             />
@@ -113,7 +114,7 @@ const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, age
                     </div>
 
                     {/* REQUIREMENTS IMPACT ANALYSIS */}
-                    {affectedRequirementIds && affectedRequirementIds.length > 0 && (
+                    {affectedRequirementIds && affectedRequirementIds.length > 0 && requirements.length > 0 && (
                         <div className="bg-orange-50 border border-orange-100 rounded p-3 flex flex-col gap-2">
                             <div className="flex items-center gap-2 text-orange-800 font-bold text-xs uppercase">
                                 <Scale size={12} /> Requirements Impact

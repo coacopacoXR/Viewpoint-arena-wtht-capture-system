@@ -1033,6 +1033,9 @@ const MeetingSummary: React.FC = () => {
                         {/* REQUIREMENTS TAB */}
                         {activeTab === 'REQUIREMENTS' && (
                              <div className="flex flex-col gap-3">
+                                {requirements.length === 0 && (
+                                    <div className="text-center py-8 text-gray-400 text-sm italic">No requirements defined for this review</div>
+                                )}
                                 {requirements.map(req => {
                                     const linkedCards = insightCards.filter(c => c.affectedRequirementIds?.includes(req.id));
                                     const isHighlight = highlightedReqIds.includes(req.id);

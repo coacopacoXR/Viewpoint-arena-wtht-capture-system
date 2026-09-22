@@ -4,10 +4,12 @@ import { useStore } from '../../store';
 import {
     MessageSquare, Info, SplitSquareHorizontal,
     CheckCircle2, AlertTriangle, Lightbulb, Activity, BookOpen,
-    HelpCircle, Check, X, ShieldOff, ScanLine
+    HelpCircle, Check, X, ShieldOff, ScanLine, Plus, Scale
 } from 'lucide-react';
 import { clsx } from 'clsx';
-import { ViewMode, InsightCard } from '../../types';
+import { ViewMode, InsightCard, Requirement } from '../../types';
+import { useActiveReviewStore } from '../../lib/activeReviewStore';
+import { usePresence } from '../../lib/PresenceContext';
 import InsightDetailModal from './InsightDetailModal';
 import InsightExplainer from './InsightExplainer';
 import RecordingControls from './RecordingControls';
@@ -495,29 +497,98 @@ const ConversationPanel: React.FC = () => {
 
                 {/* REQUIREMENTS DOCS CONTENT */}
                 {activeTab === 'DOCS' && (
-                    <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2 custom-scrollbar">
-                        {requirements.map(req => (
-                            <div key={req.id} className="bg-white/5 border border-white/10 p-2 rounded text-gray-300">
-                                <div className="flex justify-between items-start mb-1">
-                                    <span className="font-mono text-[9px] font-bold text-orange-400">{req.code}</span>
-                                    <span className={clsx(
-                                        "text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase",
-                                        req.status === 'MET' ? "bg-green-500/20 text-green-400" :
-                                        req.status === 'AT_RISK' ? "bg-red-500/20 text-red-400" :
-                                        "bg-yellow-500/20 text-yellow-400"
-                                    )}>
-                                        {req.status.replace('_', ' ')}
-                                    </span>
-                                </div>
-                                <div className="text-[10px] leading-snug">{req.description}</div>
-                            </div>
-                        ))}
-                    </div>
+                    <RequirementDocsTab requirements={requirements} />
                 )}
 
             </div>
         </div>
     </>
+  );
+};
+
+// ─── Editable requirements tab (in-meeting) ────────────────────────────────
+
+const REQ_STATUSES: Requirement['status'][] = ['MET', 'PENDING', 'AT_RISK'];
+
+const RequirementDocsTab: React.FC<{ requirements: Requirement[] }> = ({ requirements }) => {
+  const addReq = useActiveReviewStore((s) => s.addRequirement);
+  const updateReq = useActiveReviewStore((s) => s.updateRequirement);
+  const removeReq = useActiveReviewStore((s) => s.removeRequirement);
+  const { broadcastReviewConfig } = usePresence();
+
+  const sync = (next: ReturnType<typeof addReq>) => {
+    if (next) broadcastReviewConfig(next);
+  };
+
+  if (requirements.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-gray-500 text-[11px] italic p-4">
+        <Scale size={22} className="opacity-30" />
+        No requirements yet — add them in the review setup
+        <button
+          onClick={() => {
+            const next = addReq({ code: '', description: 'New requirement', category: 'MECHANICAL', status: 'PENDING' });
+            sync(next);
+          }}
+          className="mt-1 flex items-center gap-1.5 px-2.5 py-1 rounded border border-emerald-400/40 bg-emerald-500/10 text-emerald-200 text-[10px] font-bold uppercase tracking-wide hover:bg-emerald-500/20 transition-colors"
+        >
+          <Plus size={11} /> Add requirement
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2 custom-scrollbar">
+      {requirements.map(req => (
+        <div key={req.id} className="bg-white/5 border border-white/10 p-2 rounded text-gray-300">
+          <div className="flex justify-between items-start mb-1 gap-1">
+            <span className="font-mono text-[9px] font-bold text-orange-400 shrink-0">{req.code}</span>
+            <div className="flex items-center gap-1 shrink-0">
+              <select
+                value={req.status}
+                onChange={(e) => {
+                  const next = updateReq(req.id, { status: e.target.value as Requirement['status'] });
+                  sync(next);
+                }}
+                className={clsx(
+                  'text-[8px] px-1 py-0.5 rounded-full font-bold uppercase border-0 outline-none cursor-pointer',
+                  req.status === 'MET' ? 'bg-green-500/20 text-green-400' :
+                  req.status === 'AT_RISK' ? 'bg-red-500/20 text-red-400' :
+                  'bg-yellow-500/20 text-yellow-400'
+                )}
+              >
+                {REQ_STATUSES.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+              </select>
+              <button
+                onClick={() => { const next = removeReq(req.id); sync(next); }}
+                className="text-gray-600 hover:text-red-400"
+              >
+                <X size={10} />
+              </button>
+            </div>
+          </div>
+          <textarea
+            value={req.description}
+            onChange={(e) => {
+              const next = updateReq(req.id, { description: e.target.value });
+              sync(next);
+            }}
+            className="w-full text-[10px] leading-snug bg-transparent outline-none resize-none text-gray-300"
+            rows={2}
+          />
+        </div>
+      ))}
+      <button
+        onClick={() => {
+          const next = addReq({ code: '', description: 'New requirement', category: 'MECHANICAL', status: 'PENDING' });
+          sync(next);
+        }}
+        className="flex items-center justify-center gap-1.5 p-2 rounded border border-dashed border-white/15 hover:border-emerald-400/50 hover:bg-emerald-500/5 text-[10px] font-bold uppercase tracking-wide text-gray-500 hover:text-emerald-200 transition-colors"
+      >
+        <Plus size={11} /> Add requirement
+      </button>
+    </div>
   );
 };
 

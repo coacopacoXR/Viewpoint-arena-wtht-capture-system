@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore';
-import type { SpatialComment } from '../types';
+import type { SpatialComment, Requirement } from '../types';
 import { useStore } from '../store';
 import { parseModelFile } from '../utils/modelLoader';
 
@@ -73,6 +73,14 @@ function syncMainComments(config: ReviewDraft | null) {
   main.setAllComments([...live, ...synthesized]);
 }
 
+// Push the review's requirements onto the main store so InsightDetailModal,
+// DialogueEngine, and MeetingSummary resolve affectedRequirementIds from the
+// active review instead of a global constant. Empty when there is no review.
+function syncMainRequirements(config: ReviewDraft | null) {
+  const main = useStore.getState();
+  main.setRequirements(config?.requirements ?? []);
+}
+
 // Make sure the World renders the curation's model. World reads
 // `activeModelType` from the main store, so loading a curation that
 // specifies e.g. 'bicycle' has to push that onto the main store too —
@@ -136,6 +144,10 @@ interface ActiveReviewState {
   updatePin: (id: string, patch: Partial<ReviewPin>) => ReviewDraft | null;
   updateAgendaItem: (id: string, patch: Partial<import('./reviewSetupStore').AgendaItem>) => ReviewDraft | null;
 
+  addRequirement: (req: Omit<Requirement, 'id'>) => ReviewDraft | null;
+  updateRequirement: (id: string, patch: Partial<Requirement>) => ReviewDraft | null;
+  removeRequirement: (id: string) => ReviewDraft | null;
+
   // Called by CommentsPanel when the user edits a pre-review comment.
   // Translates the comment patch back into a viewpoint/pin patch and returns
   // the updated draft so the caller can re-broadcast it.
@@ -165,6 +177,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     });
     syncMainComments(config);
     syncMainModel(config);
+    syncMainRequirements(config);
   },
 
   jumpToViewpoint: (id) => {
@@ -280,6 +293,52 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       updatedAt: Date.now(),
     };
     set({ config: next });
+    return next;
+  },
+
+  addRequirement: (req) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+    const code = req.code.trim() || `REQ-${id.slice(0, 4).toUpperCase()}`;
+    const next: ReviewDraft = {
+      ...cfg,
+      requirements: [...cfg.requirements, { ...req, id, code }],
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    syncMainRequirements(next);
+    return next;
+  },
+
+  updateRequirement: (id, patch) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const cleaned = patch.code !== undefined
+      ? { ...patch, code: patch.code.trim() || cfg.requirements.find((r) => r.id === id)?.code || '' }
+      : patch;
+    const next: ReviewDraft = {
+      ...cfg,
+      requirements: cfg.requirements.map((r) => r.id === id ? { ...r, ...cleaned } : r),
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    syncMainRequirements(next);
+    return next;
+  },
+
+  removeRequirement: (id) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next: ReviewDraft = {
+      ...cfg,
+      requirements: cfg.requirements.filter((r) => r.id !== id),
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    syncMainRequirements(next);
     return next;
   },
 

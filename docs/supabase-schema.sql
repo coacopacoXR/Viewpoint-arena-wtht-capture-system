@@ -124,6 +124,13 @@ create table if not exists review_curations (
   updated_at timestamptz not null default now()
 );
 
+-- Requirements travel with the review (added 2026-09-22). A separate column
+-- rather than a field inside another blob, so PostgREST selects it like the
+-- rest. Idempotent: install.sh re-applies this file on every run, which is
+-- how an existing install gets the column.
+alter table review_curations
+  add column if not exists requirements jsonb not null default '[]'::jsonb;
+
 create index if not exists review_curations_updated_at_idx
   on review_curations (updated_at desc);
 
