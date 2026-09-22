@@ -85,6 +85,32 @@ client. A room of 6 on one laptop-grade box is the limit to document.
 
 ---
 
+## B-bis. Two faults the user hit on 2026-09-23 (fix before C)
+
+1. **The recording indicator only shows on the host's screen.** Everyone else
+   has no idea a meeting is being recorded. Section B's `RECORDING_STATE`
+   broadcast is what fixes this (in flight as batch W2); until it lands, a
+   participant is recorded — through the call audio — with nothing on screen
+   saying so. That is the wrong default for a tool that records people, and
+   it is a release blocker, not a nicety.
+
+2. **The host sees no live transcript of their own speech.** Cause, found by
+   reading the code after the report: `hasLiveAudio()` accepts a track whose
+   `readyState !== 'ended'`, but a MUTED track is still "live" — only
+   `enabled` is false. Since the mic now starts muted (audio batch, deliberate:
+   the call opens on room entry), the recorder mixes the muted call track,
+   never falls back to opening its own mic, and Whisper receives silence —
+   which the new VAD filter then correctly drops, so not a single line
+   appears. Before the mute default, the recorder fell back to its own mic
+   and it worked.
+
+   The fix is NOT to record from a muted microphone: mute must mean mute.
+   - `hasLiveAudio` requires `track.enabled` as well as a non-ended state;
+   - recording while muted shows "Your microphone is muted — unmute to be
+     recorded" in the recording controls, and the indicator says the same;
+   - a client that is muted uploads nothing (section B already says this for
+     other participants; it applies to the host too).
+
 ## C. A pointing timeline ("what were they pointing at while they said it")
 
 Everything needed already exists per participant: the laser
