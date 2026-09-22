@@ -6,6 +6,7 @@ export interface ParticipantPresence {
   color: string;
   position: [number, number, number];
   lookAt: [number, number, number];
+  sameRoom?: boolean;
 }
 
 type RoomMessage =

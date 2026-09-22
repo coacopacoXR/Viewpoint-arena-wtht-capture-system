@@ -4,6 +4,7 @@ import {
   Settings, LayoutGrid, Radio, Power, MonitorPlay,
   MessageSquare, X, Monitor, MonitorOff, Layers, ChevronRight, ChevronDown,
   Video, VideoOff, Mic, MicOff, Mic2, CheckCircle, XCircle, Share2, Camera,
+  Volume2, VolumeX, Home,
 } from 'lucide-react';
 import SharePanel from '../SharePanel';
 import { clsx } from 'clsx';
@@ -110,7 +111,7 @@ const BoardroomShell: React.FC = () => {
   })));
 
   const { localUserId, remoteParticipantList, broadcastArenaEntry, broadcastMeetingEnd, broadcastLeaderTakeover, broadcastPresenterRequest, broadcastPresenterRequestDenied } = usePresence();
-  const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam } = useWebRTCContext();
+  const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam, isSpeakerOn, toggleSpeaker, isSameRoom, toggleSameRoom } = useWebRTCContext();
   const isHost = sessionHostId === localUserId || sessionHostId === null;
   const isPresenter = boardroomLeaderId === localUserId;
   // A non-approved participant in takeover mode can't grab the camera by dragging,
@@ -388,6 +389,36 @@ const BoardroomShell: React.FC = () => {
           >
             {isCamOn ? <Video size={10} /> : <VideoOff size={10} />}
             {isCamOn ? 'Cam' : 'Cam Off'}
+          </button>
+
+          {/* Speaker toggle */}
+          <button
+            onClick={toggleSpeaker}
+            title={isSpeakerOn ? 'Mute all remote audio' : 'Unmute remote audio'}
+            className={clsx(
+              'px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide border transition-all flex items-center gap-1',
+              !isSpeakerOn
+                ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                : 'bg-white/8 text-white/50 border-white/10 hover:bg-white/15 hover:text-white'
+            )}
+          >
+            {isSpeakerOn ? <Volume2 size={10} /> : <VolumeX size={10} />}
+            {isSpeakerOn ? 'Speaker' : 'Muted'}
+          </button>
+
+          {/* Same room toggle */}
+          <button
+            onClick={toggleSameRoom}
+            title={isSameRoom ? 'In the same physical room' : 'Share a physical room'}
+            className={clsx(
+              'px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide border transition-all flex items-center gap-1',
+              isSameRoom
+                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                : 'bg-white/8 text-white/50 border-white/10 hover:bg-white/15 hover:text-white'
+            )}
+          >
+            <Home size={10} />
+            {isSameRoom ? 'Same Room' : 'Same Room'}
           </button>
 
           {/* Transcript */}

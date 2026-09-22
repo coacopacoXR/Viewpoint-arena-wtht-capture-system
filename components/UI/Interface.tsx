@@ -4,9 +4,9 @@ import {
   User, Map, Activity, Flame,
   SplitSquareHorizontal, Sparkles, Users,
   Power, Layers, Network, Link, BellRing, X,
-  ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic,
+  ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic, MicOff,
   ChevronDown, ChevronRight, PanelRightClose, PanelRight,
-  MonitorPlay, Share2, Crosshair, Hand, MousePointer
+  MonitorPlay, Share2, Crosshair, Hand, MousePointer, Volume2, VolumeX, Home, Headphones
 } from 'lucide-react';
 import SharePanel from './SharePanel';
 import XRButton from './XRButton';
@@ -14,6 +14,7 @@ import { useParams } from 'react-router-dom';
 import { useStore } from '../../store';
 import { ViewMode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
+import { useWebRTCContext } from '../../lib/WebRTCContext';
 import { useFingerPointerStore } from '../../lib/fingerPointerStore';
 import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
@@ -145,7 +146,8 @@ const Interface: React.FC = () => {
   const laserHighlightGranularity = useStore(state => state.laserHighlightGranularity);
   const setLaserHighlightGranularity = useStore(state => state.setLaserHighlightGranularity);
 
-  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, broadcastBoardroomCountdown, broadcastPrivacyMode, broadcastArenaEntry, broadcastMeetingEnd } = usePresence();
+  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, broadcastBoardroomCountdown, broadcastPrivacyMode, broadcastArenaEntry, broadcastMeetingEnd, setSameRoom } = usePresence();
+  const { isMicOn, toggleMic, isSpeakerOn, toggleSpeaker, isSameRoom, toggleSameRoom, micPermissionState } = useWebRTCContext();
   const sessionHostId = useStore(state => state.sessionHostId);
   const isHost = sessionHostId === localUserId || sessionHostId === null; // null = solo session, treat as host
   const { roomId } = useParams<{ roomId: string }>();
@@ -155,6 +157,23 @@ const Interface: React.FC = () => {
   const [showExplainer, setShowExplainer] = useState(false);
   const [showDeicticExplainer, setShowDeicticExplainer] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
+
+  // Sync sameRoom flag with presence broadcasting
+  useEffect(() => {
+    setSameRoom(isSameRoom);
+  }, [isSameRoom, setSameRoom]);
+
+  // Headphones hint: shown once when 2+ participants are in the call
+  const [showHeadphonesHint, setShowHeadphonesHint] = useState(false);
+  useEffect(() => {
+    if (remoteParticipantList.length >= 1 && !localStorage.getItem('vp_headphones_hint_dismissed')) {
+      setShowHeadphonesHint(true);
+    }
+  }, [remoteParticipantList.length]);
+  const dismissHeadphonesHint = () => {
+    setShowHeadphonesHint(false);
+    localStorage.setItem('vp_headphones_hint_dismissed', '1');
+  };
 
   // Expandable panel states
   const [isSceneTreeExpanded, setIsSceneTreeExpanded] = useState(true);
@@ -411,6 +430,53 @@ const Interface: React.FC = () => {
                 {/* XR Entry */}
                 <XRButton />
 
+                {/* Mic toggle — always visible in a room */}
+                <button
+                    onClick={toggleMic}
+                    title={micPermissionState === 'blocked' ? 'Microphone blocked — re-enable in browser settings' : isMicOn ? 'Mute microphone' : 'Unmute microphone'}
+                    className={clsx(
+                        'px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2',
+                        micPermissionState === 'blocked'
+                            ? 'bg-orange-100 text-orange-700 border-orange-300'
+                            : !isMicOn
+                                ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
+                                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400'
+                    )}
+                >
+                    {micPermissionState === 'blocked' ? <MicOff size={12} /> : isMicOn ? <Mic size={12} /> : <MicOff size={12} />}
+                    {micPermissionState === 'blocked' ? 'Blocked' : isMicOn ? 'Mic On' : 'Mic Off'}
+                </button>
+
+                {/* Speaker toggle — mutes all remote audio */}
+                <button
+                    onClick={toggleSpeaker}
+                    title={isSpeakerOn ? 'Mute all remote audio' : 'Unmute remote audio'}
+                    className={clsx(
+                        'px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2',
+                        !isSpeakerOn
+                            ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
+                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400'
+                    )}
+                >
+                    {isSpeakerOn ? <Volume2 size={12} /> : <VolumeX size={12} />}
+                    {isSpeakerOn ? 'Speaker On' : 'Speaker Off'}
+                </button>
+
+                {/* Same room toggle — mutes speakers, keeps mic live */}
+                <button
+                    onClick={toggleSameRoom}
+                    title={isSameRoom ? 'You are in the same physical room' : 'Mark that you share a physical room with another participant'}
+                    className={clsx(
+                        'px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2',
+                        isSameRoom
+                            ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
+                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400'
+                    )}
+                >
+                    <Home size={12} />
+                    {isSameRoom ? 'Same Room' : 'Same Room'}
+                </button>
+
                 {/* Privacy Mode Toggle */}
                 <button
                     onClick={() => { togglePrivacyMode(); broadcastPrivacyMode(!isPrivacyMode); }}
@@ -494,6 +560,17 @@ const Interface: React.FC = () => {
                <div className="bg-green-50 border border-green-200 text-green-700 px-3 py-1.5 rounded text-[10px] font-mono flex items-center gap-2 animate-in fade-in slide-in-from-right-4">
                   <Radio size={10} className="text-green-500 animate-pulse" />
                   MEETING RECORDED
+               </div>
+           )}
+
+           {/* Headphones hint — shown once when 2+ participants are in the call */}
+           {showHeadphonesHint && (
+               <div className="bg-amber-50 border border-amber-200 text-amber-800 px-3 py-1.5 rounded text-[10px] font-mono flex items-center gap-2 animate-in fade-in slide-in-from-right-4">
+                  <Headphones size={10} />
+                  Wearing headphones avoids echo
+                  <button onClick={dismissHeadphonesHint} className="ml-1 hover:text-amber-600">
+                    <X size={10} />
+                  </button>
                </div>
            )}
 
@@ -602,6 +679,13 @@ const Interface: React.FC = () => {
                   {remoteParticipantList.length > 0 && (
                       <div className="mt-1 pt-1 border-t border-gray-100">
                           <div className="text-[8px] uppercase text-gray-400 tracking-wider px-1 mb-1">Live</div>
+                          {/* Same-room summary line */}
+                          {remoteParticipantList.some(p => p.sameRoom) && (
+                              <div className="px-2 py-1 mb-1 text-[8px] font-mono text-indigo-600 bg-indigo-50 rounded flex items-center gap-1">
+                                  <Home size={8} />
+                                  {remoteParticipantList.filter(p => p.sameRoom).map(p => p.name).join(', ')} in same room
+                              </div>
+                          )}
                           {remoteParticipantList.map(p => {
                               const isFollowing = followingRemoteUserId === p.userId;
                               return (
@@ -631,7 +715,10 @@ const Interface: React.FC = () => {
                                           {p.name[0]?.toUpperCase() || '?'}
                                       </div>
                                       <div className="flex-1 min-w-0">
-                                          <div className="font-mono text-[10px] font-bold truncate">{p.name}</div>
+                                          <div className="font-mono text-[10px] font-bold truncate flex items-center gap-1">
+                                              {p.name}
+                                              {p.sameRoom && <Home size={7} className="text-indigo-500 shrink-0" />}
+                                          </div>
                                           <div className={clsx("text-[8px]", isFollowing ? "text-gray-300" : "text-gray-400")}>human</div>
                                       </div>
                                       {isFollowing

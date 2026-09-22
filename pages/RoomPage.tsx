@@ -14,6 +14,7 @@ import { useActiveReviewStore } from '../lib/activeReviewStore';
 import { loadCuration, saveCuration } from '../lib/curationsRepo';
 import { useIsMobile } from '../lib/useIsMobile';
 import { RecordingProvider } from '../lib/RecordingContext';
+import RemoteAudioSink from '../components/UI/RemoteAudioSink';
 
 function getMobileUserName(): string {
   try {
@@ -114,7 +115,8 @@ const RoomPage: React.FC = () => {
     remoteParticipantList: presence.remoteParticipantList,
     broadcastWebRTCSignal: presence.broadcastWebRTCSignal,
     registerWebRTCSignalHandler: presence.registerWebRTCSignalHandler,
-    active: isBoardroomMode,
+    active: true,
+    isBoardroomMode,
   });
 
   // PresenceContext wraps BOTH mobile and desktop so ViewpointCanvas works in both.
@@ -125,6 +127,7 @@ const RoomPage: React.FC = () => {
     <PresenceContext.Provider value={presence}>
     <WebRTCContext.Provider value={webrtc}>
     <RecordingProvider>
+      <RemoteAudioSink />
       {isMobile ? (
         <MobileRoomView
           roomId={roomId ?? ''}

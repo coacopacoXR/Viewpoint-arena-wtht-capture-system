@@ -18,6 +18,7 @@
 // mute or end anybody's call.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AUDIO_CONSTRAINTS } from './useWebRTC';
 
 export type RecorderState = 'idle' | 'recording' | 'unsupported';
 
@@ -381,7 +382,7 @@ export function useMeetingRecorder({
         // MediaRecorder produced a 0-byte recording (found in a live test).
         if (!navigator.mediaDevices?.getUserMedia) throw new Error(NO_MICROPHONE_MESSAGE);
         try {
-          ownMicRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+          ownMicRef.current = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
         } catch {
           throw new Error(NO_MICROPHONE_MESSAGE);
         }

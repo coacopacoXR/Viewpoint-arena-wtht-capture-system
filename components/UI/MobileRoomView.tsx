@@ -8,7 +8,7 @@ import BoardroomCountdown from './BoardroomCountdown';
 import HumanParticipantTile from './Boardroom/HumanParticipantTile';
 import { mobileLaserRef } from '../../lib/mobileLaserRef';
 import { InsightCard, SpatialComment, LiveChatMessage, ChatTag } from '../../types';
-import { MonitorPlay, Radio, Mic, MicOff, Video, VideoOff, Power, Crosshair, Send } from 'lucide-react';
+import { MonitorPlay, Radio, Mic, MicOff, Video, VideoOff, Power, Crosshair, Send, Volume2, VolumeX } from 'lucide-react';
 
 type Tab = '3d' | 'session' | 'people';
 type SessionSubTab = 'chat' | 'comments' | 'insights';
@@ -55,7 +55,7 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
     remoteParticipantList, broadcastPresence, broadcastCommentAdd,
     broadcastMeetingEnd, broadcastChatMessage, localUserId,
   } = usePresence();
-  const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam } = useWebRTCContext();
+  const { localStream, remoteStreams, isMicOn, isCamOn, toggleMic, toggleCam, isSpeakerOn, toggleSpeaker } = useWebRTCContext();
 
   const [activeTab, setActiveTab] = useState<Tab>('3d');
   const [sessionSubTab, setSessionSubTab] = useState<SessionSubTab>('chat');
@@ -329,6 +329,22 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
             <span style={{ color: '#10b981', fontSize: 7 }}>●</span>
             <span className="font-mono text-[10px]" style={{ color: '#4b5563' }}>{allParticipants.length}</span>
           </div>
+          {/* Mic toggle */}
+          <button
+            onClick={toggleMic}
+            className="rounded-full flex items-center justify-center"
+            style={{ width: 28, height: 28, background: isMicOn ? 'rgba(255,255,255,0.1)' : 'rgba(239,68,68,0.3)', border: `1px solid ${isMicOn ? 'rgba(255,255,255,0.15)' : 'rgba(239,68,68,0.4)'}` }}
+          >
+            {isMicOn ? <Mic size={12} color="#fff" /> : <MicOff size={12} color="#f87171" />}
+          </button>
+          {/* Speaker toggle */}
+          <button
+            onClick={toggleSpeaker}
+            className="rounded-full flex items-center justify-center"
+            style={{ width: 28, height: 28, background: isSpeakerOn ? 'rgba(255,255,255,0.1)' : 'rgba(239,68,68,0.3)', border: `1px solid ${isSpeakerOn ? 'rgba(255,255,255,0.15)' : 'rgba(239,68,68,0.4)'}` }}
+          >
+            {isSpeakerOn ? <Volume2 size={12} color="#fff" /> : <VolumeX size={12} color="#f87171" />}
+          </button>
         </div>
       </div>
 

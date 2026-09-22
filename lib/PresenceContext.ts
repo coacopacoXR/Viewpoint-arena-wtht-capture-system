@@ -9,6 +9,7 @@ export const PresenceContext = createContext<UsePartyPresenceReturn>({
   remoteLasers: { current: new Map<string, import('./usePartyPresence').RemoteLaserState>() },
   remoteParticipantList: [],
   broadcastPresence: noop,
+  setSameRoom: noop,
   broadcastPresenterChange: noop,
   broadcastInsightCard: noop,
   broadcastLeaderChange: noop,

@@ -98,12 +98,14 @@ const HumanParticipantTile: React.FC<HumanParticipantTileProps> = ({
       <div className="absolute bottom-6 left-1.5 w-3 h-3 border-b border-l border-white/20 rounded-bl z-10 pointer-events-none" />
       <div className="absolute bottom-6 right-1.5 w-3 h-3 border-b border-r border-white/20 rounded-br z-10 pointer-events-none" />
 
-      {/* Video element — always mounted, hidden when no active video */}
+      {/* Video element — always mounted, hidden when no active video.
+          Always muted: remote audio is played by the shared RemoteAudioSink
+          in RoomPage, not by individual tiles (which would double playback). */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        muted={isYou}
+        muted
         className="absolute inset-0 w-full h-full"
         style={{
           objectFit: 'cover',

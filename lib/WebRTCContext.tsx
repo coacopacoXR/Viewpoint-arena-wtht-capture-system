@@ -6,11 +6,16 @@ const defaultReturn: UseWebRTCReturn = {
   remoteStreams: new Map(),
   peerStates: new Map(),
   isMicOn: true,
-  isCamOn: true,
+  isCamOn: false,
   hasPermission: false,
   isStarting: false,
   toggleMic: () => {},
   toggleCam: () => {},
+  isSpeakerOn: true,
+  toggleSpeaker: () => {},
+  isSameRoom: false,
+  toggleSameRoom: () => {},
+  micPermissionState: 'prompt',
 };
 
 export const WebRTCContext = React.createContext<UseWebRTCReturn>(defaultReturn);

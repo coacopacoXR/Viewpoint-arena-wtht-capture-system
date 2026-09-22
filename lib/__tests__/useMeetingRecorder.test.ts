@@ -26,6 +26,7 @@ import {
   useMeetingRecorder,
   type MixingAudioContext,
 } from '../useMeetingRecorder';
+import { AUDIO_CONSTRAINTS } from '../useWebRTC';
 
 // ─── Fakes ──────────────────────────────────────────────────────────────────
 
@@ -533,7 +534,7 @@ describe('useMeetingRecorder', () => {
       await result.current.start();
     });
 
-    expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: AUDIO_CONSTRAINTS });
     expect(state.sources.map((s) => s.stream)).toEqual([ownMic]);
 
     await act(async () => {

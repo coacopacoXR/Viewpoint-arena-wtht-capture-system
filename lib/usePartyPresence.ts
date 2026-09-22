@@ -97,6 +97,7 @@ export interface RemoteParticipantInfo {
   userId: string;
   name: string;
   color: string;
+  sameRoom?: boolean;
 }
 
 export interface UsePartyPresenceReturn {
@@ -105,6 +106,7 @@ export interface UsePartyPresenceReturn {
   remoteLasers: React.MutableRefObject<Map<string, RemoteLaserState>>;
   remoteParticipantList: RemoteParticipantInfo[];
   broadcastPresence: (position: [number, number, number], lookAt: [number, number, number]) => void;
+  setSameRoom: (value: boolean) => void;
   broadcastPresenterChange: (agentId: string | null) => void;
   broadcastInsightCard: (card: InsightCard) => void;
   broadcastLeaderChange: (userId: string | null) => void;
@@ -137,6 +139,11 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   const [remoteParticipantList, setRemoteParticipantList] = React.useState<RemoteParticipantInfo[]>([]);
   const socketRef = useRef<PartySocket | null>(null);
   const userRef = useRef(getUserInfo());
+  const sameRoomRef = useRef(false);
+  const lastPresenceRef = useRef<{ position: [number, number, number]; lookAt: [number, number, number] }>({
+    position: [0, 0, 0],
+    lookAt: [0, 0, 0],
+  });
 
   const {
     addInsightCard, setActiveAgent, setViewMode, setFollowingRemoteUser,
@@ -147,7 +154,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
 
   function syncList() {
     setRemoteParticipantList(
-      Array.from(remoteParticipants.current.values()).map(({ userId, name, color }) => ({ userId, name, color })),
+      Array.from(remoteParticipants.current.values()).map(({ userId, name, color, sameRoom }) => ({ userId, name, color, sameRoom })),
     );
   }
 
@@ -374,11 +381,20 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
+    lastPresenceRef.current = { position, lookAt };
+
     const msg: RoomMessage = {
       type: 'PRESENCE',
-      payload: { userId: userRef.current.userId, name: userRef.current.name, color: userRef.current.color, position, lookAt },
+      payload: { userId: userRef.current.userId, name: userRef.current.name, color: userRef.current.color, position, lookAt, sameRoom: sameRoomRef.current },
     };
     socket.send(JSON.stringify(msg));
+  }
+
+  function setSameRoom(value: boolean) {
+    sameRoomRef.current = value;
+    // Re-broadcast immediately so the flag propagates without waiting for the next frame
+    const { position, lookAt } = lastPresenceRef.current;
+    broadcastPresence(position, lookAt);
   }
 
   function broadcastPresenterChange(agentId: string | null) {
@@ -553,6 +569,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     remoteLasers,
     remoteParticipantList,
     broadcastPresence,
+    setSameRoom,
     broadcastPresenterChange,
     broadcastInsightCard,
     broadcastLeaderChange,

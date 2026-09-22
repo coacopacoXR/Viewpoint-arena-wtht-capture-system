@@ -28,6 +28,16 @@ const ICE_SERVERS: RTCIceServer[] = [
   },
 ];
 
+// Echo/suppression constraints for every mic open — prevents feedback howl
+// when two laptops sit at the same table.
+export const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+export type MicPermissionState = 'prompt' | 'granted' | 'blocked';
+
 export interface UseWebRTCReturn {
   localStream: MediaStream | null;
   remoteStreams: Map<string, MediaStream>;
@@ -38,6 +48,11 @@ export interface UseWebRTCReturn {
   isStarting: boolean;
   toggleMic: () => void;
   toggleCam: () => void;
+  isSpeakerOn: boolean;
+  toggleSpeaker: () => void;
+  isSameRoom: boolean;
+  toggleSameRoom: () => void;
+  micPermissionState: MicPermissionState;
 }
 
 interface Params {
@@ -46,6 +61,7 @@ interface Params {
   broadcastWebRTCSignal: (to: string, data: any) => void;
   registerWebRTCSignalHandler: (handler: (payload: { from: string; to: string; data: any }) => void) => () => void;
   active: boolean;
+  isBoardroomMode: boolean;
 }
 
 export function useWebRTC({
@@ -54,6 +70,7 @@ export function useWebRTC({
   broadcastWebRTCSignal,
   registerWebRTCSignalHandler,
   active,
+  isBoardroomMode,
 }: Params): UseWebRTCReturn {
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -69,10 +86,19 @@ export function useWebRTC({
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   const [peerStates, setPeerStates] = useState<Map<string, RTCPeerConnectionState>>(new Map());
-  const [isMicOn, setIsMicOn] = useState(true);
-  const [isCamOn, setIsCamOn] = useState(true);
+  // Muted on arrival, deliberately. The call now starts when you enter the
+  // room rather than when you press BOARDROOM, so an unmuted default would
+  // broadcast whatever is happening around you the moment permission is
+  // granted — and, with two laptops at one table, start a feedback howl
+  // before anyone has touched a control. The header shows the muted state and
+  // one click unmutes.
+  const [isMicOn, setIsMicOn] = useState(false);
+  const [isCamOn, setIsCamOn] = useState(false);
   const [hasPermission, setHasPermission] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+  const [isSameRoom, setIsSameRoom] = useState(false);
+  const [micPermissionState, setMicPermissionState] = useState<MicPermissionState>('prompt');
 
   const knownPeerIds = useRef<Set<string>>(new Set());
 
@@ -207,7 +233,8 @@ export function useWebRTC({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Start/stop media when boardroom activates
+  // Start/stop media when the call activates (room entry).
+  // Audio-only: video is added separately when the boardroom is entered.
   useEffect(() => {
     if (!active) {
       for (const pc of peerConnections.current.values()) pc.close();
@@ -223,10 +250,12 @@ export function useWebRTC({
       setRemoteStreams(new Map());
       setPeerStates(new Map());
       setHasPermission(false);
+      setMicPermissionState('prompt');
       return;
     }
 
     setIsStarting(true);
+    setMicPermissionState('prompt');
 
     // Fetch fresh Cloudflare TURN credentials in parallel with getUserMedia.
     // If the fetch succeeds, iceServersRef.current is upgraded BEFORE we
@@ -242,14 +271,25 @@ export function useWebRTC({
       })
       .catch(() => { /* keep fallback */ });
 
-    const tryMedia = (video: boolean) =>
-      navigator.mediaDevices.getUserMedia({ video, audio: true });
-
-    const media = tryMedia(true).catch(() => tryMedia(false));
+    // Audio-only with echo/suppression constraints — the arena has no camera.
+    // Video is added later when the boardroom is entered.
+    const media = navigator.mediaDevices
+      .getUserMedia({ audio: AUDIO_CONSTRAINTS })
+      .then(stream => {
+        setMicPermissionState('granted');
+        return stream;
+      })
+      .catch(() => {
+        setMicPermissionState('blocked');
+        // Return an empty stream so the room still works without a mic.
+        return new MediaStream();
+      });
 
     Promise.all([fetchTurn, media])
       .then(([, stream]) => {
         localStreamRef.current = stream;
+        // Honour the muted-on-arrival default before the track reaches a peer.
+        for (const track of stream.getAudioTracks()) track.enabled = isMicOnRef.current;
         setLocalStream(stream);
         setHasPermission(true);
         setIsStarting(false);
@@ -284,6 +324,60 @@ export function useWebRTC({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
+  // Add/remove video track when the boardroom is entered or left.
+  // Arena = audio-only; boardroom = audio + video.
+  useEffect(() => {
+    if (!hasPermission || !localStreamRef.current) return;
+    const stream = localStreamRef.current;
+
+    if (isBoardroomMode) {
+      // Check if we already have a video track
+      if (stream.getVideoTracks().length > 0) {
+        setIsCamOn(true);
+        return;
+      }
+      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then(videoStream => {
+          const videoTrack = videoStream.getVideoTracks()[0];
+          if (!videoTrack || !localStreamRef.current) return;
+          localStreamRef.current.addTrack(videoTrack);
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+          setIsCamOn(true);
+          // Add video track to all existing peers and renegotiate
+          for (const pc of peerConnections.current.values()) {
+            if (pc.connectionState === 'closed' || pc.connectionState === 'failed') continue;
+            addLocalTracksToPeer(pc);
+          }
+          // Renegotiate with all peers
+          for (const userId of peerConnections.current.keys()) {
+            const pc = peerConnections.current.get(userId);
+            if (pc && pc.signalingState === 'stable') {
+              initiateConnection(userId);
+            }
+          }
+        })
+        .catch(() => { /* video not available, stay audio-only in boardroom */ });
+    } else {
+      // Stop and remove all video tracks
+      const videoTracks = stream.getVideoTracks();
+      if (videoTracks.length === 0) return;
+      for (const track of videoTracks) {
+        track.stop();
+        stream.removeTrack(track);
+      }
+      setLocalStream(new MediaStream(stream.getTracks()));
+      setIsCamOn(false);
+      // Renegotiate so peers know video is gone
+      for (const userId of peerConnections.current.keys()) {
+        const pc = peerConnections.current.get(userId);
+        if (pc && pc.signalingState === 'stable') {
+          initiateConnection(userId);
+        }
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBoardroomMode, hasPermission]);
+
   // Connect to each remote participant — both sides always initiate (perfect negotiation handles collision)
   useEffect(() => {
     if (!active || !hasPermission) return;
@@ -317,6 +411,10 @@ export function useWebRTC({
     return registerWebRTCSignalHandler(handleSignal);
   }, [registerWebRTCSignalHandler, handleSignal]);
 
+  // Read inside the media promise, which resolves after the first render.
+  const isMicOnRef = useRef(isMicOn);
+  isMicOnRef.current = isMicOn;
+
   const toggleMic = useCallback(() => {
     if (!localStreamRef.current) return;
     const next = !isMicOn;
@@ -331,5 +429,24 @@ export function useWebRTC({
     setIsCamOn(next);
   }, [isCamOn]);
 
-  return { localStream, remoteStreams, peerStates, isMicOn, isCamOn, hasPermission, isStarting, toggleMic, toggleCam };
+  const toggleSpeaker = useCallback(() => {
+    setIsSpeakerOn(prev => !prev);
+  }, []);
+
+  const toggleSameRoom = useCallback(() => {
+    setIsSameRoom(prev => {
+      const next = !prev;
+      // Same-room on mutes your speakers (you're sitting next to the other person)
+      if (next) setIsSpeakerOn(false);
+      return next;
+    });
+  }, []);
+
+  return {
+    localStream, remoteStreams, peerStates, isMicOn, isCamOn, hasPermission, isStarting,
+    toggleMic, toggleCam,
+    isSpeakerOn, toggleSpeaker,
+    isSameRoom, toggleSameRoom,
+    micPermissionState,
+  };
 }
