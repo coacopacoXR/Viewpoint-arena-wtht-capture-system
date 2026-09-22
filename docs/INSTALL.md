@@ -129,9 +129,9 @@ certificate instead of buying one. Click **Advanced → Continue to localhost
 
 **Saved reviews (the database).**
 Type your name, press **Curate a design review →**, wait for the 3D model to
-appear, then press **CAPTURE VIEW** to save the current camera angle. Go back to the lobby (**LOBBY**, top left):
-your review is listed under **Saved reviews**. Reload the page; it is still
-there.
+appear, then press **CAPTURE VIEW** to save the current camera angle. Go back
+to the lobby (**LOBBY**, top left): your review is listed under **Saved
+reviews**. Reload the page; it is still there.
 
 **Live collaboration.**
 Press your review in the **Saved reviews** list: its review room opens.
