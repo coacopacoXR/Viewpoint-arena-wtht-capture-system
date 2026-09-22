@@ -8,7 +8,11 @@ import ReviewPanelContent from './ReviewPanelContent';
 // Lives in the bottom dock (where Visual Aids used to be). Two states:
 //   collapsed (default) — compact pill: title + counts
 //   expanded — pops upward with the shared ReviewPanelContent editor
-const ReviewViewpointsDock: React.FC = () => {
+interface ReviewViewpointsDockProps {
+  isRightPanelCollapsed?: boolean;
+}
+
+const ReviewViewpointsDock: React.FC<ReviewViewpointsDockProps> = ({ isRightPanelCollapsed = false }) => {
   const config = useActiveReviewStore((s) => s.config);
   const managerMode = useActiveReviewStore((s) => s.managerMode);
   const [open, setOpen] = useState(false);
@@ -62,7 +66,12 @@ const ReviewViewpointsDock: React.FC = () => {
       </div>
 
       {open && (
-        <div className="absolute bottom-full mb-2 right-0 w-[340px] bg-white/97 backdrop-blur-md rounded-lg border border-gray-200 shadow-xl overflow-hidden">
+        <div
+          className={clsx(
+            'absolute bottom-full mb-2 w-[340px] bg-white/97 backdrop-blur-md rounded-lg border border-gray-200 shadow-xl overflow-hidden',
+            isRightPanelCollapsed ? 'right-0' : 'right-[356px]'
+          )}
+        >
           <div className="px-3 py-2 border-b border-gray-100 bg-gray-50/70 flex items-center justify-between">
             <div className="min-w-0">
               <div className="text-[9px] font-mono uppercase tracking-widest text-gray-400">Active Review</div>

@@ -983,7 +983,7 @@ const Interface: React.FC = () => {
         </div>
 
         {/* Right: Active Review pane (replaces the old Visual Aids panel) */}
-        <ReviewViewpointsDock />
+        <ReviewViewpointsDock isRightPanelCollapsed={isRightPanelCollapsed} />
 
       </div>
 
