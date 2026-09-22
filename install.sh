@@ -653,7 +653,7 @@ collect_answers() {
   if [[ -n "$FORCE_GPU" ]]; then
     A_GPU="$FORCE_GPU"
   else
-    A_GPU="$(ask_yes_no 'Enable the GPU compose override (NVIDIA Container Toolkit required)?' 'no')"
+    A_GPU="$(ask_yes_no 'Run the local AI model on an NVIDIA GPU? (check first: docs/INSTALL.md step 2d)' 'no')"
   fi
   A_N8N="$(ask_yes_no 'Enable the optional n8n workflow container (T4.8)?' 'no')"
 
