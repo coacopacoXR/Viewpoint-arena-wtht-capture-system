@@ -56,6 +56,32 @@ So an admin panel needs, in order:
    no owner. On first sign-in of the first admin, claim them all for that
    admin, and say so plainly rather than silently hiding data.
 
+## M-bis. Guests: a link must stay enough (user, 2026-09-23)
+
+**Accounts must not make sharing rigid.** Sending someone a link and having
+them join has to keep working — the app's whole point is that a supplier or a
+colleague joins a review in one click. So accounts are for *members*, and a
+room additionally accepts *guests*:
+
+- **Knock to join (default).** Someone with the link who is not signed in
+  types a name and lands in a waiting state; the host sees "Maria wants to
+  join — Admit / Decline". Admitting mints a **guest token**: signed with the
+  same JWT secret, scoped to that one room, expiring with the meeting. It
+  carries no access to other reviews, the tracker, or anything else, and the
+  row-level policies check that claim rather than trusting the client.
+- **Per-link policy**, chosen when sharing: *Anyone with the link* (no
+  knock — for a demo or an open review), *Ask the host* (the default), or
+  *Members only* (the locked-down case). The share panel says which one is
+  in force, in words.
+- **A guest is a real participant**: their name appears in presence, their
+  transcript lines are attributed to them, they can be assigned an action.
+  What they cannot do is wander into other reviews.
+- **Leaving the meeting ends the access.** No lingering guest sessions; a
+  returning guest knocks again (or the host copies a fresh link).
+
+This is what keeps the "solid architecture, not rigid" balance: identity
+where it protects data, a link where it removes friction.
+
 ## N. The admin panel
 
 Once M exists, one screen (admin only):
@@ -80,6 +106,7 @@ Once M exists, one screen (admin only):
 | AH | M1 (GoTrue in the stack, sign-in, profiles) | large |
 | AI | M2 (row-level security over reviews/tracker) | large, and the riskiest |
 | AJ | N (admin panel: people, groups, access, audit) | large |
+| AK | M-bis (guest links: knock-to-join, per-link policy, scoped guest tokens) | medium, built WITH M3 so guests are never locked out |
 
 L is a UI batch and ships next. M and N are the difference between a demo and
 a multi-team tool: they touch the installer, the compose stack, every data
