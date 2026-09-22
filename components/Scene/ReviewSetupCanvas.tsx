@@ -4,6 +4,11 @@ import { OrbitControls, PerspectiveCamera, Html, TransformControls } from '@reac
 import * as THREE from 'three';
 import World from './World';
 import { useReviewSetupStore, type ReviewPin, type ReviewViewpoint, type PinSeverity } from '../../lib/reviewSetupStore';
+// Stable empty array: `?? []` inside a zustand selector is a new array on
+// every render when the source is null, which loops React forever (#185).
+// See lib/people.ts.
+const EMPTY_LIST: never[] = [];
+
 
 export type GizmoMode = 'translate' | 'rotate' | 'scale' | null;
 
@@ -261,8 +266,8 @@ const ReviewSetupCanvas = React.forwardRef<ReviewSetupCanvasHandle, Props>(({ pi
   const stateRef = useRef<InnerState>({ camera: null, controls: null, gl: null, scene: null });
   const controlsRef = useRef<any>(null);
   const modelGroupRef = useRef<THREE.Group | null>(null);
-  const pins = useReviewSetupStore((s) => s.draft?.pins ?? []);
-  const viewpoints = useReviewSetupStore((s) => s.draft?.viewpoints ?? []);
+  const pins = useReviewSetupStore((s) => s.draft?.pins ?? EMPTY_LIST);
+  const viewpoints = useReviewSetupStore((s) => s.draft?.viewpoints ?? EMPTY_LIST);
   const [jumpTarget, setJumpTarget] = React.useState<{ position: [number, number, number]; lookAt: [number, number, number] } | null>(null);
 
   useImperativeHandle(ref, () => ({

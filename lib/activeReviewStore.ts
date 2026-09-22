@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore';
 import type { SpatialComment, Requirement } from '../types';
+import type { TeamMember } from './people';
 import { useStore } from '../store';
 import { parseModelFile } from '../utils/modelLoader';
 
@@ -147,6 +148,11 @@ interface ActiveReviewState {
   addRequirement: (req: Omit<Requirement, 'id'>) => ReviewDraft | null;
   updateRequirement: (id: string, patch: Partial<Requirement>) => ReviewDraft | null;
   removeRequirement: (id: string) => ReviewDraft | null;
+
+  addTeamMember: (member: Omit<TeamMember, 'id'>) => ReviewDraft | null;
+  updateTeamMember: (id: string, patch: Partial<TeamMember>) => ReviewDraft | null;
+  removeTeamMember: (id: string) => ReviewDraft | null;
+  reorderTeam: (fromIdx: number, toIdx: number) => ReviewDraft | null;
 
   // Called by CommentsPanel when the user edits a pre-review comment.
   // Translates the comment patch back into a viewpoint/pin patch and returns
@@ -339,6 +345,57 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     };
     set({ config: next });
     syncMainRequirements(next);
+    return next;
+  },
+
+  addTeamMember: (member) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+    const next: ReviewDraft = {
+      ...cfg,
+      team: [...cfg.team, { ...member, id }],
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    return next;
+  },
+
+  updateTeamMember: (id, patch) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next: ReviewDraft = {
+      ...cfg,
+      team: cfg.team.map((m) => m.id === id ? { ...m, ...patch } : m),
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    return next;
+  },
+
+  removeTeamMember: (id) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next: ReviewDraft = {
+      ...cfg,
+      team: cfg.team.filter((m) => m.id !== id),
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    return next;
+  },
+
+  reorderTeam: (fromIdx, toIdx) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const arr = [...cfg.team];
+    if (fromIdx < 0 || fromIdx >= arr.length || toIdx < 0 || toIdx >= arr.length) return cfg;
+    const [moved] = arr.splice(fromIdx, 1);
+    arr.splice(toIdx, 0, moved);
+    const next: ReviewDraft = { ...cfg, team: arr, updatedAt: Date.now() };
+    set({ config: next });
     return next;
   },
 

@@ -16,6 +16,21 @@ vi.mock('../../../store', () => ({
   }) as unknown as typeof vi.fn,
 }));
 
+// AssigneeComboBox (imported by InsightDetailModal) depends on these.
+vi.mock('../../../lib/PresenceContext', () => ({
+  usePresence: () => ({ remoteParticipantList: [], localUserId: '' }),
+}));
+vi.mock('../../../lib/activeReviewStore', () => ({
+  useActiveReviewStore: (selector: (s: Record<string, unknown>) => unknown) => {
+    const state = { config: { team: [] }, addTeamMember: vi.fn() };
+    if (typeof selector === 'function') return selector(state);
+    return state;
+  },
+}));
+vi.mock('../../../lib/identity', () => ({
+  getIdentity: () => null,
+}));
+
 import InsightDetailModal from '../InsightDetailModal';
 
 function makeCard(overrides: Partial<InsightCard> = {}): InsightCard {

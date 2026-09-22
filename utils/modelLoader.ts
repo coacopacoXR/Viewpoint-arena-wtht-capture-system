@@ -230,11 +230,14 @@ export async function parseModelFile(file: File): Promise<ModelImportResult> {
 
     const rootGroup = new THREE.Group();
     rootGroup.name = file.name.replace(/\.[^/.]+$/, '');
-    // @ts-expect-error: @pmndrs/pointer-events augments Object3D via `declare module 'three'`
-    // which creates a dual identity with src/core/Object3D under @types/three's dual entry
-    // points. The polymorphic `this` on applyQuaternion makes the two Object3Ds mutually
-    // unassignable. Safe at runtime — both are THREE.Object3D instances.
-    rootGroup.add(loadedObject);
+    // A cast, not @ts-expect-error: @pmndrs/pointer-events augments Object3D via
+    // `declare module 'three'`, giving a dual identity with src/core/Object3D under
+    // @types/three's dual entry points, and the polymorphic `this` on applyQuaternion
+    // makes the two mutually unassignable. Whether that clash is visible depends on
+    // which modules the program pulls in, so a directive here is "unused" in some
+    // builds and required in others (it broke a typecheck on 2026-09-22). Both are
+    // THREE.Object3D instances at runtime.
+    rootGroup.add(loadedObject as unknown as THREE.Object3D);
 
     applySceneDefaults(rootGroup);
 

@@ -1,21 +1,13 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from '../../store';
-import { 
+import {
     AlertTriangle, CheckCircle2, Lightbulb, X, Calendar, User, Flag, Activity, Box,
     Scale, BrainCircuit
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { InsightCard } from '../../types';
-
-const TEAM_MEMBERS = [
-  "Unassigned",
-  "Alex Chen (Lead)",
-  "Sarah J. (Ergo)",
-  "Design Team A",
-  "Mfg. Engineering", 
-  "Validation Lab"
-];
+import AssigneeComboBox from './AssigneeComboBox';
 
 const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, agentColor?: string }> = ({ card, onClose }) => {
     const requirements = useStore(state => state.requirements);
@@ -190,15 +182,10 @@ const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, age
                             <label className="flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase">
                                 <User size={10}/> Assignee
                             </label>
-                            <select 
-                                value={details.assignee || "Unassigned"}
-                                onChange={(e) => handleDetailUpdate('assignee', e.target.value)}
-                                className="text-xs text-gray-800 font-medium border-b border-gray-200 focus:border-black outline-none py-1 bg-transparent cursor-pointer"
-                            >
-                                {TEAM_MEMBERS.map(member => (
-                                    <option key={member} value={member}>{member}</option>
-                                ))}
-                            </select>
+                            <AssigneeComboBox
+                                value={details.assignee || ''}
+                                onChange={(v) => handleDetailUpdate('assignee', v || undefined)}
+                            />
                         </div>
                         <div className="flex flex-col gap-1">
                             <label className="flex items-center gap-1 text-[10px] font-bold text-gray-400 uppercase">

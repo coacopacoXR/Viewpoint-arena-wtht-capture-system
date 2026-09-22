@@ -131,6 +131,11 @@ create table if not exists review_curations (
 alter table review_curations
   add column if not exists requirements jsonb not null default '[]'::jsonb;
 
+-- Team roster travels with the review (added 2026-09-22). People who can be
+-- assigned to tracker items and insight cards. Idempotent like requirements.
+alter table review_curations
+  add column if not exists team jsonb not null default '[]'::jsonb;
+
 create index if not exists review_curations_updated_at_idx
   on review_curations (updated_at desc);
 

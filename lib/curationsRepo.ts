@@ -33,6 +33,8 @@ interface CurationRow {
   viewpoints: ReviewDraft['viewpoints'];
   pins: ReviewDraft['pins'];
   agenda: ReviewDraft['agenda'];
+  requirements?: ReviewDraft['requirements'];
+  team?: ReviewDraft['team'];
   created_at: string;
   updated_at: string;
 }
@@ -46,7 +48,8 @@ function rowToDraft(row: CurationRow): ReviewDraft {
     viewpoints: row.viewpoints ?? [],
     pins: row.pins ?? [],
     agenda: row.agenda ?? [],
-    requirements: ('requirements' in row ? (row as Record<string, unknown>).requirements as ReviewDraft['requirements'] : undefined) ?? [],
+    requirements: row.requirements ?? [],
+    team: row.team ?? [],
     createdAt: Date.parse(row.created_at),
     updatedAt: Date.parse(row.updated_at),
   };
@@ -64,6 +67,7 @@ function draftToRow(draft: ReviewDraft) {
     pins: draft.pins,
     agenda: draft.agenda,
     requirements: draft.requirements,
+    team: draft.team,
   };
 }
 
@@ -94,7 +98,7 @@ export async function saveCuration(draft: ReviewDraft): Promise<{ ok: boolean; e
 export async function listRecentCurations(limit = 8): Promise<CurationSummary[]> {
   const { data, error } = await supabase
     .from('review_curations')
-    .select('id,title,description,viewpoints,pins,agenda,requirements,created_at,updated_at')
+    .select('id,title,description,viewpoints,pins,agenda,requirements,team,created_at,updated_at')
     .order('updated_at', { ascending: false })
     .limit(limit);
   if (error) {
@@ -127,7 +131,7 @@ export async function deleteCuration(id: string): Promise<boolean> {
 export async function getCurationSummary(id: string): Promise<CurationSummary | null> {
   const { data, error } = await supabase
     .from('review_curations')
-    .select('id,title,description,viewpoints,pins,agenda,requirements,created_at,updated_at')
+    .select('id,title,description,viewpoints,pins,agenda,requirements,team,created_at,updated_at')
     .eq('id', id)
     .maybeSingle();
   if (error || !data) return null;

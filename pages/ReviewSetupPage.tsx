@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import {
   ChevronLeft, Camera, MapPin, ListOrdered, Box, Trash2,
   Play, Plus, GripVertical, X, AlertTriangle, Info, ShieldAlert,
-  FileBox, Layers, Cloud, CloudOff, Check, Link2, Move3D, RotateCcw, Scale
+  FileBox, Layers, Cloud, CloudOff, Check, Link2, Move3D, RotateCcw, Scale, Users
 } from 'lucide-react';
 import ReviewSetupCanvas, { type ReviewSetupCanvasHandle, type GizmoMode } from '../components/Scene/ReviewSetupCanvas';
 import {
@@ -31,7 +31,12 @@ import {
   type PLMLaunch,
 } from '../lib/connectors/plm/launchParams';
 
-type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda' | 'requirements';
+// Stable empty array: `?? []` inside a zustand selector is a new array on
+// every render when the source is null, which loops React forever (#185).
+// See lib/people.ts.
+const EMPTY_TEAM: never[] = [];
+
+type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda' | 'requirements' | 'people';
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
@@ -76,7 +81,7 @@ const ReviewSetupPage: React.FC = () => {
     return JSON.stringify({
       title: d.title, description: d.description, asset,
       viewpoints: d.viewpoints, pins: d.pins, agenda: d.agenda,
-      requirements: d.requirements,
+      requirements: d.requirements, team: d.team,
     });
   };
 
@@ -267,6 +272,8 @@ const ReviewSetupPage: React.FC = () => {
           <span>{draft.agenda.length} AGENDA</span>
           <span>·</span>
           <span>{draft.requirements.length} REQS</span>
+          <span>·</span>
+          <span>{draft.team.length} PEOPLE</span>
         </div>
         <PresenceStack peers={otherPeers} />
         {modelImport === 'onshape' && <OnshapeStatusPill />}
@@ -338,6 +345,7 @@ const ReviewSetupPage: React.FC = () => {
             <TabButton id="pins" current={tab} onSelect={setTab} icon={<MapPin size={13} />} count={draft.pins.length}>Pins</TabButton>
             <TabButton id="agenda" current={tab} onSelect={setTab} icon={<ListOrdered size={13} />} count={draft.agenda.length}>Agenda</TabButton>
             <TabButton id="requirements" current={tab} onSelect={setTab} icon={<Scale size={13} />} count={draft.requirements.length}>Reqs</TabButton>
+            <TabButton id="people" current={tab} onSelect={setTab} icon={<Users size={13} />} count={draft.team.length}>People</TabButton>
           </nav>
           <div className="flex-1 overflow-y-auto">
             {tab === 'asset' && <AssetTab />}
@@ -365,6 +373,7 @@ const ReviewSetupPage: React.FC = () => {
               />
             )}
             {tab === 'requirements' && <RequirementsTab requirements={draft.requirements} />}
+            {tab === 'people' && <PeopleTab />}
           </div>
         </aside>
       </div>
@@ -1121,6 +1130,81 @@ const RequirementsTab: React.FC<{ requirements: Requirement[] }> = ({ requiremen
           <Plus size={14} /> Add requirement
         </button>
       )}
+    </div>
+  );
+};
+
+// ─── People tab ─────────────────────────────────────────────────────────────
+
+const PeopleTab: React.FC = () => {
+  const team = useReviewSetupStore((s) => s.draft?.team ?? EMPTY_TEAM);
+  const addTeamMember = useReviewSetupStore((s) => s.addTeamMember);
+  const updateTeamMember = useReviewSetupStore((s) => s.updateTeamMember);
+  const removeTeamMember = useReviewSetupStore((s) => s.removeTeamMember);
+  const reorderTeam = useReviewSetupStore((s) => s.reorderTeam);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+
+  return (
+    <div className="p-5 flex flex-col gap-3">
+      <p className="text-[11px] text-gray-500 leading-relaxed">
+        People who can be assigned to tracker items and insight cards. Whoever joins a meeting can be added afterwards.
+      </p>
+
+      {team.length === 0 && (
+        <div className="text-center py-10 flex flex-col items-center gap-3 text-gray-500 text-xs italic">
+          <Users size={28} className="opacity-30" />
+          No team members yet
+          <span className="text-[10px] text-gray-600 max-w-[240px]">
+            Add people who will take part in this review. After a meeting, attendees who are not on the list are offered as additions.
+          </span>
+        </div>
+      )}
+
+      {team.map((member, idx) => (
+        <div
+          key={member.id}
+          draggable
+          onDragStart={() => setDragIdx(idx)}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={() => { if (dragIdx !== null) { reorderTeam(dragIdx, idx); setDragIdx(null); } }}
+          className="rounded border border-white/10 bg-white/5 overflow-hidden"
+        >
+          <div className="flex items-center gap-2 p-2">
+            <GripVertical size={12} className="text-gray-600 cursor-grab shrink-0" />
+            <span className="text-[10px] font-mono text-gray-500 tabular-nums w-6 shrink-0">{String(idx + 1).padStart(2, '0')}</span>
+            <input
+              value={member.name}
+              onChange={(e) => updateTeamMember(member.id, { name: e.target.value })}
+              placeholder="Name"
+              className="flex-1 bg-transparent text-xs font-bold text-white outline-none placeholder:text-gray-600 min-w-0"
+            />
+            <input
+              value={member.role ?? ''}
+              onChange={(e) => updateTeamMember(member.id, { role: e.target.value || undefined })}
+              placeholder="Role"
+              className="w-24 bg-transparent text-[10px] text-gray-400 outline-none placeholder:text-gray-600 shrink-0"
+            />
+            <button onClick={() => removeTeamMember(member.id)} className="text-gray-500 hover:text-red-400 shrink-0">
+              <Trash2 size={13} />
+            </button>
+          </div>
+          <div className="flex items-center gap-2 px-2 pb-2 ml-8">
+            <input
+              value={member.email ?? ''}
+              onChange={(e) => updateTeamMember(member.id, { email: e.target.value || undefined })}
+              placeholder="email@example.com"
+              className="flex-1 bg-white/5 text-[10px] text-gray-300 rounded px-1.5 py-0.5 border border-white/10 outline-none placeholder:text-gray-600 min-w-0"
+            />
+          </div>
+        </div>
+      ))}
+
+      <button
+        onClick={() => addTeamMember({ name: '' })}
+        className="mt-1 flex items-center justify-center gap-2 p-3 rounded border-2 border-dashed border-white/15 hover:border-emerald-400/50 hover:bg-emerald-500/5 text-xs font-bold uppercase tracking-wide text-gray-400 hover:text-emerald-200 transition-colors"
+      >
+        <Plus size={14} /> Add team member
+      </button>
     </div>
   );
 };

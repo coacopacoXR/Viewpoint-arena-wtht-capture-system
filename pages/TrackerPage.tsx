@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import IntegrationsPanel from '../components/UI/IntegrationsPanel';
+import AssigneeComboBox from '../components/UI/AssigneeComboBox';
 import { getDisplayName } from '../lib/identity';
 import {
   DndContext,
@@ -806,7 +807,13 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate, onDele
               </div>
               <InlineField label="Description" value={item.description} onSave={field('description')} type="textarea" placeholder="Add a description…" />
               <div className="grid grid-cols-2 gap-x-4 gap-y-4">
-                <InlineField label="Assignee" value={item.assignee} onSave={field('assignee')} placeholder="—" />
+                <div>
+                  <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">ASSIGNEE</p>
+                  <AssigneeComboBox
+                    value={item.assignee ?? ''}
+                    onChange={(v) => { field('assignee')(v || null); }}
+                  />
+                </div>
                 <InlineField label="Due Date" value={item.due_date} onSave={field('due_date')} type="date" />
                 <InlineField label="Priority" value={item.priority} onSave={field('priority')} type="select" options={[...ALL_PRIORITIES]} />
                 <InlineField label="Department" value={item.department} onSave={field('department')} placeholder="—" />
@@ -1378,7 +1385,7 @@ const AddItemModal: React.FC<AddItemModalProps> = ({ sessions, defaultSessionId,
           <div className="grid grid-cols-2 gap-3">
             <div>
               <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Assignee</p>
-              <input value={assignee} onChange={e => setAssignee(e.target.value)} placeholder="—" className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-black" />
+              <AssigneeComboBox value={assignee} onChange={setAssignee} />
             </div>
             <div>
               <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Due Date</p>

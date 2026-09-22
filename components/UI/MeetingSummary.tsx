@@ -1,7 +1,10 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store';
+import { usePresence } from '../../lib/PresenceContext';
+import { useActiveReviewStore } from '../../lib/activeReviewStore';
+import { getIdentity } from '../../lib/identity';
 import {
     CheckCircle2, Lightbulb, FileText, Download,
     ShieldAlert, Scale, MessageSquare, ArrowRight, LayoutDashboard, List,
@@ -14,6 +17,11 @@ import {
 import { clsx } from 'clsx';
 import { InsightType, InsightCard, ChatMessage } from '../../types';
 import InsightDetailModal from './InsightDetailModal';
+// Stable empty array: `?? []` inside a zustand selector is a new array on
+// every render when the source is null, which loops React forever (#185).
+// See lib/people.ts.
+const EMPTY: never[] = [];
+
 
 // ============================================================================
 // ADVANCED CONVERSATION ANALYSIS ENGINE
@@ -405,6 +413,27 @@ const MeetingSummary: React.FC = () => {
     const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
     const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
     const [showBoardExplainer, setShowBoardExplainer] = useState(false);
+    const [dismissedAttendeeOffers, setDismissedAttendeeOffers] = useState<Set<string>>(new Set());
+
+    // "Add attendees to the team" offer — people who were in the room but are
+    // not on the review's roster. Computed from presence + identity + team.
+    const { remoteParticipantList } = usePresence();
+    const team = useActiveReviewStore((s) => s.config?.team ?? EMPTY);
+    const addTeamMember = useActiveReviewStore((s) => s.addTeamMember);
+    const unrosteredAttendees = useMemo(() => {
+        const rosterNames = new Set(team.map((m) => m.name.toLowerCase()));
+        const local = getIdentity();
+        const result: { name: string; userId: string }[] = [];
+        if (local?.name && !rosterNames.has(local.name.toLowerCase())) {
+            result.push({ name: local.name, userId: 'local' });
+        }
+        for (const p of remoteParticipantList) {
+            if (rosterNames.has(p.name.toLowerCase())) continue;
+            if (result.some((r) => r.name.toLowerCase() === p.name.toLowerCase())) continue;
+            result.push({ name: p.name, userId: p.userId });
+        }
+        return result.filter((a) => !dismissedAttendeeOffers.has(a.userId));
+    }, [remoteParticipantList, team, dismissedAttendeeOffers]);
 
     // Session Review Board view descriptions
     const VIEW_DESCRIPTIONS = {
@@ -808,6 +837,31 @@ const MeetingSummary: React.FC = () => {
                                     );
                                 })}
                             </div>
+                        </div>
+                    )}
+
+                    {/* Add attendees to the team offer */}
+                    {unrosteredAttendees.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-3 px-4 py-2 rounded bg-emerald-500/10 border border-emerald-400/20 text-xs text-emerald-200">
+                            <Users size={14} className="shrink-0" />
+                            {unrosteredAttendees.map((a) => (
+                                <span key={a.userId} className="flex items-center gap-1.5">
+                                    <span>{a.name} was in this meeting.</span>
+                                    <button
+                                        onClick={() => addTeamMember({ name: a.name })}
+                                        className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-100 font-bold hover:bg-emerald-500/30 transition-colors"
+                                    >
+                                        Add to team
+                                    </button>
+                                    <button
+                                        onClick={() => setDismissedAttendeeOffers((prev) => new Set(prev).add(a.userId))}
+                                        className="text-emerald-400/60 hover:text-emerald-200 transition-colors"
+                                        aria-label={`Dismiss offer for ${a.name}`}
+                                    >
+                                        <X size={12} />
+                                    </button>
+                                </span>
+                            ))}
                         </div>
                     )}
 

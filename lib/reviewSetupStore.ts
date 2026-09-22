@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ModelType, Requirement } from '../types';
+import type { TeamMember } from './people';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,6 +78,7 @@ export interface ReviewDraft {
   pins: ReviewPin[];
   agenda: AgendaItem[];
   requirements: Requirement[];
+  team: TeamMember[];
   createdAt: number;
   updatedAt: number;
 }
@@ -142,6 +144,12 @@ interface ReviewSetupState {
   removeRequirement: (id: string) => void;
   reorderRequirements: (fromIdx: number, toIdx: number) => void;
   insertSampleRequirements: () => void;
+
+  // Team (people roster)
+  addTeamMember: (member: Omit<TeamMember, 'id'>) => string;
+  updateTeamMember: (id: string, patch: Partial<TeamMember>) => void;
+  removeTeamMember: (id: string) => void;
+  reorderTeam: (fromIdx: number, toIdx: number) => void;
 }
 
 const uid = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
@@ -160,6 +168,7 @@ const emptyDraft = (reviewId: string): ReviewDraft => ({
   pins: [],
   agenda: [],
   requirements: [],
+  team: [],
   createdAt: Date.now(),
   updatedAt: Date.now(),
 });
@@ -495,6 +504,46 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         };
         return { draft: touch(next) };
       }),
+
+      addTeamMember: (member) => {
+        const id = uid();
+        set((s) => {
+          if (!s.draft) return s;
+          const next: ReviewDraft = {
+            ...s.draft,
+            team: [...s.draft.team, { ...member, id }],
+          };
+          return { draft: touch(next) };
+        });
+        return id;
+      },
+
+      updateTeamMember: (id, patch) => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          team: s.draft.team.map((m) => m.id === id ? { ...m, ...patch } : m),
+        };
+        return { draft: touch(next) };
+      }),
+
+      removeTeamMember: (id) => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          team: s.draft.team.filter((m) => m.id !== id),
+        };
+        return { draft: touch(next) };
+      }),
+
+      reorderTeam: (fromIdx, toIdx) => set((s) => {
+        if (!s.draft) return s;
+        const arr = [...s.draft.team];
+        if (fromIdx < 0 || fromIdx >= arr.length || toIdx < 0 || toIdx >= arr.length) return s;
+        const [moved] = arr.splice(fromIdx, 1);
+        arr.splice(toIdx, 0, moved);
+        return { draft: touch({ ...s.draft, team: arr }) };
+      }),
     }),
     {
       name: 'vp_review_draft',
@@ -516,6 +565,9 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         }
         if (!Array.isArray(draft.requirements)) {
           draft = { ...draft, requirements: [] };
+        }
+        if (!Array.isArray(draft.team)) {
+          draft = { ...draft, team: [] };
         }
         return { ...persisted, draft };
       },
