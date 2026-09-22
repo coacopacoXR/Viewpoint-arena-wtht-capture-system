@@ -134,10 +134,11 @@ your review is listed under **Saved reviews**. Reload the page; it is still
 there.
 
 **Live collaboration.**
-Open the review (press it in the list, then **OPEN REVIEW ROOM**) and press
-**SHARE** to copy the room link. Paste the link into a private/incognito
-window (or another computer), type a different name and press **Join**.
-Each window now sees the other's cursor and name.
+Press your review in the **Saved reviews** list: its review room opens.
+Press **SHARE**, then **Copy Link**. Paste the link into a private/incognito
+window (or a browser on another computer), type a different name and press
+**Join**. Both windows are now in the same room: press **PARTICIPANTS** to see
+each other listed.
 
 **Video call.**
 In the host window press **BOARDROOM**. Both windows switch to the call view;
