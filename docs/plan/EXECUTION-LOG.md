@@ -396,7 +396,7 @@ known limits; needs a Linux host with a public IP to test properly.
 ### Repo state
 Phases 0-5 complete except T0.1, T4.7, T4.8. 881 JS tests (5 skipped on
 Windows: they execute install.sh; all 110 deploy/config tests pass in a Linux
-node:24 container), 425 pytest, lint 0 errors / 101 warnings. Branch has ~15
+node:24 container), 425 pytest, lint 0 errors / 101 warnings. Branch has 13
 commits since the last push; **not pushed** (INSTALL.md tells users to clone
 this branch from GitHub, so it must be pushed before anyone follows it).
 
