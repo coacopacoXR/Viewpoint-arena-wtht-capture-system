@@ -135,38 +135,19 @@ real participants.
 - The mock capture simulation already only runs under capture.provider
   'mock'; leave that as is.
 
-## K. Agent programmer, version 0.1
+## K. Fully programmable agents — ROADMAP, not now
 
-The agents should do something. 0.1 gives a review a small set of
-user-written agents that read what actually happened and answer in the
-meeting, using the local model already installed.
+**User decided 2026-09-22: on the roadmap, deferred.** The four scripted
+agents in the room are demo furniture (see J); the intent is not to give them
+a fixed job but to make agents **fully programmable** by the people running a
+review — what they know, when they act, what they may do — rather than a
+built-in "manufacturing reviewer" and friends.
 
-- **Definition** (edited on the curate page, stored with the review):
-  `agents: ReviewAgent[]` = `{ id, name, colour, role (free text),
-  instructions (the prompt), output: 'cards' | 'note' | 'both',
-  runs: 'onDemand' | 'onDemand+atEnd' }`. No tools, no autonomy, no
-  scheduling engine.
-- **Input** when it runs: the meeting transcript so far (speaker-labelled once
-  09-B lands), the component tree, the pointing timeline (09-C), the agenda
-  item, and the requirements (E). The same material the extractor gets.
-- **Execution**: a new `POST /agent` on capture-service — system prompt =
-  the agent's instructions plus the house rules (answer only from the
-  material; cite the part ids you were given; say "nothing to add" when there
-  is nothing), user turn = the material. Runs on the same Ollama model.
-  One run at a time per room, a hard cap on input size, and a visible
-  "<name> is thinking…" state.
-- **Output**: insight cards (typed RISK / RATIONALE / ACTION, attributed to
-  the agent, marked AI-generated and dismissible) and/or one note in the
-  transcript panel labelled with the agent's name.
-- **Trigger**: an "Ask <agent>" button per agent in the room; optionally also
-  a run at END SESSION alongside the extraction.
-- **Honesty**: agent output is never silently merged with what people said.
-  Cards carry the agent as `agentId`; the panel shows an AI badge; nothing an
-  agent writes is committed to the tracker without a human approving the card
-  (the approve/reject buttons already exist).
-- Out of scope for 0.1: agents that speak unprompted, agents that watch every
-  utterance in real time, tool use (PLM lookups, web), and per-install agent
-  libraries. Note them; do not build them.
+Nothing here is decided: output shape, triggers, where agents are defined,
+tool access and autonomy are all open. Revisit after the grounded-capture
+work (`09-grounded-capture.md`), which is what would give an agent something
+solid to reason over: a speaker-labelled transcript, the component tree, and
+what people were pointing at.
 
 ---
 
@@ -180,7 +161,7 @@ meeting, using the local model already installed.
 | AC | F (user-defined label fields + tracker grouping, settings screen) | medium-large |
 | AD | G (commit pins/viewpoints as comments) | small-medium |
 | AE | J (agents off by default) | small |
-| AF | K (agent programmer 0.1) | large; after 09-D, which gives it the tree + grounding |
+
 
 Each batch: Qwen drafts from a written spec, Claude reviews and runs it live
 in the Docker install (two browsers, phone-sized viewport for I) before
