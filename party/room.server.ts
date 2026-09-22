@@ -40,7 +40,8 @@ type RoomMessage =
   | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } }
   | { type: 'LIVE_CHAT'; payload: any }
   | { type: 'XR_PRESENCE'; payload: any }
-  | { type: 'TRANSCRIPT_LINE'; payload: { id: string; agentId: string; text: string; timestamp: number; speakerName?: string } };
+  | { type: 'TRANSCRIPT_LINE'; payload: { id: string; agentId: string; text: string; timestamp: number; speakerName?: string; speakerId?: string; offsetMs?: number } }
+  | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } };
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
 
@@ -64,6 +65,9 @@ export default class RoomServer implements Party.Server {
   comments: any[] = [];
   // Whether the room is currently in boardroom mode — sent to late joiners
   isBoardroomMode = false;
+  // Persisted recording state for late joiners (section B: per-speaker mics).
+  // Null when no recording is in progress.
+  recordingState: { recording: boolean; startedAt: number; byUserId: string; byName: string } | null = null;
 
   constructor(readonly room: Party.Room) {}
 
@@ -111,6 +115,12 @@ export default class RoomServer implements Party.Server {
       type: 'BOARDROOM_STATE',
       payload: this.boardroomStatePayload(),
     } as RoomMessage));
+    if (this.recordingState) {
+      conn.send(JSON.stringify({
+        type: 'RECORDING_STATE',
+        payload: this.recordingState,
+      } as RoomMessage));
+    }
   }
 
   onMessage(message: string, sender: Party.Connection) {
@@ -243,6 +253,25 @@ export default class RoomServer implements Party.Server {
       this.resetBoardroomState();
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
 
+    } else if (msg.type === 'RECORDING_STATE') {
+      // Persist for late joiners. Only the host should send this, but the
+      // server does not enforce that — the client-side RecordingContext
+      // gates it behind canRecord (host-only). Broadcasting to ALL (no
+      // exclude) so the sender's own indicator stays in sync.
+      this.recordingState = msg.payload;
+      this.room.broadcast(JSON.stringify(msg));
+
+    } else if (msg.type === 'TRANSCRIPT_LINE') {
+      // Server-authoritative speaker stamp: overwrite speakerId with the
+      // connection's own userId so nobody can forge a line as somebody
+      // else. This closes a hole that existed before section B — the old
+      // passthrough relay trusted the client-supplied speakerName/id.
+      const userId = this.connToUser.get(sender.id);
+      if (userId) {
+        msg.payload.speakerId = userId;
+      }
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
     } else if (
       msg.type === 'PRESENTER_CHANGE' ||
       msg.type === 'INSIGHT_CARD' ||
@@ -253,8 +282,7 @@ export default class RoomServer implements Party.Server {
       msg.type === 'PRESENTER_REQUEST' ||
       msg.type === 'PRESENTER_REQUEST_DENIED' ||
       msg.type === 'LIVE_CHAT' ||
-      msg.type === 'XR_PRESENCE' ||
-      msg.type === 'TRANSCRIPT_LINE'
+      msg.type === 'XR_PRESENCE'
     ) {
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
     }

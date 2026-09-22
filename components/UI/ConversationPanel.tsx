@@ -13,6 +13,7 @@ import { usePresence } from '../../lib/PresenceContext';
 import InsightDetailModal from './InsightDetailModal';
 import InsightExplainer from './InsightExplainer';
 import RecordingControls from './RecordingControls';
+import RecordingIndicator from './RecordingIndicator';
 
 // --- MAIN PANEL ---
 
@@ -72,6 +73,8 @@ const ConversationPanel: React.FC = () => {
     isPrivacyMode,
     updateInsight
   } = useStore();
+
+  const { remoteParticipantList, localUserId } = usePresence();
 
   const [selectedCard, setSelectedCard] = useState<InsightCard | null>(null);
   const [activeTab, setActiveTab] = useState<'LIVE' | 'DOCS'>('LIVE');
@@ -431,6 +434,7 @@ const ConversationPanel: React.FC = () => {
                 {activeTab === 'LIVE' && (
                     <>
                         <RecordingControls theme="dark" />
+                        <RecordingIndicator theme="dark" />
                         <div className="px-2 py-1 border-b border-white/5 flex justify-end">
                              <div className="flex items-center gap-1.5">
                                 <span className={clsx("text-[8px] font-mono transition-colors", isSticky ? "text-green-500" : "text-orange-400")}>
@@ -450,7 +454,15 @@ const ConversationPanel: React.FC = () => {
                             {chatHistory.map(msg => {
                                 const agent = agents.find(a => a.id === msg.agentId);
                                 const speakerLabel = agent?.name ?? msg.speakerName ?? '';
-                                const speakerColor = agent?.color ?? '#888';
+                                // Presence color: look up the speaker's color from the
+                                // participant list (remote) or fall back to the local
+                                // user's color. Agents keep their own color.
+                                const presenceColor = msg.speakerId
+                                  ? msg.speakerId === localUserId
+                                    ? undefined // local user — use a neutral default
+                                    : remoteParticipantList.find(p => p.userId === msg.speakerId)?.color
+                                  : undefined;
+                                const speakerColor = agent?.color ?? presenceColor ?? '#888';
                                 // Source Tracing Logic (Multi-message)
                                 const isSource = hoveredSourceIds.includes(msg.id);
                                 const isDimmed = hoveredSourceIds.length > 0 && !isSource;

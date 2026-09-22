@@ -188,12 +188,12 @@ describe('useLiveTranscript — queue', () => {
     expect(provider.transcribeChunk).not.toHaveBeenCalled();
   });
 
-  it('each chat message has a unique id and speakerName "Meeting"', async () => {
+  it('each chat message has a unique id and the configured speaker attribution', async () => {
     let counter = 0;
     const provider = makeProvider(async () => `text-${++counter}`);
 
     const { result } = renderHook(() =>
-      useLiveTranscript({ provider, recordingStartMs: 12345 }),
+      useLiveTranscript({ provider, recordingStartMs: 12345, speakerId: 'user-1', speakerName: 'Alice' }),
     );
 
     await act(async () => {
@@ -206,7 +206,28 @@ describe('useLiveTranscript — queue', () => {
     expect(chatHistory).toHaveLength(2);
     expect(chatHistory[0].id).toBe('live-12345-0');
     expect(chatHistory[1].id).toBe('live-12345-1');
-    expect(chatHistory[0].speakerName).toBe('Meeting');
+    expect(chatHistory[0].speakerName).toBe('Alice');
+    expect(chatHistory[0].speakerId).toBe('user-1');
+    expect(chatHistory[0].offsetMs).toBe(0);
+    expect(chatHistory[1].offsetMs).toBe(8000);
     expect(chatHistory[0].agentId).toBe('live-transcript');
+  });
+
+  it('falls back to speakerName "Meeting" when no speaker is configured', async () => {
+    const provider = makeProvider(async () => 'text');
+
+    const { result } = renderHook(() =>
+      useLiveTranscript({ provider, recordingStartMs: 12345 }),
+    );
+
+    await act(async () => {
+      result.current.onLiveChunk(makeBlob(), 0);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    const { chatHistory } = useStore.getState();
+    expect(chatHistory).toHaveLength(1);
+    expect(chatHistory[0].speakerName).toBe('Meeting');
+    expect(chatHistory[0].speakerId).toBeUndefined();
   });
 });

@@ -58,6 +58,17 @@ export interface UseLiveTranscriptOptions {
   provider: LocalCaptureProvider;
   /** The recording start timestamp, used to build unique message IDs. */
   recordingStartMs: number;
+  /**
+   * The userId of the participant whose mic is being transcribed. Stamped on
+   * every outgoing line and overwritten server-side (room.server.ts) so
+   * nobody can forge a line as somebody else.
+   */
+  speakerId?: string;
+  /**
+   * The display name of the speaker. Shown in the transcript panel when no
+   * agent matches the agentId.
+   */
+  speakerName?: string;
 }
 
 export interface UseLiveTranscriptReturn {
@@ -74,6 +85,8 @@ export function isSilenceHallucination(text: string): boolean {
 export function useLiveTranscript({
   provider,
   recordingStartMs,
+  speakerId,
+  speakerName,
 }: UseLiveTranscriptOptions): UseLiveTranscriptReturn {
   const seqRef = useRef(0);
   const consecutiveFailuresRef = useRef(0);
@@ -82,7 +95,13 @@ export function useLiveTranscript({
   const queueRef = useRef<Array<{ blob: Blob; offsetMs: number }>>([]);
   const droppedMsRef = useRef(0);
 
-  const addLine = useCallback((text: string) => {
+  // Refs for speaker attribution so addLine stays stable across renders.
+  const speakerIdRef = useRef(speakerId);
+  speakerIdRef.current = speakerId;
+  const speakerNameRef = useRef(speakerName);
+  speakerNameRef.current = speakerName;
+
+  const addLine = useCallback((text: string, offsetMs?: number) => {
     const { addChatMessage } = useStore.getState();
     const seq = seqRef.current;
     seqRef.current += 1;
@@ -91,7 +110,9 @@ export function useLiveTranscript({
       agentId: 'live-transcript',
       text,
       timestamp: Date.now(),
-      speakerName: 'Meeting',
+      speakerName: speakerNameRef.current ?? 'Meeting',
+      speakerId: speakerIdRef.current,
+      offsetMs,
     };
     addChatMessage(msg);
     // Broadcast to the room so every participant sees the line.
@@ -129,7 +150,7 @@ export function useLiveTranscript({
           droppedMsRef.current = 0;
         }
 
-        addLine(trimmed);
+        addLine(trimmed, item.offsetMs);
       } catch (err) {
         consecutiveFailuresRef.current += 1;
         if (consecutiveFailuresRef.current >= MAX_CONSECUTIVE_FAILURES) {

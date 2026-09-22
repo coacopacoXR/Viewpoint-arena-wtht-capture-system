@@ -25,6 +25,7 @@ import {
   selectRecordingMimeType,
   useMeetingRecorder,
   type MixingAudioContext,
+  MUTED_MICROPHONE_MESSAGE,
 } from '../useMeetingRecorder';
 import { AUDIO_CONSTRAINTS } from '../useWebRTC';
 
@@ -48,7 +49,7 @@ function fakeStream(label: string): MediaStream {
   // what gets handed to createMediaStreamSource.
   // A live audio track too, so the recorder treats it as a usable microphone
   // and does not open its own.
-  const track = { kind: 'audio', readyState: 'live', stop: vi.fn() };
+  const track = { kind: 'audio', readyState: 'live', enabled: true, stop: vi.fn() };
   return { label, getAudioTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream;
 }
 
@@ -451,7 +452,7 @@ describe('useMeetingRecorder', () => {
 
     const stopTrack = vi.fn();
     const local = {
-      getAudioTracks: () => [{ kind: 'audio', readyState: 'live', stop: stopTrack }],
+      getAudioTracks: () => [{ kind: 'audio', readyState: 'live', enabled: true, stop: stopTrack }],
     } as unknown as MediaStream;
     const { result, unmount } = renderRecorder(local, new Map());
 
@@ -758,5 +759,33 @@ describe('useMeetingRecorder', () => {
     expect(blob?.size).toBeGreaterThan(0);
 
     vi.useRealTimers();
+  });
+});
+
+describe('a muted microphone', () => {
+  it('is refused rather than silently recorded from a second mic', async () => {
+    // Reported 2026-09-23: the call mic now starts muted, and the in-person
+    // fallback opened ANOTHER mic behind the user's back, so someone who
+    // believed they were muted was recorded anyway.
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    const muted = {
+      getAudioTracks: () => [{ kind: 'audio', readyState: 'live', enabled: false, stop: vi.fn() }],
+      getTracks: () => [{ kind: 'audio', readyState: 'live', enabled: false, stop: vi.fn() }],
+    } as unknown as MediaStream;
+    const getUserMedia = vi.fn();
+    Object.defineProperty(globalThis.navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia },
+    });
+
+    const { result } = renderHook(() =>
+      useMeetingRecorder({ localStream: muted, remoteStreams: new Map() }),
+    );
+
+    await expect(act(() => result.current.start())).rejects.toThrow(MUTED_MICROPHONE_MESSAGE);
+    expect(getUserMedia).not.toHaveBeenCalled();
   });
 });

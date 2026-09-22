@@ -175,6 +175,20 @@ export interface ChatMessage {
    * returns undefined.
    */
   speakerName?: string;
+  /**
+   * The userId of the participant who spoke this line. Stamped server-side
+   * (room.server.ts overwrites it from the connection) so nobody can post
+   * lines as somebody else. Present on every line from the per-speaker
+   * transcript path (section B of the grounded-capture plan).
+   */
+  speakerId?: string;
+  /**
+   * Milliseconds since the recording started, from the sender's own clock.
+   * Used to merge lines from multiple speakers into a single ordered
+   * transcript. Absent on legacy lines (pre-section-B) and on system
+   * messages (gap lines, error lines).
+   */
+  offsetMs?: number;
 }
 
 export type InsightType = 'RISK' | 'RATIONALE' | 'ACTION';

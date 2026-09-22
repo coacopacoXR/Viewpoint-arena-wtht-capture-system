@@ -30,6 +30,9 @@ function makeCtx(overrides: Partial<RecordingContextValue> = {}): RecordingConte
     retry: vi.fn(),
     liveLines: [],
     canRecord: true,
+    recordingState: null,
+    ownMicStatus: 'idle',
+    stopSharingMic: vi.fn(),
     ...overrides,
   };
 }

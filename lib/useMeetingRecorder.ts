@@ -207,14 +207,31 @@ export interface UseMeetingRecorderReturn {
 
 /** True when the stream carries at least one audio track that is still live. */
 export function hasLiveAudio(stream: MediaStream | null): stream is MediaStream {
+  // `enabled` matters as much as `readyState`. A muted track is still "live":
+  // it just carries silence. Since the mic starts muted (the call opens on
+  // room entry), treating a muted track as usable made the recorder mix
+  // silence instead of falling back to its own mic — Whisper's VAD then
+  // correctly dropped every clip and no transcript line ever appeared. Muting
+  // must mean muting, not "record me anyway", so this returns false and the
+  // caller tells the user to unmute.
   return (
-    stream !== null && stream.getAudioTracks().some((track) => track.readyState !== 'ended')
+    stream !== null &&
+    stream.getAudioTracks().some((track) => track.readyState !== 'ended' && track.enabled)
   );
 }
 
 /** The message shown when there is nothing to record from. */
 export const NO_MICROPHONE_MESSAGE =
   'No microphone available. Allow microphone access in the browser, or join the call with your microphone on, then try again.';
+
+/**
+ * Shown when the room's microphone exists but is muted. Recording from it
+ * anyway would betray the mute button, and opening a SECOND microphone behind
+ * the user's back (which the in-person fallback below would otherwise do) is
+ * worse: it records someone who believes they are muted.
+ */
+export const MUTED_MICROPHONE_MESSAGE =
+  'Your microphone is muted. Unmute it to be recorded.';
 
 export function useMeetingRecorder({
   localStream,
@@ -376,6 +393,13 @@ export function useMeetingRecorder({
       const streams: MediaStream[] = [];
       if (hasLiveAudio(localStreamRef.current)) {
         streams.push(localStreamRef.current);
+      } else if (
+        (localStreamRef.current as MediaStream | null)?.getAudioTracks()
+          .some((t) => t.readyState !== 'ended') === true
+      ) {
+        // A microphone is open for the call but muted — do not quietly open a
+        // second one; tell the user.
+        throw new Error(MUTED_MICROPHONE_MESSAGE);
       } else {
         // The host has not joined the call's audio — typical for an in-person
         // review run from one laptop. Without this the mixer had no input and

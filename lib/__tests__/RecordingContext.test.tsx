@@ -1,4 +1,4 @@
-// RecordingContext — one recorder, two views.
+// RecordingContext — one recorder, two views, per-speaker live transcript.
 //
 // The critical invariant: useMeetingRecorder is instantiated EXACTLY ONCE even
 // when both the sidebar ConversationPanel and the Manager Workspace render
@@ -23,8 +23,12 @@ vi.mock('../useLiveTranscript', () => ({
   useLiveTranscript: () => ({ onLiveChunk: vi.fn(), finish: vi.fn() }),
 }));
 
+vi.mock('../useOwnMicTranscriber', () => ({
+  useOwnMicTranscriber: () => ({ status: 'idle', stopSharing: vi.fn() }),
+}));
+
 vi.mock('../WebRTCContext', () => ({
-  useWebRTCContext: () => ({ localStream: null, remoteStreams: new Map() }),
+  useWebRTCContext: () => ({ localStream: null, remoteStreams: new Map(), isMicOn: true }),
 }));
 
 vi.mock('../PresenceContext', () => ({
@@ -33,6 +37,14 @@ vi.mock('../PresenceContext', () => ({
 
 vi.mock('../config/ConfigContext', () => ({
   useConnectorConfig: () => ({ capture: 'local' }),
+}));
+
+vi.mock('../usePartyPresence', () => ({
+  subscribeRecordingState: (listener: (s: unknown) => void) => {
+    listener(null);
+    return () => {};
+  },
+  broadcastRecordingState: vi.fn(),
 }));
 
 vi.mock('../../store', () => ({

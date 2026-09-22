@@ -43,7 +43,8 @@ type RoomMessage =
   | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } }
   | { type: 'LIVE_CHAT'; payload: LiveChatMessage }
   | { type: 'XR_PRESENCE'; payload: XRParticipantData }
-  | { type: 'TRANSCRIPT_LINE'; payload: import('../types').ChatMessage };
+  | { type: 'TRANSCRIPT_LINE'; payload: import('../types').ChatMessage }
+  | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } };
 
 // Module-level ref so it persists across re-renders and is accessible from the message handler
 const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; data: any }) => void) | null } = { current: null };
@@ -51,6 +52,38 @@ const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; 
 // Module-level socket ref so broadcastTranscriptLine (called from useLiveTranscript,
 // outside the hook) can send without going through the hook's return value.
 const partySocketRef: { current: PartySocket | null } = { current: null };
+
+// Recording state: module-level so broadcastRecordingState (called from
+// RecordingContext, outside the hook's return) can send without a socket
+// ref of its own. Subscribers are notified when the state changes so the
+// RecordingIndicator and per-client mic slicer can react.
+export interface RecordingStatePayload {
+  recording: boolean;
+  startedAt: number;
+  byUserId: string;
+  byName: string;
+}
+const recordingStateRef: { current: RecordingStatePayload | null } = { current: null };
+const recordingStateSubscribers = new Set<(state: RecordingStatePayload | null) => void>();
+
+function notifyRecordingStateSubscribers() {
+  for (const sub of recordingStateSubscribers) {
+    sub(recordingStateRef.current);
+  }
+}
+
+/**
+ * Subscribe to recording-state changes. Returns an unsubscribe function.
+ * The subscriber is called immediately with the current state (which may be
+ * null if no recording is in progress).
+ */
+export function subscribeRecordingState(
+  listener: (state: RecordingStatePayload | null) => void,
+): () => void {
+  recordingStateSubscribers.add(listener);
+  listener(recordingStateRef.current);
+  return () => { recordingStateSubscribers.delete(listener); };
+}
 
 // Seen transcript-line IDs for deduplication. A Set that is bounded: the live
 // transcript produces at most a few hundred IDs per meeting, and the Set is
@@ -341,14 +374,33 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         const { addLiveChatMessage } = useStore.getState();
         addLiveChatMessage(msg.payload);
       } else if (msg.type === 'TRANSCRIPT_LINE') {
-        // Dedupe by id: the host both adds the line locally AND broadcasts it,
-        // so without dedup the host would see every line twice.
+        // Dedupe by id: the sender both adds the line locally AND broadcasts it,
+        // so without dedup the sender would see every line twice.
         const line = msg.payload;
         if (line && typeof line.id === 'string' && !seenTranscriptIds.has(line.id)) {
           seenTranscriptIds.add(line.id);
-          const { addChatMessage } = useStore.getState();
-          addChatMessage(line);
+          const { chatHistory, addChatMessage } = useStore.getState();
+          // Merge in offsetMs order when the sender supplied one; lines
+          // without offsetMs (legacy, system messages) append at the end.
+          if (typeof line.offsetMs === 'number') {
+            const idx = chatHistory.findIndex(
+              (m) => typeof m.offsetMs === 'number' && m.offsetMs > line.offsetMs!,
+            );
+            if (idx === -1) {
+              addChatMessage(line);
+            } else {
+              // Insert before the first message with a larger offsetMs.
+              const next = [...chatHistory];
+              next.splice(idx, 0, line);
+              useStore.setState({ chatHistory: next });
+            }
+          } else {
+            addChatMessage(line);
+          }
         }
+      } else if (msg.type === 'RECORDING_STATE') {
+        recordingStateRef.current = msg.payload;
+        notifyRecordingStateSubscribers();
       } else if (msg.type === 'XR_PRESENCE') {
         const { userId } = msg.payload;
         if (userId !== userRef.current.userId) {
@@ -374,6 +426,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       seenTranscriptIds.clear();
       remoteParticipants.current.clear();
       setRemoteParticipantList([]);
+      recordingStateRef.current = null;
+      notifyRecordingStateSubscribers();
     };
   }, [roomId]);
 
@@ -607,8 +661,21 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
 export function broadcastTranscriptLine(msg: import('../types').ChatMessage): void {
   const socket = partySocketRef.current;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  // Mark as seen locally so the host does not add it twice when the server
+  // Mark as seen locally so the sender does not add it twice when the server
   // echoes it back.
   seenTranscriptIds.add(msg.id);
   socket.send(JSON.stringify({ type: 'TRANSCRIPT_LINE', payload: msg }));
+}
+
+/**
+ * Broadcast the recording state to every participant. The host calls this
+ * when pressing Start or Stop; every client reacts by starting/stopping its
+ * own mic slicer. Module-level for the same reason as broadcastTranscriptLine.
+ */
+export function broadcastRecordingState(state: RecordingStatePayload): void {
+  recordingStateRef.current = state;
+  notifyRecordingStateSubscribers();
+  const socket = partySocketRef.current;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'RECORDING_STATE', payload: state }));
 }
