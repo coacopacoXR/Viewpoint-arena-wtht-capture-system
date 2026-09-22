@@ -238,7 +238,7 @@ const BoardroomShell: React.FC = () => {
         isCamOn={isCamOn}
         toggleMic={toggleMic}
         toggleCam={toggleCam}
-        onEnd={() => { endMeeting(true); broadcastMeetingEnd(); }}
+        onEnd={() => { endMeeting(true, remoteParticipantList.length + 1); broadcastMeetingEnd(); }}
         isHost={isHost}
         boardroomLeaderId={boardroomLeaderId}
       />
@@ -463,7 +463,7 @@ const BoardroomShell: React.FC = () => {
           {/* End — host only */}
           {isHost && (
           <button
-            onClick={() => { endMeeting(true); broadcastMeetingEnd(); }}
+            onClick={() => { endMeeting(true, remoteParticipantList.length + 1); broadcastMeetingEnd(); }}
             className="px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide bg-red-600/20 text-red-400 border border-red-500/30 hover:bg-red-600/40 transition-all flex items-center gap-1"
           >
             <Power size={10} />

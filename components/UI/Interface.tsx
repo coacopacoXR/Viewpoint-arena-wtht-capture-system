@@ -481,7 +481,7 @@ const Interface: React.FC = () => {
 
                 {isHost && (
                 <button
-                    onClick={() => { endMeeting(true); broadcastMeetingEnd(); }}
+                    onClick={() => { endMeeting(true, remoteParticipantList.length + 1); broadcastMeetingEnd(); }}
                     className="px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide bg-black text-white border border-black shadow-md hover:bg-gray-800 transition-colors flex items-center gap-2"
                 >
                     <Power size={12} className="text-red-500" /> End Session

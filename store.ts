@@ -17,15 +17,6 @@ const INITIAL_WEIGHTS: Record<string, number> = {
   '4': 5
 };
 
-// --- MOCK REQUIREMENTS DB ---
-const REQUIREMENTS_DB: Requirement[] = [
-    { id: 'r1', code: 'REQ-M-042', description: 'Rotary knobs must withstand 50N shear force.', category: 'MECHANICAL', status: 'MET' },
-    { id: 'r2', code: 'REQ-E-101', description: 'Main display assembly must be removable within 60s.', category: 'ELECTRICAL', status: 'PENDING' },
-    { id: 'r3', code: 'REQ-U-305', description: 'Primary controls must be reachable from 5th %ile female hand size.', category: 'ERGONOMIC', status: 'AT_RISK' },
-    { id: 'r4', code: 'REQ-S-900', description: 'No sharp edges < 0.5mm radius on user interface surfaces.', category: 'SAFETY', status: 'MET' },
-    { id: 'r5', code: 'REQ-M-200', description: 'Total unit weight must not exceed 3.2kg.', category: 'MECHANICAL', status: 'PENDING' },
-];
-
 // --- MOCK KNOWLEDGE BASE ---
 const KB_DB: KBEntry[] = [
     { id: 'kb1', category: 'RISK', triggerKeyword: 'clearance', recommendation: "Historical Action: Check tolerance stack-up analysis (Ref: Project Titan)." },
@@ -300,7 +291,8 @@ interface AppState {
   toggleGaze: () => void;
   toggleTrails: () => void;
   togglePlay: () => void;
-  endMeeting: (ended: boolean) => void;
+  /** `participantCount` is the number of real people; agents are not participants. */
+  endMeeting: (ended: boolean, participantCount?: number) => void;
   setTime: (time: number) => void;
   resetTime: () => void;
 
@@ -333,6 +325,7 @@ interface AppState {
   setMobileLaserNDC: (ndc: [number, number] | null) => void;
   updateInsightType: (id: string, newType: InsightType) => void;
   updateInsight: (id: string, updates: Partial<InsightCard>) => void;
+  setRequirements: (reqs: Requirement[]) => void;
 
   // Scene Graph Actions
   toggleNodeVisibility: (id: string) => void;
@@ -437,7 +430,11 @@ export const useStore = create<AppState>((set, get) => ({
   isLaserActive: false,
   laserHighlightGranularity: 'part',
   hoverPointingEnabled: false,
-  hideAgents: false,
+  // Agents OFF by default. The four scripted agents (SYS.OP, ENG.UNIT,
+  // DES.LEAD, VR.USER) are demo furniture: in a real review they stand next
+  // to actual participants and are mistaken for them. The AGENTS toggle in
+  // the room brings them back for a demo.
+  hideAgents: true,
   followRequest: null,
   isPrivacyMode: false,
   followedAgentId: null,
@@ -447,7 +444,7 @@ export const useStore = create<AppState>((set, get) => ({
   liveChat: [],
   mobileLaserNDC: null,
   insightCards: [],
-  requirements: REQUIREMENTS_DB,
+  requirements: [],
   knowledgeBase: KB_DB,
   objectStates: initObjectStates(HEADPHONES_SCENE_TREE),
 
@@ -493,14 +490,18 @@ export const useStore = create<AppState>((set, get) => ({
   toggleGaze: () => set((state) => ({ showGaze: !state.showGaze })),
   toggleTrails: () => set((state) => ({ showTrails: !state.showTrails })),
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
-  endMeeting: (ended) => {
+  endMeeting: (ended, participantCount) => {
     if (ended) {
-      const { insightCards, agents, activeModelType } = get();
+      const { insightCards, agents, activeModelType, hideAgents } = get();
       const roomId = window.location.pathname.split('/room/')[1] ?? 'local';
       flushSessionToTracker({
         roomId,
         insightCards,
-        participantCount: agents.length,
+        // Real people, passed in by the caller (which knows the presence
+        // list). The old `agents.length` recorded four demo agents as
+        // attendees of every meeting; with agents hidden it would have
+        // recorded four people who were never there.
+        participantCount: participantCount ?? (hideAgents ? 1 : agents.length),
         modelName: activeModelType ?? null,
       });
     }
@@ -584,6 +585,8 @@ export const useStore = create<AppState>((set, get) => ({
   })),
 
   setMobileLaserNDC: (ndc) => set({ mobileLaserNDC: ndc }),
+
+  setRequirements: (reqs) => set({ requirements: reqs }),
 
   addInsightCard: (card) => set((state) => {
     if (state.insightCards.some(c => c.id === card.id)) return state; // deduplicate
