@@ -219,7 +219,12 @@ const ReviewSetupPage: React.FC = () => {
     }
   }, [modelType, importedFileBase64, importedFileName, setActiveModelType, setImportedModel]);
 
-  if (!draft) {
+  // Wait for THIS review's draft, not just any draft. The store persists the
+  // last draft in localStorage, so before hydration finishes `draft` can be a
+  // different review: the page rendered it, a quick CAPTURE VIEW went into it,
+  // and hydration then replaced it, losing the viewpoint (found walking
+  // docs/INSTALL.md: the capture came 0.6 s after the page opened).
+  if (!draft || !hydrated || draft.reviewId !== reviewId) {
     return (
       <div className="w-full h-screen flex items-center justify-center bg-[#0A0A0A] text-white font-mono text-sm">
         Loading draft…

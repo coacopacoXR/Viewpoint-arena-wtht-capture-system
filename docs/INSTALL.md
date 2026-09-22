@@ -135,7 +135,8 @@ there.
 
 **Live collaboration.**
 Press your review in the **Saved reviews** list: its review room opens.
-Press **SHARE**, then **Copy Link**. Paste the link into a private/incognito
+Press **SHARE**, switch to the **COPY LINK** tab (it opens on a QR code for
+phones), and press **Copy Link**. Paste the link into a private/incognito
 window (or a browser on another computer), type a different name and press
 **Join**. Both windows are now in the same room: press **PARTICIPANTS** to see
 each other listed.
