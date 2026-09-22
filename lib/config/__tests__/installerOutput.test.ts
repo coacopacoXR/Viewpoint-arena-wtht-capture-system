@@ -5,16 +5,14 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { configSchema } from '../schema.ts';
 
+// install.sh refuses to run on native Windows by design.
+const RUNS_INSTALLER = process.platform !== 'win32';
+
 // The failure this guards against: install.sh writes a viewpoint.config.ts that
 // lib/config/schema.ts then rejects, so the stack refuses to start and the
 // operator has no idea why. The installer and the schema are edited by
 // different people at different times, and nothing else couples them.
 //
-// install.sh refuses to run on native Windows by design (it needs Docker and a
-// POSIX shell, and tells the user to use WSL), so this runs on Linux and macOS
-// — which is what CI is. On Windows it skips rather than pretending to pass.
-const RUNS_INSTALLER = process.platform !== 'win32';
-
 describe.skipIf(!RUNS_INSTALLER)('install.sh --defaults output', () => {
   it('writes a viewpoint.config.ts that passes the real zod schema', () => {
     const repoRoot = resolve(__dirname, '../../..');
@@ -85,6 +83,40 @@ describe.skipIf(!RUNS_INSTALLER)('install.sh --defaults output', () => {
       for (const name of viteNames) {
         expect(PUBLIC_VITE_NAMES).toContain(name);
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe.skipIf(!RUNS_INSTALLER)('install.sh — publicUrl', () => {
+  it('--defaults writes publicUrl: \'https://localhost\'', () => {
+    const repoRoot = resolve(__dirname, '../../..');
+    const dir = mkdtempSync(join(tmpdir(), 'vp-install-puburl-'));
+    try {
+      execFileSync(
+        'bash',
+        [join(repoRoot, 'install.sh'), '--defaults', '--configure-only', '--dir', dir, '-y'],
+        { stdio: 'pipe' },
+      );
+      const config = readFileSync(join(dir, 'viewpoint.config.ts'), 'utf8');
+      expect(config).toContain("publicUrl: 'https://localhost'");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('includes the port in publicUrl when HTTPS_PORT is not 443', () => {
+    const repoRoot = resolve(__dirname, '../../..');
+    const dir = mkdtempSync(join(tmpdir(), 'vp-install-puburl-'));
+    try {
+      execFileSync(
+        'bash',
+        [join(repoRoot, 'install.sh'), '--defaults', '--configure-only', '--dir', dir, '-y'],
+        { stdio: 'pipe', env: { ...process.env, HTTPS_PORT: '8443' } },
+      );
+      const config = readFileSync(join(dir, 'viewpoint.config.ts'), 'utf8');
+      expect(config).toContain("publicUrl: 'https://localhost:8443'");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -94,7 +94,7 @@ in brackets, and every suggested answer works. The ones worth thinking about:
 
 | Question | What to answer |
 |---|---|
-| Public hostname | **Enter** (`localhost`) if only this computer will use it. To let colleagues on your network join, type this computer's network address instead (on Windows: `ipconfig` in PowerShell, the "IPv4 Address" of your Wi-Fi or Ethernet adapter, e.g. `192.168.1.134`). |
+| Public hostname | The answer is what the share link (SHARE → QR / Copy Link) will contain. **Enter** (`localhost`) if only this computer will use it — the share link will only work on this machine. To let colleagues or a phone on your network join, type this computer's network address instead (on Windows: `ipconfig` in PowerShell, the "IPv4 Address" of your Wi-Fi or Ethernet adapter, e.g. `192.168.1.134`). The installer will offer the detected address if you accept localhost. |
 | Which capture provider | **`local`** to record meetings and get insights from your own hardware (downloads a 4.7 GB AI model once). **Enter** (`mock`) for a quick look at the app with simulated insights and no download. |
 | Database | **Enter** (bundled). |
 | TURN relay | **Enter** (bundled). |
@@ -219,6 +219,18 @@ After `down -v`, `./install.sh` starts again from a clean slate.
 
 ## 10. Known limits
 
+- **Same network only.** A phone or colleague must be on the same local
+  network as this machine. The share link (SHARE → QR / Copy Link) contains
+  the hostname you gave the installer; if that is `localhost`, only this
+  computer can open it. Re-run `./install.sh` and enter the machine's network
+  address (e.g. `192.168.1.134`) to fix it. Access from outside the network
+  (over the internet) is separate work: it needs a public address, DNS, and
+  a real certificate.
+- **One certificate warning per device.** The installer generates a
+  self-signed certificate. Every browser and every phone that opens the app
+  for the first time shows a certificate warning that must be clicked through
+  once. A real certificate (e.g. from Let's Encrypt) removes this; that is
+  separate work.
 - **Video calls across the internet.** Two people on the same network, or on
   the same computer, connect directly, and that is tested. For people on
   different networks the call relays through the bundled TURN server, and

@@ -1,6 +1,8 @@
 import type { ViewpointConfig } from './schema.ts';
 
 export interface PublicConfig {
+  /** The absolute origin browsers use to reach this deployment, or absent. */
+  publicUrl?: string;
   plm: { provider: string; baseUrl?: string };
   capture: { provider: string; model?: string; baseUrl?: string };
   turn: { provider: string };
@@ -36,7 +38,7 @@ export function redactConfig(config: ViewpointConfig): PublicConfig {
   // that path goes through the Vercel proxy.
   if ('baseUrl' in config.capture) capture.baseUrl = config.capture.baseUrl;
 
-  return {
+  const result: PublicConfig = {
     plm,
     capture,
     turn: { provider: config.turn.provider },
@@ -44,4 +46,6 @@ export function redactConfig(config: ViewpointConfig): PublicConfig {
     notifications: config.notifications.map((n) => ({ provider: n.provider })),
     modelImport: { provider: config.modelImport.provider },
   };
+  if (config.publicUrl) result.publicUrl = config.publicUrl;
+  return result;
 }

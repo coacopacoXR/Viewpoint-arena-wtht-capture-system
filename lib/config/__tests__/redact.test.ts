@@ -141,4 +141,28 @@ describe('redactConfig', () => {
     expect(json).not.toContain('apiKeyEnv');
     expect(json).not.toContain('OPENAI_API_KEY');
   });
+
+  it('passes publicUrl through when present', () => {
+    const config: ViewpointConfig = {
+      ...fullSecretConfig,
+      publicUrl: 'https://arena.acme.com',
+    };
+    const result = redactConfig(config);
+    expect(result.publicUrl).toBe('https://arena.acme.com');
+  });
+
+  it('omits publicUrl when the config does not set it', () => {
+    const result = redactConfig(fullSecretConfig);
+    expect(result.publicUrl).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('publicUrl');
+  });
+
+  it('passes publicUrl through for an IP-based origin', () => {
+    const config: ViewpointConfig = {
+      ...fullSecretConfig,
+      publicUrl: 'https://192.168.1.134',
+    };
+    const result = redactConfig(config);
+    expect(result.publicUrl).toBe('https://192.168.1.134');
+  });
 });

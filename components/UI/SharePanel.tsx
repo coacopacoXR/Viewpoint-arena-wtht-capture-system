@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { X, Copy, Check, QrCode, Link } from 'lucide-react';
+import { X, Copy, Check, QrCode, Link, AlertTriangle } from 'lucide-react';
+import { useConnectorConfig } from '../../lib/config/ConfigContext.tsx';
 
 interface SharePanelProps {
   roomId: string;
@@ -8,12 +9,37 @@ interface SharePanelProps {
   anchorRef?: React.RefObject<HTMLElement>;
 }
 
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '0.0.0.0']);
+
+function isLocalHost(hostname: string): boolean {
+  return LOCAL_HOSTS.has(hostname);
+}
+
+function extractHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
 const SharePanel: React.FC<SharePanelProps> = ({ roomId, onClose }) => {
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState<'link' | 'qr'>('qr');
   const panelRef = useRef<HTMLDivElement>(null);
+  const config = useConnectorConfig();
 
-  const roomUrl = `${window.location.origin}/room/${roomId}`;
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const baseUrl = config.publicUrl || origin;
+  const roomUrl = `${baseUrl}/room/${roomId}`;
+
+  const urlHost = extractHost(baseUrl);
+  const localOnly = isLocalHost(urlHost);
+
+  const originHost = extractHost(origin);
+  const mismatch = Boolean(
+    config.publicUrl && origin && urlHost && originHost && urlHost !== originHost,
+  );
 
   function handleCopy() {
     navigator.clipboard.writeText(roomUrl).then(() => {
@@ -75,6 +101,33 @@ const SharePanel: React.FC<SharePanelProps> = ({ roomId, onClose }) => {
 
         {/* Content */}
         <div className="p-4">
+          {localOnly && (
+            <div
+              className="flex items-start gap-2 mb-3 px-3 py-2 rounded-lg"
+              style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)' }}
+              data-testid="local-only-warning"
+            >
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" style={{ color: '#f59e0b' }} />
+              <p className="text-[10px] leading-relaxed" style={{ color: '#fbbf24' }}>
+                This link only opens on this computer. To share it with a phone or
+                colleague, re-run <code>./install.sh</code> and enter this machine's
+                network address (e.g. <code>192.168.1.134</code>).
+              </p>
+            </div>
+          )}
+
+          {mismatch && (
+            <div
+              className="mb-3 px-3 py-2 rounded-lg"
+              style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)' }}
+              data-testid="mismatch-warning"
+            >
+              <p className="text-[10px] leading-relaxed" style={{ color: '#a5b4fc' }}>
+                You are viewing this at {origin}; the shared link uses {config.publicUrl}.
+              </p>
+            </div>
+          )}
+
           {tab === 'qr' ? (
             <div className="flex flex-col items-center gap-3">
               <div className="p-3 rounded-lg bg-white">

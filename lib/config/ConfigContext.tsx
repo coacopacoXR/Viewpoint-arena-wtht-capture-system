@@ -21,12 +21,14 @@ import type { PublicConfig } from './publicConfig.ts';
 export interface ConnectorConfig {
   /** The redacted config, or null whenever it is unavailable. */
   config: PublicConfig | null;
-  /** True until the first fetch settles. */
+  /** True until the first fetch settling. */
   loading: boolean;
   /** Why the config is unavailable, or null when it loaded. Never thrown. */
   error: string | null;
   /** True only when `config` actually came from the endpoint. */
   available: boolean;
+  /** The absolute origin browsers use to reach this deployment, or absent. */
+  publicUrl: string | undefined;
   plm: string;
   capture: string;
   turn: string;
@@ -86,6 +88,7 @@ function resolve(state: LoadState): ConnectorConfig {
     loading: state.loading,
     error: state.error,
     available: c !== null,
+    publicUrl: c?.publicUrl,
     plm: c?.plm.provider ?? FALLBACK_PROVIDERS.plm,
     capture: c?.capture.provider ?? FALLBACK_PROVIDERS.capture,
     turn: c?.turn.provider ?? FALLBACK_PROVIDERS.turn,

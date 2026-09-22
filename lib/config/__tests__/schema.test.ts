@@ -222,4 +222,69 @@ describe('configSchema', () => {
     };
     expect(() => configSchema.parse(leaky)).toThrow(/VITE_/);
   });
+
+  it('accepts a config with publicUrl set to an absolute origin', () => {
+    const config = {
+      ...validOnshapeConfig,
+      publicUrl: 'https://arena.acme.com',
+    };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('accepts a config with publicUrl as an IP origin', () => {
+    const config = {
+      ...validOnshapeConfig,
+      publicUrl: 'https://192.168.1.134',
+    };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('accepts a config with publicUrl including a non-standard port', () => {
+    const config = {
+      ...validOnshapeConfig,
+      publicUrl: 'https://192.168.1.134:8443',
+    };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('accepts a config without publicUrl (it is optional)', () => {
+    expect(configSchema.safeParse(validOnshapeConfig).success).toBe(true);
+  });
+
+  it('rejects publicUrl with a path', () => {
+    const config = {
+      ...validOnshapeConfig,
+      publicUrl: 'https://arena.acme.com/app',
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const msg = JSON.stringify(result.error.issues);
+      expect(msg).toMatch(/path|query|fragment/);
+    }
+  });
+
+  it('rejects publicUrl with a query string', () => {
+    const config = {
+      ...validOnshapeConfig,
+      publicUrl: 'https://arena.acme.com?foo=bar',
+    };
+    expect(configSchema.safeParse(config).success).toBe(false);
+  });
+
+  it('rejects publicUrl with a fragment', () => {
+    const config = {
+      ...validOnshapeConfig,
+      publicUrl: 'https://arena.acme.com#section',
+    };
+    expect(configSchema.safeParse(config).success).toBe(false);
+  });
+
+  it('rejects a non-URL publicUrl', () => {
+    const config = {
+      ...validOnshapeConfig,
+      publicUrl: 'not-a-url',
+    };
+    expect(configSchema.safeParse(config).success).toBe(false);
+  });
 });

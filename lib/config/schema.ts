@@ -136,7 +136,29 @@ const modelImportSchema = z.discriminatedUnion('provider', [
   z.object({ provider: z.literal('genericGltf') }),
 ]);
 
+// The absolute origin browsers use to reach this deployment
+// (e.g. 'https://arena.acme.com', 'https://192.168.1.134'). SharePanel uses it
+// to build room URLs so a phone on the same network gets a scannable link
+// instead of https://localhost/room/…. Optional: when absent, SharePanel falls
+// back to window.location.origin. No path, query or fragment — the share link
+// appends /room/<id> itself.
+const publicUrlSchema = z
+  .string()
+  .url('publicUrl must be an absolute http(s) URL')
+  .refine((v) => v.startsWith('http://') || v.startsWith('https://'), {
+    message: 'publicUrl must use http or https',
+  })
+  .refine((v) => {
+    try {
+      const u = new URL(v);
+      return u.pathname === '/' && u.search === '' && u.hash === '';
+    } catch {
+      return false;
+    }
+  }, { message: 'publicUrl must have no path, query or fragment' });
+
 export const configSchema = z.object({
+  publicUrl: publicUrlSchema.optional(),
   plm: plmSchema,
   capture: captureSchema,
   turn: turnSchema,

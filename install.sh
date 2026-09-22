@@ -493,7 +493,7 @@ mint_anon_jwt() {
 # Collected into globals. Bash has no structures, and threading nineteen values
 # back through one function's stdout is worse than naming them.
 
-A_HOSTNAME='' A_TLS=''
+A_HOSTNAME='' A_PUBLIC_URL='' A_TLS=''
 A_PLM='' A_PLM_BASE_URL=''
 A_ONSHAPE_CLIENT_ID='' A_ONSHAPE_CLIENT_SECRET=''
 A_TC_USERNAME='' A_TC_PASSWORD=''
@@ -506,11 +506,78 @@ A_GPU='' A_N8N=''
 S_CAPTURE_SECRET='' S_POSTGRES_PASSWORD='' S_N8N_KEY='' S_COTURN_SECRET=''
 S_JWT_SECRET='' S_SECRET_KEY_BASE='' S_REALTIME_DB_ENC_KEY='' S_ANON_KEY=''
 
+# Detect this machine's LAN IPv4 address. Detection order, first hit wins:
+#   1. `ip -4 route get 1.1.1.1` (native Linux) — extract the src address
+#   2. Under WSL2, the Windows host address via PowerShell (NOT `ip route show
+#      default`, which returns the WSL gateway, not the Windows host)
+#   3. Empty string — caller skips the offer when nothing is found.
+detect_lan_ip() {
+  local ip=''
+
+  # WSL2 FIRST. Under WSL `ip route get` answers with the distro's own address
+  # inside Docker/WSL's virtual network (172.x), which no phone can reach; the
+  # Windows host's address is the one on the Wi-Fi. Checked live 2026-09-22:
+  # the Linux branch returned 172.29.34.64, PowerShell returned 192.168.1.134.
+  if [[ "$OS" == 'wsl' ]] && command -v powershell.exe >/dev/null 2>&1; then
+    # </dev/null matters: powershell.exe reads stdin, and without this it ate
+    # the operator's answer to the very next question (the "use this address?"
+    # offer always fell through to no). Found live 2026-09-22.
+    ip="$(powershell.exe -NoProfile -Command \
+      '(Get-NetIPConfiguration | Where-Object {$_.IPv4DefaultGateway -ne $null}).IPv4Address.IPAddress' \
+      </dev/null 2>/dev/null | tr -d '\r' | head -n1)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$ip" != '127.0.0.1' ]]; then
+      printf '%s' "$ip"
+      return 0
+    fi
+  fi
+
+  # Native Linux (and the WSL fallback): which interface reaches the internet.
+  if command -v ip >/dev/null 2>&1; then
+    ip="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -n1)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$ip" != '127.0.0.1' ]]; then
+      printf '%s' "$ip"
+      return 0
+    fi
+  fi
+
+  return 0
+}
+
 collect_answers() {
   say ''
   say 'Answer a few questions. Enter accepts the default in brackets.'
 
   A_HOSTNAME="$(ask 'Public hostname for this deployment' 'localhost')"
+
+  # When the operator accepts localhost, explain what that costs and offer the
+  # detected LAN address. A phone scanning a QR that says https://localhost/…
+  # goes nowhere; the share panel warns about it, but fixing it at install time
+  # is better than explaining it at share time.
+  if [[ "$A_HOSTNAME" == 'localhost' ]]; then
+    say ''
+    say '  With hostname "localhost", only this computer can open the app.'
+    say '  A phone, a tablet or a colleague on the same network needs this'
+    say '  machine''s network address (e.g. 192.168.1.134) instead.'
+    local lan_ip
+    lan_ip="$(detect_lan_ip)"
+    if [[ -n "$lan_ip" ]]; then
+      local use_lan
+      use_lan="$(ask_yes_no "Use ${lan_ip} instead?" 'no')"
+      if [[ "$use_lan" == 'yes' ]]; then
+        A_HOSTNAME="$lan_ip"
+      fi
+    fi
+  fi
+
+  # Build publicUrl from the hostname answer + HTTPS_PORT. Omit :443 (the
+  # default) so the URL reads cleanly; include any other port so a non-standard
+  # deploy still produces a reachable origin.
+  local https_port="${HTTPS_PORT:-443}"
+  if [[ "$https_port" == '443' ]]; then
+    A_PUBLIC_URL="https://${A_HOSTNAME}"
+  else
+    A_PUBLIC_URL="https://${A_HOSTNAME}:${https_port}"
+  fi
 
   A_TLS="$(ask_choice \
     'How should TLS be terminated?' \
@@ -938,6 +1005,10 @@ render_config() {
 import { defineConfig } from './lib/config/schema.ts';
 
 export default defineConfig({
+  // The absolute origin browsers use to reach this deployment. SharePanel
+  // builds room URLs from it so a phone on the same network gets a link that
+  // actually opens. Re-run ./install.sh and change the hostname answer to fix.
+  publicUrl: '${A_PUBLIC_URL}',
 ${plm_block}
 ${capture_block}
 ${turn_block}
@@ -1329,8 +1400,21 @@ generate_certs() {
   local dir="${TARGET_DIR}/deploy/certs" crt="${TARGET_DIR}/deploy/certs/tls.crt" key="${TARGET_DIR}/deploy/certs/tls.key"
 
   if [[ -f "$crt" && -f "$key" ]]; then
-    note 'deploy/certs already holds a certificate — leaving it alone'
-    return 0
+    # Keep it only if it actually covers the hostname this install now uses.
+    # Changing the hostname (localhost -> 192.168.1.134, the whole point of
+    # the share fix) with a stale certificate gives every phone a name
+    # mismatch warning on top of the self-signed one, and the operator has no
+    # idea why. A certificate the operator supplied is never touched.
+    if [[ "$A_TLS" == 'own' ]] \
+      || openssl x509 -in "$crt" -noout -text 2>/dev/null \
+         | grep -qE "(DNS|IP Address):${A_HOSTNAME//./\\.}([,[:space:]]|$)"; then
+      note 'deploy/certs already holds a certificate — leaving it alone'
+      return 0
+    fi
+    note "the existing certificate does not cover ${A_HOSTNAME} — generating a new one"
+    backup_file "$crt"
+    backup_file "$key"
+    rm -f -- "$crt" "$key"
   fi
 
   if [[ "$A_TLS" == 'own' ]]; then
