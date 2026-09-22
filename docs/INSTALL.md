@@ -128,8 +128,8 @@ certificate instead of buying one. Click **Advanced → Continue to localhost
 ## 6. Try each feature
 
 **Saved reviews (the database).**
-Type your name, press **Curate a design review →**, then **CAPTURE VIEW** to
-save the current camera angle. Go back to the lobby (**LOBBY**, top left):
+Type your name, press **Curate a design review →**, wait for the 3D model to
+appear, then press **CAPTURE VIEW** to save the current camera angle. Go back to the lobby (**LOBBY**, top left):
 your review is listed under **Saved reviews**. Reload the page; it is still
 there.
 
@@ -156,8 +156,10 @@ says **"N insights added"** and lists them as action, risk and rationale cards
 you can approve, reject or edit.
 
 **Tracker.**
-From the lobby press **Open Tracker →** to see every saved meeting and its
-action items across reviews.
+Press **END SESSION** (top right of the room): the meeting summary opens and
+the meeting's cards are sent to the tracker. Back in the lobby, press **Open
+Tracker →** to see every ended meeting and its action items across reviews.
+(The tracker stays empty until a meeting with at least one card has ended.)
 
 **Health check.** <https://localhost/api/health> shows, for each part of the
 system, whether it is working.
