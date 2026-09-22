@@ -17,8 +17,7 @@ import exampleConfig from '../../../viewpoint.config.example.ts';
 const REQUIRED_ENV = [
   'ONSHAPE_CLIENT_ID',
   'ONSHAPE_CLIENT_SECRET',
-  'CF_TURN_TOKEN_ID',
-  'CF_TURN_API_TOKEN',
+  'COTURN_SHARED_SECRET',
   'VITE_SUPABASE_URL',
   'VITE_SUPABASE_ANON_KEY',
   'TEAMS_WEBHOOK_URL',

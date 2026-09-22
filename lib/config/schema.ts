@@ -93,6 +93,13 @@ const selfHostedCoturnTurn = z.object({
   host: z.string().min(1, 'turn.host is required'),
   port: z.number().int().positive('turn.port must be a positive integer'),
   sharedSecretEnv: envVarName,
+  // Optional: a different hostname for the api container's STUN health probe.
+  // When the api container runs inside Docker, the public `host` (e.g.
+  // 'localhost') resolves to the api container itself, not to coturn. The
+  // bundled coturn service is reachable by its compose service name on the
+  // backend network, so install.sh writes probeHost: 'coturn' for that case.
+  // The ICE URLs handed to browsers always use `host`, never `probeHost`.
+  probeHost: z.string().min(1).optional(),
 });
 
 const turnSchema = z.discriminatedUnion('provider', [
@@ -106,6 +113,12 @@ const dbSchema = z.discriminatedUnion('provider', [
     // publicEnvVarName, not envVarName — see the comment on publicEnvVarName.
     urlEnv: publicEnvVarName,
     anonKeyEnv: publicEnvVarName,
+    // Optional: the PostgREST root as the SERVER reaches it, for /api/health
+    // only (e.g. 'http://rest:3000/' in the bundled Docker stack). Probed
+    // exactly as given. Needed because the public URL the browser uses is
+    // often unreachable from inside the api container (`localhost` there is
+    // the container itself). Not a secret, and never sent to the browser.
+    probeUrl: z.string().url('db.probeUrl must be a URL').optional(),
   }),
 ]);
 

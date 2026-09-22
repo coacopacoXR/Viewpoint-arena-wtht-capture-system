@@ -126,6 +126,8 @@ Exit codes:
       answer that cannot produce a valid config)
   2   bad command line
   3   the stack came up but at least one enabled connector reports degraded
+  4   the stack did not answer on the health endpoint after the poll budget
+  5   a port required by the stack is already in use on the host
 USAGE
 }
 
@@ -508,7 +510,7 @@ collect_answers() {
   say ''
   say 'Answer a few questions. Enter accepts the default in brackets.'
 
-  A_HOSTNAME="$(ask 'Public hostname for this deployment' 'arena.local')"
+  A_HOSTNAME="$(ask 'Public hostname for this deployment' 'localhost')"
 
   A_TLS="$(ask_choice \
     'How should TLS be terminated?' \
@@ -608,11 +610,20 @@ collect_answers() {
   # ── TURN ───────────────────────────────────────────────────────────────
   A_TURN="$(ask_choice \
     'Which WebRTC TURN relay should the app use?' \
-    'cloudflare' \
+    'bundled' \
+    'bundled|Bundled coturn in this stack (recommended; no account needed)' \
     'cloudflare|Cloudflare Realtime TURN — metered, no extra container' \
-    'selfHostedCoturn|Your own coturn — read the caveat this prints')"
+    'selfHostedCoturn|Your own coturn elsewhere — read the caveat this prints')"
 
   case "$A_TURN" in
+    bundled)
+      # The bundled coturn runs in this compose stack under the 'turn' profile.
+      # host is the public hostname browsers reach; probeHost is the compose
+      # service name the api container uses for its STUN health probe (inside
+      # Docker, 'localhost' resolves to the api container itself, not coturn).
+      A_COTURN_HOST="$A_HOSTNAME"
+      A_COTURN_PORT='3478'
+      ;;
     cloudflare)
       A_TURN_TOKEN_ID="$(ask 'CF_TURN_TOKEN_ID')"
       A_TURN_API_TOKEN="$(ask_secret 'CF_TURN_API_TOKEN')"
@@ -653,7 +664,7 @@ collect_answers() {
   S_CAPTURE_SECRET="$(generate_secret)"
   S_POSTGRES_PASSWORD="$(generate_secret)"
   S_N8N_KEY="$(generate_secret)"
-  if [[ "$A_TURN" == 'selfHostedCoturn' ]]; then
+  if [[ "$A_TURN" == 'selfHostedCoturn' || "$A_TURN" == 'bundled' ]]; then
     S_COTURN_SECRET="$(generate_secret)"
   fi
 
@@ -721,8 +732,8 @@ validate_answers() {
       ;;
   esac
 
-  if [[ "$A_TURN" == 'selfHostedCoturn' ]]; then
-    [[ -n "$A_COTURN_HOST" ]] || die "turn 'selfHostedCoturn' needs turn.host"
+  if [[ "$A_TURN" == 'selfHostedCoturn' || "$A_TURN" == 'bundled' ]]; then
+    [[ -n "$A_COTURN_HOST" ]] || die "turn '$A_TURN' needs turn.host"
     [[ "$A_COTURN_PORT" =~ ^[0-9]+$ ]] || die "turn.port must be a whole number — got '$A_COTURN_PORT'"
     (( A_COTURN_PORT >= 1 && A_COTURN_PORT <= 65535 )) || die "turn.port must be 1-65535 — got '$A_COTURN_PORT'"
   fi
@@ -798,6 +809,13 @@ prepare_target() {
 # output can be inspected (and tested) without touching the filesystem.
 render_config() {
   local plm_block capture_block turn_block notifications_block model_import generated
+  local db_probe_line=''
+  # Bundled database: /api/health must probe PostgREST by service name. The
+  # public URL (https://localhost/...) is the api container itself from inside it.
+  if [[ "$A_DB" == 'bundled' ]]; then
+    db_probe_line="
+    probeUrl: 'http://rest:3000/',"
+  fi
 
   generated="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
@@ -846,12 +864,19 @@ render_config() {
   esac
 
   case "$A_TURN" in
-    selfHostedCoturn)
+    bundled|selfHostedCoturn)
+      local probe_host_line=''
+      if [[ "$A_TURN" == 'bundled' ]]; then
+        # The api container's health probe reaches coturn by its compose
+        # service name on the backend network, not by the public hostname.
+        probe_host_line="
+    probeHost: 'coturn',"
+      fi
       turn_block="  turn: {
     provider: 'selfHostedCoturn',
     host: '${A_COTURN_HOST}',
     port: ${A_COTURN_PORT},
-    sharedSecretEnv: 'COTURN_SHARED_SECRET',
+    sharedSecretEnv: 'COTURN_SHARED_SECRET',${probe_host_line}
   },"
       ;;
     *)
@@ -912,7 +937,7 @@ ${turn_block}
     // of these, and the anon key is client-safe by design with access control
     // enforced by Postgres Row Level Security.
     urlEnv: 'VITE_SUPABASE_URL',
-    anonKeyEnv: 'VITE_SUPABASE_ANON_KEY',
+    anonKeyEnv: 'VITE_SUPABASE_ANON_KEY',${db_probe_line}
   },
 ${notifications_block}
 ${model_import}
@@ -1130,11 +1155,21 @@ SECRETS
 
   env_comment ''
   env_comment '# ── 6. TURN relay ──────────────────────────────────────────────────────────'
-  if [[ "$A_TURN" == 'selfHostedCoturn' ]]; then
+  if [[ "$A_TURN" == 'selfHostedCoturn' || "$A_TURN" == 'bundled' ]]; then
     printf 'COTURN_SHARED_SECRET=%s\n' "$S_COTURN_SECRET"
-    env_comment '# turn.provider is "selfHostedCoturn": the app mints 24 h credentials from'
-    env_comment '# this secret (TURN REST API). coturn must run with use-auth-secret and'
-    env_comment '# static-auth-secret=<this value>. /api/health probes coturn over STUN.'
+    if [[ "$A_TURN" == 'bundled' ]]; then
+      env_comment '# Bundled coturn in this compose stack (profile "turn"). TURN_EXTERNAL_IP is'
+      env_comment '# the IP coturn advertises in ICE candidates. Leave empty for a same-machine'
+      env_comment '# install. Set it to the Windows/macOS host LAN IP under Docker Desktop so'
+      env_comment '# off-machine browsers can reach the relay.'
+      printf 'TURN_EXTERNAL_IP=\n'
+      printf 'TURN_MIN_PORT=%s\n' "${TURN_MIN_PORT:-49160}"
+      printf 'TURN_MAX_PORT=%s\n' "${TURN_MAX_PORT:-49200}"
+    else
+      env_comment '# turn.provider is "selfHostedCoturn": the app mints 24 h credentials from'
+      env_comment '# this secret (TURN REST API). coturn must run with use-auth-secret and'
+      env_comment '# static-auth-secret=<this value>. /api/health probes coturn over STUN.'
+    fi
   else
     if [[ -n "$A_TURN_TOKEN_ID" ]]; then
       printf 'CF_TURN_TOKEN_ID=%s\n' "$A_TURN_TOKEN_ID"
@@ -1244,6 +1279,9 @@ compose_files() {
   if [[ "$A_N8N" == 'yes' ]]; then
     PROFILES+=(n8n)
   fi
+  if [[ "$A_TURN" == 'bundled' ]]; then
+    PROFILES+=(turn)
+  fi
 }
 
 profile_args() {
@@ -1277,7 +1315,7 @@ generate_certs() {
     say "           mkdir -p deploy/certs && openssl req -x509 -newkey rsa:4096 \\"
     say "             -nodes -days 365 -keyout deploy/certs/tls.key \\"
     say "             -out deploy/certs/tls.crt -subj \"/CN=${A_HOSTNAME}\" \\"
-    say "             -addext \"subjectAltName=DNS:${A_HOSTNAME}\""
+    say "             -addext \"subjectAltName=DNS:${A_HOSTNAME}\"  # or IP:<addr> if hostname is an IPv4 address"
     return 0
   fi
 
@@ -1287,10 +1325,18 @@ generate_certs() {
   # -addext subjectAltName is not optional in practice: browsers have ignored CN
   # since 2017, so without a SAN the certificate is rejected even after the
   # operator clicks through the self-signed warning.
+  # If A_HOSTNAME is an IPv4 address, the SAN must use IP: not DNS: — browsers
+  # reject an IP address in a DNS SAN entry.
+  local san_entry
+  if [[ "$A_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    san_entry="IP:${A_HOSTNAME}"
+  else
+    san_entry="DNS:${A_HOSTNAME}"
+  fi
   openssl req -x509 -newkey rsa:4096 -nodes -days 365 \
     -keyout "$key" -out "$crt" \
     -subj "/CN=${A_HOSTNAME}" \
-    -addext "subjectAltName=DNS:${A_HOSTNAME}" >/dev/null 2>&1
+    -addext "subjectAltName=${san_entry}" >/dev/null 2>&1
   chmod 600 "$key"
   chmod 644 "$crt"
 }
@@ -1300,8 +1346,31 @@ compose_up() {
   say ''
   say "Bringing the stack up: ${COMPOSE[*]} ${PROFILE_ARGS[*]+"${PROFILE_ARGS[*]}"} up -d --build"
   say '(the first build runs npm ci and pip install; give it several minutes)'
-  ( cd -- "$TARGET_DIR" && "${COMPOSE[@]}" "${COMPOSE_ARGS[@]}" \
-      ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d --build )
+  local compose_output compose_rc
+  compose_output="$(cd -- "$TARGET_DIR" && "${COMPOSE[@]}" "${COMPOSE_ARGS[@]}" \
+      ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d --build 2>&1)" && compose_rc=0 || compose_rc=$?
+  printf '%s\n' "$compose_output" >&2
+
+  if [[ $compose_rc -ne 0 ]]; then
+    # Port clash: Docker refuses to start when a host port is already held.
+    # Under WSL2 the port may be held on the Windows side (invisible to
+    # /dev/tcp probes inside the distro), so we detect it from compose's
+    # error output after the fact.
+    if printf '%s' "$compose_output" | grep -qiE 'ports are not available|address already in use'; then
+      say ''
+      say 'A port the stack needs is already in use on this host.'
+      say 'Common causes:'
+      say '  - Another service holds HTTP_PORT (80), HTTPS_PORT (443), or WSS_PORT (8443)'
+      say '  - A native Ollama holds 11434 (the ollama container no longer publishes it;'
+      say '    if you re-enabled the mapping via an override, that is the clash)'
+      say '  - TURN ports 3478 or 49160-49200 are held by another TURN server'
+      say ''
+      say 'Change the conflicting variable in .env and re-run:'
+      say '  HTTP_PORT, HTTPS_PORT, WSS_PORT, TURN_MIN_PORT, TURN_MAX_PORT'
+      exit 5
+    fi
+    exit "$compose_rc"
+  fi
 }
 
 pull_model() {
@@ -1348,20 +1417,25 @@ apply_schema() {
 
   say ''
   say 'Applying docs/supabase-schema.sql to the db container'
-  # ON_ERROR_STOP=1: the supabase/postgres image has the supabase_realtime
-  # publication (created by deploy/db/realtime.sql), so the schema's DO block
-  # that adds review_curations to the publication succeeds. The grants DO block
-  # at the end is guarded by a pg_roles check and is a no-op on plain Postgres.
+  # ON_ERROR_STOP=1: on the supabase/postgres image every statement succeeds,
+  # including adding review_curations to the supabase_realtime publication.
+  #
+  # AS supabase_admin, not postgres. The image runs this same file at first
+  # boot from docker-entrypoint-initdb.d/migrations/, which it executes as
+  # supabase_admin, so that role owns the tables and update_updated_at(). Run
+  # as postgres, the re-apply fails with "must be owner of function
+  # update_updated_at" (found on the first live run).
   if ! ( cd -- "$TARGET_DIR" && "${COMPOSE[@]}" "${COMPOSE_ARGS[@]}" \
            exec -T db psql -v ON_ERROR_STOP=1 \
-             -U postgres -d postgres ) \
+             -U supabase_admin -d postgres ) \
          < "$schema"; then
     say 'warning: the schema load reported errors. Inspect with:'
-    say '  docker compose exec db psql -U postgres -d postgres -c "\dt"'
+    say '  docker compose exec db psql -U supabase_admin -d postgres -c "\dt"'
   fi
 }
 
 poll_health() {
+  local https_port="${HTTPS_PORT:-443}"
   local url="https://${A_HOSTNAME}/api/health"
   local attempts=30 attempt=1 raw='' body='' status=''
 
@@ -1378,10 +1452,17 @@ poll_health() {
   say ' is not the same as the config resolving, so this does not take their word'
   say ' for it.)'
 
+  # --resolve pins the hostname to 127.0.0.1 so the poll tests THIS machine's
+  # stack whether or not the hostname resolves here yet (arena.local, a
+  # not-yet-configured DNS name, etc.). When HTTPS_PORT is not 443 the port in
+  # the --resolve triplet must match, because curl uses that port for the
+  # connection, not the one in the URL, when --resolve is present.
+  local resolve="${A_HOSTNAME}:${https_port}:127.0.0.1"
+
   while (( attempt <= attempts )); do
     # One request, status appended. -k because the default certificate is
     # self-signed; --max-time so a hung proxy cannot eat the whole retry budget.
-    raw="$(curl -sS -k --max-time 10 -w $'\n%{http_code}' "$url" 2>/dev/null || printf '\n000')"
+    raw="$(curl -sS -k --resolve "$resolve" --max-time 10 -w $'\n%{http_code}' "$url" 2>/dev/null || printf '\n000')"
     status="${raw##*$'\n'}"
     body="${raw%$'\n'*}"
 
@@ -1409,12 +1490,12 @@ poll_health() {
   done
 
   say ''
-  say "warning: ${url} did not answer after ${attempts} attempts."
+  say "The stack did not answer on ${url} after ${attempts} attempts."
   say '         The containers may still be starting — a first Ollama pull and a'
   say '         first Whisper model download both take minutes. Check with:'
   say '           docker compose ps'
   say '           docker compose logs app nginx-proxy'
-  return 0
+  return 4
 }
 
 print_summary() {
@@ -1480,6 +1561,12 @@ print_summary() {
   say ''
   say "  Next: point DNS (or your hosts file) at this box for ${A_HOSTNAME},"
   say '  then open the app. A self-signed certificate means one browser warning.'
+  if [[ "$A_TURN" == 'bundled' ]]; then
+    say ''
+    say '  TURN_EXTERNAL_IP is empty in .env. For a same-machine install that is'
+    say '  correct. For off-machine browsers under Docker Desktop, set it to the'
+    say '  Windows/macOS host LAN IP so coturn advertises a reachable address.'
+  fi
   say '──────────────────────────────────────────────────────────────────'
 }
 

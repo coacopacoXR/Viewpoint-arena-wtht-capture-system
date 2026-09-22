@@ -14,10 +14,24 @@
 #
 #   nginx-proxy   80, 443, 8443   the only public entry point
 #   partykit      127.0.0.1:1999  loopback only; browsers reach it via 8443
-#   ollama        127.0.0.1:11434 loopback only, for `ollama pull` from the host
+#   coturn        3478 udp+tcp, relay range (profile turn) — browsers need
+#                                 direct reachability for WebRTC; see the
+#                                 coturn service comment below.
 #   n8n           127.0.0.1:5678  loopback only, profile n8n
 #
-#   app, api, capture-service, whisper, db, rest, realtime   NO PORTS AT ALL
+#   app, api, capture-service, whisper, db, rest, realtime, ollama   NO PORTS
+#
+#   Ollama used to publish 127.0.0.1:11434 for `ollama pull` from the host,
+#   but that clashes with a native Ollama on developer machines (port held on
+#   the Windows side under WSL2, invisible to /dev/tcp probes). Pull via
+#   `docker compose exec ollama ollama pull <model>` instead. To re-enable the
+#   mapping, add an override file:
+#
+#       # docker-compose.override.yml
+#       services:
+#         ollama:
+#           ports:
+#             - '127.0.0.1:11434:11434'
 #
 # ── WHY capture-service PUBLISHES NO PORT ────────────────────────────────────
 #
@@ -59,6 +73,10 @@
 #                   Off by default because capture-service transcribes
 #                   in-process today; see the `whisper` service comment.
 #   n8n             the optional workflow engine (T4.8).
+#   turn            the bundled coturn relay. Activate when turn.provider is
+#                   'selfHostedCoturn' and the coturn runs in this stack (the
+#                   install.sh default). Off when using Cloudflare TURN or an
+#                   external coturn the operator manages separately.
 #
 #   GPU is a compose OVERRIDE, not a profile, because a profile cannot add a
 #   device reservation to an existing service:
@@ -228,8 +246,11 @@ services:
       - backend
     # Every secret the handlers read (ONSHAPE_*, CF_TURN_*, TEAMS_*, capture
     # keys, CAPTURE_SHARED_SECRET). Runtime only, never an image layer.
+    # Optional: `docker compose config` must work on a fresh clone before
+    # install.sh has written .env, so a missing file is not an error.
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       # The per-deployment master config, written by install.sh. Read-only: the
       # API reads it, nothing in the stack may change it.
@@ -366,14 +387,17 @@ services:
     image: ollama/ollama:${OLLAMA_IMAGE_TAG:-latest}
     restart: unless-stopped
     logging: *logging
-    ports:
-      # LOOPBACK ONLY. Ollama has NO authentication whatsoever: publishing it on
-      # a network interface hands anyone on that network a free LLM and the
-      # ability to read every model you pulled. capture-service reaches it as
-      # `http://ollama:11434` over the compose network and does not need this
-      # mapping at all — it exists so an operator can run `ollama pull` and
-      # `ollama list` from the host.
-      - '127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434'
+    # No ports. Ollama has NO authentication whatsoever: publishing it on a
+    # network interface hands anyone on that network a free LLM and the ability
+    # to read every model you pulled. capture-service reaches it as
+    # `http://ollama:11434` over the compose network. Pulling models from the
+    # host: `docker compose --profile capture-local exec ollama ollama pull <model>`.
+    # To re-enable the host mapping (clashes with a native Ollama on port 11434,
+    # common on developer machines): add to docker-compose.override.yml:
+    #   services:
+    #     ollama:
+    #       ports:
+    #         - '127.0.0.1:11434:11434'
     environment:
       # 0.0.0.0 INSIDE the container, so the compose network can reach it. Not
       # the same as being published — see the ports comment above.
@@ -597,3 +621,111 @@ services:
       resources:
         limits:
           memory: ${N8N_MEMORY:-1g}
+
+  # ── Bundled TURN relay (coturn) ──────────────────────────────────────────
+  #
+  # A self-hosted coturn so a default install needs no third-party TURN account.
+  # Profile-gated: only starts when install.sh chose the bundled TURN option
+  # (the --defaults choice), which adds --profile turn to the compose command.
+  #
+  # ── WHY THIS SERVICE PUBLISHES PORTS ─────────────────────────────────────
+  #
+  # Unlike every other service in this stack, coturn MUST be reachable directly
+  # by browsers on the network — WebRTC ICE candidates carry the relay address,
+  # and the browser opens UDP/TCP sockets to it without any proxy in front.
+  # nginx-proxy cannot front a TURN server: TURN is not HTTP.
+  #
+  # ── DOCKER DESKTOP NAT CAVEAT ────────────────────────────────────────────
+  #
+  # Under Docker Desktop (Windows/macOS), containers run behind a NAT. coturn
+  # sees its own container IP as the relay address, which is unreachable from
+  # other machines on the LAN. Set TURN_EXTERNAL_IP in .env to the Windows/macOS
+  # host's LAN IP (e.g. 192.168.1.100) so coturn advertises that instead.
+  # Leave it empty for a same-machine install (both browsers on localhost).
+  #
+  # ── LAN-ONLY DEPLOYMENTS ─────────────────────────────────────────────────
+  #
+  # The denied-peer-ip list below blocks relay to private ranges (standard
+  # coturn hardening — prevents the relay from being used to reach internal
+  # services). If BOTH browsers are on 192.168.x and there is no public-route
+  # coturn, set TURN_ALLOW_PRIVATE_PEERS=yes in .env to remove the deny lines.
+  # A deployment with browsers on mixed networks (some LAN, some internet)
+  # should leave the denies on and ensure at least one coturn has a public IP.
+  coturn:
+    profiles:
+      - turn
+    image: coturn/coturn:${COTURN_IMAGE_TAG:-4.6.3}
+    restart: unless-stopped
+    logging: *logging
+    # The wrapper writes a config file and starts turnserver from it, for two
+    # reasons found on the first live run:
+    #   * coturn takes ONE denied-peer-ip per range. A comma-separated list is
+    #     rejected ("Wrong address format") and the whole deny list is silently
+    #     dropped, which leaves the relay free to reach private networks.
+    #   * the shared secret stays out of the process command line (readable by
+    #     anything that can list processes in the container).
+    # /tmp because the image runs as the unprivileged `nobody`. No `-n`: that
+    # flag makes turnserver ignore every config file, including this one.
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        umask 077
+        conf=/tmp/turnserver.conf
+        {
+          echo "static-auth-secret=$${COTURN_SHARED_SECRET}"
+          echo "realm=$${PUBLIC_HOSTNAME}"
+          echo "min-port=$${TURN_MIN_PORT:-49160}"
+          echo "max-port=$${TURN_MAX_PORT:-49200}"
+          if [ -n "$${TURN_EXTERNAL_IP}" ]; then echo "external-ip=$${TURN_EXTERNAL_IP}"; fi
+          # Relay PEERS that are never allowed: loopback, link-local, and the
+          # private ranges, so a TURN credential cannot be used to reach
+          # machines behind this host. A LAN-only deployment whose browsers
+          # relay to each other on 192.168.x sets TURN_ALLOW_PRIVATE_PEERS=1
+          # (loopback and link-local stay denied either way).
+          for r in 0.0.0.0-0.255.255.255 127.0.0.0-127.255.255.255 \
+                   169.254.0.0-169.254.255.255 ::1 \
+                   fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff; do
+            echo "denied-peer-ip=$$r"
+          done
+          if [ -z "$${TURN_ALLOW_PRIVATE_PEERS}" ]; then
+            for r in 10.0.0.0-10.255.255.255 172.16.0.0-172.31.255.255 \
+                     192.168.0.0-192.168.255.255 \
+                     fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff; do
+              echo "denied-peer-ip=$$r"
+            done
+          fi
+        } > "$$conf"
+        exec turnserver -c "$$conf" --log-file=stdout --use-auth-secret \
+          --listening-port=3478 --no-cli --no-tls --no-dtls \
+          --fingerprint --no-multicast-peers
+    ports:
+      # TURN listening port, UDP and TCP. Browsers send ICE candidates here.
+      # Published on all interfaces (not loopback) — WebRTC requires direct
+      # reachability from the browser's network.
+      - '3478:3478/udp'
+      - '3478:3478/tcp'
+      # Relay port range. Narrow (41 ports by default) to limit the UDP surface
+      # while giving enough ports for several concurrent sessions.
+      - '${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}:${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49200}/udp'
+    environment:
+      COTURN_SHARED_SECRET: ${COTURN_SHARED_SECRET:-}
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:-localhost}
+      TURN_MIN_PORT: ${TURN_MIN_PORT:-49160}
+      TURN_MAX_PORT: ${TURN_MAX_PORT:-49200}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-}
+      # Non-empty: the relay may forward to 10/8, 172.16/12, 192.168/16 and
+      # fc00::/7 peers (LAN-only deployments). See the wrapper above.
+      TURN_ALLOW_PRIVATE_PEERS: ${TURN_ALLOW_PRIVATE_PEERS:-}
+    networks:
+      # edge: browsers on the LAN / internet reach the published ports.
+      - edge
+      # backend: the api container's health probe reaches coturn by service
+      # name (`coturn`) on the internal network, so the probe works even when
+      # the public hostname resolves elsewhere.
+      - backend
+    deploy:
+      resources:
+        limits:
+          # coturn is lightweight — a few MB of RAM per active relay session.
+          # 256m bounds a runaway without starving the box.
+          memory: 256m

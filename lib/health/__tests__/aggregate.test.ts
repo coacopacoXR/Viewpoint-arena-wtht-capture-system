@@ -398,6 +398,18 @@ describe('db connector', () => {
     );
   });
 
+  it('probes db.probeUrl as given when set, never the public URL', async () => {
+    // The bundled Docker stack: the browser's URL is https://localhost, which
+    // inside the api container is the container itself.
+    const { fn, calls } = fetchReturning(httpResponse(200, { definitions: {} }));
+    const report = await aggregateHealth(
+      { ...BASE_CONFIG, db: { ...BASE_CONFIG.db, probeUrl: 'http://rest:3000/' } },
+      { env: HEALTHY_ENV, fetchFn: fn },
+    );
+    expect(report.connectors.db?.status).toBe('ok');
+    expect(String(calls[0].url)).toBe('http://rest:3000/');
+  });
+
   it('separates "database down" from "key rejected"', async () => {
     const rejected = await aggregateHealth(BASE_CONFIG, {
       env: HEALTHY_ENV,

@@ -45,8 +45,15 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-whisper.txt
 COPY capture_service ./capture_service
 COPY healthcheck.py ./
 
+# The Whisper model cache is created here, owned by `capture`, because
+# docker-compose.yml mounts the whisper-models volume on it. A named volume
+# copies the ownership of the directory it is mounted over; if that directory
+# does not exist in the image, Docker creates it as root, and the first
+# /capture then fails with transcriber_unavailable (PermissionError on
+# ~/.cache/huggingface/hub). Found on the first live Docker run.
 RUN useradd --create-home --uid 10001 capture \
-    && chown -R capture:capture /srv/capture-service
+    && mkdir -p /home/capture/.cache/huggingface \
+    && chown -R capture:capture /srv/capture-service /home/capture/.cache
 USER capture
 
 EXPOSE 8080

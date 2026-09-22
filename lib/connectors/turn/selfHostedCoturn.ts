@@ -32,6 +32,15 @@ export interface SelfHostedCoturnOpts {
   port: number;
   /** NAME of the env var holding coturn's static-auth-secret. */
   sharedSecretEnv: string;
+  /**
+   * Optional: a different hostname for the health probe. When the api
+   * container runs inside Docker, the public `host` (e.g. 'localhost') points
+   * at the api container itself, not at coturn. The bundled coturn is
+   * reachable by its compose service name on the backend network, so
+   * install.sh sets probeHost to 'coturn' in that case. ICE URLs always use
+   * `host`, never `probeHost`.
+   */
+  probeHost?: string;
   /** Override for process.env — for testing only. */
   env?: Record<string, string | undefined>;
   /** Clock override — for testing only. */
@@ -93,6 +102,7 @@ export class SelfHostedCoturnAdapter implements TurnAdapter {
   private readonly _host: string;
   private readonly _port: number;
   private readonly _sharedSecretEnv: string;
+  private readonly _probeHost: string;
   private readonly _env: Record<string, string | undefined>;
   private readonly _now: () => number;
   private readonly _probe: (host: string, port: number) => Promise<boolean>;
@@ -101,6 +111,7 @@ export class SelfHostedCoturnAdapter implements TurnAdapter {
     this._host = opts.host;
     this._port = opts.port;
     this._sharedSecretEnv = opts.sharedSecretEnv;
+    this._probeHost = opts.probeHost ?? opts.host;
     this._env = opts.env ?? process.env;
     this._now = opts.now ?? Date.now;
     this._probe = opts.probe ?? stunReachable;
@@ -135,7 +146,7 @@ export class SelfHostedCoturnAdapter implements TurnAdapter {
       return { ok: false, detail: HEALTH_DETAILS.notConfigured };
     }
     try {
-      const up = await this._probe(this._host, this._port);
+      const up = await this._probe(this._probeHost, this._port);
       return up
         ? { ok: true, detail: HEALTH_DETAILS.reachable }
         : { ok: false, detail: HEALTH_DETAILS.unreachable };

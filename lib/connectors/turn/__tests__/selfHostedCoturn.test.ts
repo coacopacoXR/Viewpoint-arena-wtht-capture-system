@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { createSocket, type Socket } from 'node:dgram';
 import type { AddressInfo } from 'node:net';
@@ -89,5 +89,52 @@ describe('stunReachable', () => {
     const started = Date.now();
     await expect(stunReachable('127.0.0.1', port)).resolves.toBe(false);
     expect(Date.now() - started).toBeLessThan(4000);
+  });
+});
+
+describe('SelfHostedCoturnAdapter probeHost', () => {
+  it('health probe uses probeHost when set', async () => {
+    const probe = vi.fn(async () => true);
+    const adapter = new SelfHostedCoturnAdapter({
+      host: 'turn.example.org',
+      port: 3478,
+      sharedSecretEnv: 'S',
+      env: { S: 'x' },
+      probeHost: 'coturn',
+      probe,
+    });
+    await adapter.healthCheck();
+    expect(probe).toHaveBeenCalledWith('coturn', 3478);
+  });
+
+  it('health probe falls back to host when probeHost is not set', async () => {
+    const probe = vi.fn(async () => true);
+    const adapter = new SelfHostedCoturnAdapter({
+      host: 'turn.example.org',
+      port: 3478,
+      sharedSecretEnv: 'S',
+      env: { S: 'x' },
+      probe,
+    });
+    await adapter.healthCheck();
+    expect(probe).toHaveBeenCalledWith('turn.example.org', 3478);
+  });
+
+  it('ICE URLs always use host, never probeHost', async () => {
+    const servers = await new SelfHostedCoturnAdapter({
+      host: 'turn.example.org',
+      port: 3478,
+      sharedSecretEnv: 'S',
+      env: { S: 'x' },
+      probeHost: 'coturn',
+      now: () => NOW,
+    }).getIceServers();
+    const allUrls = servers.flatMap((s) =>
+      Array.isArray(s.urls) ? s.urls : [s.urls],
+    );
+    for (const url of allUrls) {
+      expect(url).toContain('turn.example.org');
+      expect(url).not.toContain('coturn');
+    }
   });
 });

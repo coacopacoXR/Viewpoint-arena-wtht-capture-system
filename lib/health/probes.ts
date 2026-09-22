@@ -125,6 +125,11 @@ export interface DatabaseProbeOptions extends ProbeOptions {
   urlEnv: string;
   /** Env var NAME holding the anon key, from db.anonKeyEnv. */
   anonKeyEnv: string;
+  /**
+   * From db.probeUrl: the PostgREST root as this server reaches it, probed as
+   * given instead of `<project URL>/rest/v1/`.
+   */
+  probeUrl?: string;
   env?: Record<string, string | undefined>;
 }
 
@@ -155,12 +160,16 @@ export async function probeDatabase(
 
   let endpoint: URL;
   try {
-    endpoint = new URL(url);
+    if (options.probeUrl) {
+      endpoint = new URL(options.probeUrl);
+    } else {
+      endpoint = new URL(url);
+      endpoint.pathname = '/rest/v1/';
+      endpoint.search = '';
+    }
   } catch {
     return { ok: false, detail: HEALTH_DETAILS.configInvalid };
   }
-  endpoint.pathname = '/rest/v1/';
-  endpoint.search = '';
 
   let response: Response;
   try {

@@ -11,9 +11,15 @@ export default defineConfig({
     provider: 'mock',
   },
   turn: {
-    provider: 'cloudflare',
-    tokenIdEnv: 'CF_TURN_TOKEN_ID',
-    apiTokenEnv: 'CF_TURN_API_TOKEN',
+    provider: 'selfHostedCoturn',
+    host: 'localhost',
+    port: 3478,
+    sharedSecretEnv: 'COTURN_SHARED_SECRET',
+    // When the api container runs inside Docker, the public host (e.g.
+    // 'localhost') resolves to the api container itself, not to coturn.
+    // probeHost is the compose service name the api uses for its STUN health
+    // probe on the backend network. Omit it when the api runs outside Docker.
+    probeHost: 'coturn',
   },
   db: {
     provider: 'supabase',

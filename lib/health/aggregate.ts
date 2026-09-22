@@ -341,6 +341,7 @@ export function buildChecks(config: ViewpointConfig, deps: HealthDeps): Check[] 
       host: config.turn.host,
       port: config.turn.port,
       sharedSecretEnv: config.turn.sharedSecretEnv,
+      probeHost: config.turn.probeHost,
       env,
     });
     checks.push({
@@ -358,6 +359,7 @@ export function buildChecks(config: ViewpointConfig, deps: HealthDeps): Check[] 
       probeDatabase({
         urlEnv: config.db.urlEnv,
         anonKeyEnv: config.db.anonKeyEnv,
+        probeUrl: config.db.probeUrl,
         env,
         fetchFn: options.fetchFn,
         signal: options.signal,
