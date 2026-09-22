@@ -27,6 +27,22 @@ export type RecorderState = 'idle' | 'recording' | 'unsupported';
  */
 const RECORDER_TIMESLICE_MS = 1000;
 
+/**
+ * How often the live-chunk recorder stops and restarts to hand a decodable
+ * slice to the transcriber. Eight seconds is the compromise: short enough that
+ * the panel is ~10–15 s behind (8 s recording + a few seconds to transcribe),
+ * long enough that each slice carries enough audio for Whisper to produce
+ * something meaningful. A word can be split across a boundary — documented in
+ * useLiveTranscript, which joins consecutive chunks with a space.
+ */
+export const LIVE_CHUNK_MS = 8000;
+
+/**
+ * Below this size a live-chunk Blob is silently dropped: a sub-second slice
+ * has no useful speech and would burn a transcribe round-trip for silence.
+ */
+const LIVE_CHUNK_MIN_BYTES = 512;
+
 /** The fallback container when MediaRecorder reports no mimeType of its own. */
 const DEFAULT_RECORDING_MIME = 'audio/webm';
 
@@ -157,6 +173,18 @@ export interface UseMeetingRecorderOptions {
   localStream: MediaStream | null;
   /** Every remote participant, keyed by user id. */
   remoteStreams: Map<string, MediaStream>;
+  /**
+   * Optional callback for the live-transcript path (T4.7). When given, a
+   * SECOND MediaRecorder runs alongside the main one on the SAME mixed stream:
+   * it stops and restarts every LIVE_CHUNK_MS, handing a decodable Blob to the
+   * caller. The main recorder is untouched, so the final capture still gets
+   * one continuous recording. The offsetMs is the wall-clock position of the
+   * chunk's start within the overall recording.
+   *
+   * A word can be split across a chunk boundary — the caller is expected to
+   * join consecutive chunk texts with a space.
+   */
+  onLiveChunk?: (blob: Blob, offsetMs: number) => void;
 }
 
 export interface UseMeetingRecorderReturn {
@@ -190,6 +218,7 @@ export const NO_MICROPHONE_MESSAGE =
 export function useMeetingRecorder({
   localStream,
   remoteStreams,
+  onLiveChunk,
 }: UseMeetingRecorderOptions): UseMeetingRecorderReturn {
   // Lazy initialiser: the feature-detect reads globals once, and jsdom (where
   // neither exists) gets 'unsupported' without a render-loop flip.
@@ -206,6 +235,18 @@ export function useMeetingRecorder({
   // A microphone stream THIS hook opened because the call provided none. Unlike
   // the WebRTC streams, it belongs to the recorder, so the recorder stops it.
   const ownMicRef = useRef<MediaStream | null>(null);
+
+  // Live-chunk recorder (T4.7). A SECOND MediaRecorder on the same mixed stream
+  // that is stopped and restarted every LIVE_CHUNK_MS. Each stop yields a
+  // standalone, decodable file (a timeslice fragment of one long recording is
+  // NOT decodable on its own: only the first fragment has the container header,
+  // so `start(timeslice)` is deliberately NOT used here).
+  const liveRecorderRef = useRef<MediaRecorder | null>(null);
+  const liveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveOffsetRef = useRef(0);
+  const liveStartedAtRef = useRef(0);
+  const onLiveChunkRef = useRef(onLiveChunk);
+  onLiveChunkRef.current = onLiveChunk;
 
   // Refs rather than closure values so start() and stop() stay stable: a
   // participant who joins mid-recording is picked up by the attach effect below,
@@ -245,6 +286,18 @@ export function useMeetingRecorder({
         // stop() on an inactive recorder throws InvalidStateError.
         if (recorder.state !== 'inactive') recorder.stop();
       }
+      // Also stop the live-chunk recorder if one is running.
+      if (liveRecorderRef.current !== null) {
+        if (liveTimerRef.current !== null) {
+          clearTimeout(liveTimerRef.current);
+          liveTimerRef.current = null;
+        }
+        const live = liveRecorderRef.current;
+        liveRecorderRef.current = null;
+        live.ondataavailable = null;
+        live.onstop = null;
+        if (live.state !== 'inactive') live.stop();
+      }
       graph?.dispose();
       ownMicRef.current?.getTracks().forEach((track) => track.stop());
       ownMicRef.current = null;
@@ -263,6 +316,53 @@ export function useMeetingRecorder({
     ownMicRef.current?.getTracks().forEach((track) => track.stop());
     ownMicRef.current = null;
   }, []);
+
+  // Starts a fresh MediaRecorder slice on the mixed stream. Each slice is a
+  // standalone, decodable file (a fresh recorder, not a timeslice of one long
+  // recording — only the first fragment of a timesliced recording has the
+  // container header). When the slice's timer fires, the recorder is stopped,
+  // its blob handed to onLiveChunk, and a new slice is started.
+  const startLiveSlice = useCallback(
+    (mixedStream: MediaStream, mimeType: string | undefined) => {
+      const recorder = mimeType === undefined
+        ? new MediaRecorder(mixedStream)
+        : new MediaRecorder(mixedStream, { mimeType });
+
+      let sliceData: Blob | null = null;
+      const sliceOffset = liveOffsetRef.current;
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data.size > 0) sliceData = event.data;
+      };
+      recorder.onstop = () => {
+        // Flush the slice to the caller.
+        if (sliceData !== null && sliceData.size >= LIVE_CHUNK_MIN_BYTES) {
+          onLiveChunkRef.current?.(sliceData, sliceOffset);
+        }
+        // Advance the offset by the wall-clock duration of this slice.
+        liveOffsetRef.current = sliceOffset + (Date.now() - liveStartedAtRef.current);
+        liveStartedAtRef.current = Date.now();
+        // Start the next slice if the live recorder is still active.
+        if (liveRecorderRef.current === recorder) {
+          startLiveSlice(mixedStream, mimeType);
+        }
+      };
+
+      liveRecorderRef.current = recorder;
+      recorder.start();
+
+      // Schedule the boundary.
+      if (liveTimerRef.current !== null) clearTimeout(liveTimerRef.current);
+      liveTimerRef.current = setTimeout(() => {
+        liveTimerRef.current = null;
+        const r = liveRecorderRef.current;
+        if (r !== null && r.state !== 'inactive') {
+          try { r.stop(); } catch { /* already inactive */ }
+        }
+      }, LIVE_CHUNK_MS);
+    },
+    [],
+  );
 
   const start = useCallback(async (): Promise<void> => {
     if (!isRecordingSupported()) return;
@@ -318,13 +418,22 @@ export function useMeetingRecorder({
       recorderRef.current = recorder;
       recorder.start(RECORDER_TIMESLICE_MS);
       setState('recording');
+
+      // Start the live-chunk recorder alongside the main one when the caller
+      // wants a live transcript. Same mixed stream, independent recorder,
+      // fresh slices so each one is decodable on its own.
+      if (onLiveChunkRef.current) {
+        liveOffsetRef.current = 0;
+        liveStartedAtRef.current = Date.now();
+        startLiveSlice(graph.output, mimeType);
+      }
     } catch (err) {
       releaseOwnMic();
       throw err;
     } finally {
       startingRef.current = false;
     }
-  }, [takeBlob, releaseOwnMic]);
+  }, [takeBlob, releaseOwnMic, startLiveSlice]);
 
   const stop = useCallback(async (): Promise<Blob> => {
     const recorder = recorderRef.current;
@@ -337,6 +446,26 @@ export function useMeetingRecorder({
     recorderRef.current = null;
     graphRef.current = null;
     setState('idle');
+
+    // Stop the live-chunk recorder first. The final partial slice is flushed
+    // by the stop() call (ondataavailable fires synchronously before onstop),
+    // and the onstop handler calls onLiveChunk for it. We then detach so the
+    // auto-restart in startLiveSlice does not kick in.
+    if (liveRecorderRef.current !== null) {
+      const live = liveRecorderRef.current;
+      if (liveTimerRef.current !== null) {
+        clearTimeout(liveTimerRef.current);
+        liveTimerRef.current = null;
+      }
+      liveRecorderRef.current = null;
+      // onstop will fire synchronously during stop(); it sees
+      // liveRecorderRef.current === null and does NOT restart.
+      if (live.state !== 'inactive') {
+        try { live.stop(); } catch { /* already inactive */ }
+      }
+      live.onstop = null;
+      live.ondataavailable = null;
+    }
 
     const blob = await new Promise<Blob>((resolveBlob) => {
       if (recorder.state === 'inactive') {

@@ -38,7 +38,8 @@ type RoomMessage =
   | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } }
   | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } }
   | { type: 'LIVE_CHAT'; payload: any }
-  | { type: 'XR_PRESENCE'; payload: any };
+  | { type: 'XR_PRESENCE'; payload: any }
+  | { type: 'TRANSCRIPT_LINE'; payload: { id: string; agentId: string; text: string; timestamp: number; speakerName?: string } };
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
 
@@ -251,7 +252,8 @@ export default class RoomServer implements Party.Server {
       msg.type === 'PRESENTER_REQUEST' ||
       msg.type === 'PRESENTER_REQUEST_DENIED' ||
       msg.type === 'LIVE_CHAT' ||
-      msg.type === 'XR_PRESENCE'
+      msg.type === 'XR_PRESENCE' ||
+      msg.type === 'TRANSCRIPT_LINE'
     ) {
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
     }

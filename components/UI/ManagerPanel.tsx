@@ -12,6 +12,7 @@ import { usePresence } from '../../lib/PresenceContext';
 import { useConnectorConfig } from '../../lib/config/ConfigContext';
 import { useWebRTCContext } from '../../lib/WebRTCContext';
 import { useMeetingRecorder } from '../../lib/useMeetingRecorder';
+import { useLiveTranscript } from '../../lib/useLiveTranscript';
 import { LocalCaptureProvider, meetingSlideContext } from '../../lib/connectors/capture/local';
 import InsightDetailModal from './InsightDetailModal';
 import ConversationPanel from './ConversationPanel';
@@ -289,13 +290,37 @@ type SummaryOutcome = { added: number } | { message: string };
 //     deployment sees no recording UI at all.
 const PostMeetingSummary: React.FC = () => {
   const { localStream, remoteStreams } = useWebRTCContext();
-  const { state, start, stop } = useMeetingRecorder({ localStream, remoteStreams });
   const addInsightCard = useStore((s) => s.addInsightCard);
   const reviewConfig = useActiveReviewStore((s) => s.config);
   const agendaIdx = useActiveReviewStore((s) => s.agendaIdx);
 
   // Holds no credential: the shared secret is added by the same-origin proxy.
   const provider = useMemo(() => new LocalCaptureProvider(), []);
+
+  // Live transcript (T4.7). recordingStartMs is set when the host presses
+  // Start and used to build unique message IDs for each transcript line.
+  const [recordingStartMs, setRecordingStartMs] = useState(0);
+  // Which recording's lines the live box shows. Unlike recordingStartMs it
+  // survives Stop, so the text stays visible while the cards are made.
+  const [shownRecordingStart, setShownRecordingStart] = useState(0);
+  const chatHistory = useStore((s) => s.chatHistory);
+  const liveLines = useMemo(
+    () =>
+      shownRecordingStart > 0
+        ? chatHistory.filter((m) => m.id.startsWith(`live-${shownRecordingStart}-`)).slice(-4)
+        : [],
+    [chatHistory, shownRecordingStart],
+  );
+  const { onLiveChunk, finish: finishLiveTranscript } = useLiveTranscript({
+    provider,
+    recordingStartMs,
+  });
+
+  const { state, start, stop } = useMeetingRecorder({
+    localStream,
+    remoteStreams,
+    onLiveChunk: recordingStartMs > 0 ? onLiveChunk : undefined,
+  });
 
   const [summarising, setSummarising] = useState(false);
   const [outcome, setOutcome] = useState<SummaryOutcome | null>(null);
@@ -334,9 +359,13 @@ const PostMeetingSummary: React.FC = () => {
 
   const handleStart = async (): Promise<void> => {
     setOutcome(null);
+    const startedAt = Date.now();
+    setRecordingStartMs(startedAt);
+    setShownRecordingStart(startedAt);
     try {
       await start();
     } catch (err) {
+      setRecordingStartMs(0);
       setOutcome({
         message: err instanceof Error ? err.message : 'Recording could not be started.',
       });
@@ -346,9 +375,13 @@ const PostMeetingSummary: React.FC = () => {
   const handleStop = async (): Promise<void> => {
     try {
       const audio = await stop();
+      finishLiveTranscript();
       setRecording(audio);
+      setRecordingStartMs(0);
       await summarise(audio);
     } catch (err) {
+      finishLiveTranscript();
+      setRecordingStartMs(0);
       setOutcome({
         message: err instanceof Error ? err.message : 'Recording could not be stopped.',
       });
@@ -399,6 +432,28 @@ const PostMeetingSummary: React.FC = () => {
           </span>
         )}
       </div>
+
+      {/* The host records from this workspace, which replaces the room
+          sidebar that holds the LIVE TRANSCRIPT panel; without this box the
+          person recording was the only one who could not see the text. */}
+      {(state === 'recording' || summarising) && (
+        <div className="mt-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5" aria-live="polite">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-gray-400">
+            Live transcript
+          </div>
+          {liveLines.length === 0 ? (
+            <p className="text-[10px] italic text-gray-400">
+              Listening… the first words appear about 10 seconds in.
+            </p>
+          ) : (
+            liveLines.map((m) => (
+              <p key={m.id} className="text-[10px] leading-snug text-gray-700">
+                {m.text}
+              </p>
+            ))
+          )}
+        </div>
+      )}
 
       {summarising && (
         <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-gray-500">

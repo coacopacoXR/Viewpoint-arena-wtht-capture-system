@@ -18,6 +18,7 @@ import { act, renderHook } from '@testing-library/react';
 import {
   NO_MICROPHONE_MESSAGE,
   RECORDING_MIME_CANDIDATES,
+  LIVE_CHUNK_MS,
   assembleRecording,
   createMixingGraph,
   isRecordingSupported,
@@ -111,8 +112,9 @@ function installedRecorderFakes() {
     stop(): void {
       if (this.state === 'inactive') throw new Error('InvalidStateError');
       this.state = 'inactive';
+      // Large enough to pass LIVE_CHUNK_MIN_BYTES (512) in the live-chunk path.
       this.ondataavailable?.({
-        data: new Blob(['meeting-audio'], { type: 'audio/webm' }),
+        data: new Blob([new Uint8Array(1024)], { type: 'audio/webm' }),
       });
       this.onstop?.();
     }
@@ -598,5 +600,162 @@ describe('useMeetingRecorder', () => {
       blob = await result.current.stop();
     });
     expect(blob?.size).toBeGreaterThan(0);
+  });
+
+  // ── Live chunks (T4.7) ──────────────────────────────────────────────────
+
+  it('starts a second MediaRecorder for live chunks when onLiveChunk is given', async () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder, instances } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    vi.useFakeTimers();
+
+    const onLiveChunk = vi.fn();
+    const local = fakeStream('local');
+
+    const { result } = renderHook(
+      () => useMeetingRecorder({ localStream: local, remoteStreams: new Map(), onLiveChunk }),
+    );
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    // Two recorders: the main one (timesliced) and the live-chunk one.
+    expect(instances).toHaveLength(2);
+    // The live recorder is the second one and is NOT timesliced (it uses
+    // stop/restart, not start(timeslice)).
+    expect(instances[1].startCalls[0]).toBe(-1);
+
+    await act(async () => {
+      await result.current.stop();
+    });
+
+    vi.useRealTimers();
+  });
+
+  it('fires onLiveChunk at each LIVE_CHUNK_MS boundary with a fresh recorder', async () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder, instances } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    vi.useFakeTimers();
+
+    const onLiveChunk = vi.fn();
+    const local = fakeStream('local');
+
+    const { result } = renderHook(
+      () => useMeetingRecorder({ localStream: local, remoteStreams: new Map(), onLiveChunk }),
+    );
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    // instances[0] = main recorder, instances[1] = first live slice
+    expect(instances).toHaveLength(2);
+    const firstLiveRecorder = instances[1];
+
+    // Advance to the first boundary.
+    await act(async () => {
+      vi.advanceTimersByTime(LIVE_CHUNK_MS);
+    });
+
+    // The first live recorder was stopped (flushed its blob), and a new one
+    // was started for the next slice.
+    expect(firstLiveRecorder.state).toBe('inactive');
+    expect(onLiveChunk).toHaveBeenCalledTimes(1);
+    expect(onLiveChunk.mock.calls[0][0]).toBeInstanceOf(Blob);
+    expect(typeof onLiveChunk.mock.calls[0][1]).toBe('number');
+    // A third recorder was created for the next slice.
+    expect(instances).toHaveLength(3);
+
+    await act(async () => {
+      await result.current.stop();
+    });
+
+    vi.useRealTimers();
+  });
+
+  it('flushes the final partial chunk on stop', async () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    vi.useFakeTimers();
+
+    const onLiveChunk = vi.fn();
+    const local = fakeStream('local');
+
+    const { result } = renderHook(
+      () => useMeetingRecorder({ localStream: local, remoteStreams: new Map(), onLiveChunk }),
+    );
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    // Stop before any boundary fires — the partial chunk should still flush.
+    await act(async () => {
+      await result.current.stop();
+    });
+
+    // The live recorder was stopped, producing one final chunk.
+    expect(onLiveChunk).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it('does not start a live recorder when onLiveChunk is not given', async () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder, instances } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+
+    const local = fakeStream('local');
+    const { result } = renderRecorder(local, new Map());
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    // Only the main recorder — no live-chunk recorder.
+    expect(instances).toHaveLength(1);
+
+    await act(async () => {
+      await result.current.stop();
+    });
+  });
+
+  it('the main recording blob is unaffected by the live recorder', async () => {
+    const { FakeAudioContext } = installFakeAudioContext();
+    const { FakeMediaRecorder } = installedRecorderFakes();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    vi.useFakeTimers();
+
+    const onLiveChunk = vi.fn();
+    const local = fakeStream('local');
+
+    const { result } = renderHook(
+      () => useMeetingRecorder({ localStream: local, remoteStreams: new Map(), onLiveChunk }),
+    );
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    let blob: Blob | undefined;
+    await act(async () => {
+      blob = await result.current.stop();
+    });
+
+    // The main recording is still a valid blob — the live recorder runs on
+    // the same mixed stream but collects its own chunks separately.
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob?.size).toBeGreaterThan(0);
+
+    vi.useRealTimers();
   });
 });

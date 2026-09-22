@@ -175,8 +175,8 @@ class FakeWhisperModel:
         self.error = error
         self.calls: list[dict[str, Any]] = []
 
-    def transcribe(self, audio: str, language: str | None = None) -> Any:
-        self.calls.append({"audio": audio, "language": language})
+    def transcribe(self, audio: str, language: str | None = None, vad_filter: bool = False) -> Any:
+        self.calls.append({"audio": audio, "language": language, "vad_filter": vad_filter})
         if self.error is not None:
             raise self.error
 

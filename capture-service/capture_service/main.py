@@ -4,9 +4,11 @@
     POST /capture     a complete meeting recording → { "cards": [...] }
     POST /transcribe  a complete meeting recording → { "transcript": [...] }
 
-Batch mode only. There is no WebSocket, no chunked audio and no live partial
-transcript: docs/local-capture-plan.md's "Strong suggestion for the first
-iteration" ships the post-meeting path first, and T4.7 is where streaming goes.
+No WebSocket and no streaming. The live transcript (T4.7, first slice) is
+built from this same batch surface: while recording, the browser cuts a
+standalone ~8 s clip and POSTs it to /transcribe (via the app's
+/api/capture/transcribe proxy); cards still come from one /capture of the
+whole recording at stop.
 
 Two design rules this file exists to keep:
 

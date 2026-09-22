@@ -42,10 +42,20 @@ type RoomMessage =
   | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } }
   | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } }
   | { type: 'LIVE_CHAT'; payload: LiveChatMessage }
-  | { type: 'XR_PRESENCE'; payload: XRParticipantData };
+  | { type: 'XR_PRESENCE'; payload: XRParticipantData }
+  | { type: 'TRANSCRIPT_LINE'; payload: import('../types').ChatMessage };
 
 // Module-level ref so it persists across re-renders and is accessible from the message handler
 const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; data: any }) => void) | null } = { current: null };
+
+// Module-level socket ref so broadcastTranscriptLine (called from useLiveTranscript,
+// outside the hook) can send without going through the hook's return value.
+const partySocketRef: { current: PartySocket | null } = { current: null };
+
+// Seen transcript-line IDs for deduplication. A Set that is bounded: the live
+// transcript produces at most a few hundred IDs per meeting, and the Set is
+// cleared when the hook unmounts (room change).
+const seenTranscriptIds = new Set<string>();
 
 const PARTYKIT_HOST: string =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
@@ -146,6 +156,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
 
     const socket = new PartySocket({ host: PARTYKIT_HOST, room: roomId, protocol: partykitProtocol() });
     socketRef.current = socket;
+    partySocketRef.current = socket;
 
     socket.addEventListener('message', (event: MessageEvent) => {
       let msg: RoomMessage;
@@ -322,6 +333,15 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       } else if (msg.type === 'LIVE_CHAT') {
         const { addLiveChatMessage } = useStore.getState();
         addLiveChatMessage(msg.payload);
+      } else if (msg.type === 'TRANSCRIPT_LINE') {
+        // Dedupe by id: the host both adds the line locally AND broadcasts it,
+        // so without dedup the host would see every line twice.
+        const line = msg.payload;
+        if (line && typeof line.id === 'string' && !seenTranscriptIds.has(line.id)) {
+          seenTranscriptIds.add(line.id);
+          const { addChatMessage } = useStore.getState();
+          addChatMessage(line);
+        }
       } else if (msg.type === 'XR_PRESENCE') {
         const { userId } = msg.payload;
         if (userId !== userRef.current.userId) {
@@ -343,6 +363,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     return () => {
       socket.close();
       socketRef.current = null;
+      partySocketRef.current = null;
+      seenTranscriptIds.clear();
       remoteParticipants.current.clear();
       setRemoteParticipantList([]);
     };
@@ -556,4 +578,20 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastWebRTCSignal,
     registerWebRTCSignalHandler,
   };
+}
+
+/**
+ * Broadcast a live-transcript line to every participant in the room.
+ *
+ * Module-level function (not a hook return) because useLiveTranscript calls it
+ * from an async queue processor, outside the React render cycle. Uses the same
+ * socket the hook opened; no-op when no room is connected.
+ */
+export function broadcastTranscriptLine(msg: import('../types').ChatMessage): void {
+  const socket = partySocketRef.current;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  // Mark as seen locally so the host does not add it twice when the server
+  // echoes it back.
+  seenTranscriptIds.add(msg.id);
+  socket.send(JSON.stringify({ type: 'TRANSCRIPT_LINE', payload: msg }));
 }

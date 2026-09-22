@@ -150,8 +150,9 @@ In the host window, open the **Active Review** panel (bottom right, press the
 small arrow to expand it) and press **OPEN MANAGER VIEW**. Press **START
 RECORDING**, talk for half a minute about the design (for example: "Maria will
 increase the clearance to one millimetre and send the model to the supplier by
-Friday. The main risk is thermal expansion rubbing the headband."), then press
-stop. After a short wait (20 seconds to a few minutes, see step 1) the panel
+Friday. The main risk is thermal expansion rubbing the headband."). Your words
+appear under **Live transcript**, about 10 seconds behind, and in everyone
+else's **LIVE TRANSCRIPT** panel. Then press stop. After a short wait (20 seconds to a few minutes, see step 1) the panel
 says **"N insights added"** and lists them as action, risk and rationale cards
 you can approve, reject or edit.
 

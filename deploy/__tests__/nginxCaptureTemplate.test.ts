@@ -148,6 +148,60 @@ describe('deploy/nginx/app.conf — /api/capture/local', () => {
   });
 });
 
+// ─── /api/capture/transcribe (T4.7) ────────────────────────────────────────
+
+const TRANSCRIBE_HEADER = 'location = /api/capture/transcribe {';
+const TRANSCRIBE_BLOCK = blockOf(APP_CONF_CODE, TRANSCRIBE_HEADER);
+const TRANSCRIBE_CODE = flat(TRANSCRIBE_BLOCK);
+
+describe('deploy/nginx/app.conf — /api/capture/transcribe', () => {
+  it('exists, and appears ABOVE the /api/ block', () => {
+    const transcribeAt = APP_CONF_CODE.indexOf(TRANSCRIBE_HEADER);
+    const apiAt = APP_CONF_CODE.indexOf('location /api/ {');
+    expect(transcribeAt).toBeGreaterThan(0);
+    expect(transcribeAt).toBeLessThan(apiAt);
+  });
+
+  it('appears ABOVE /api/capture/local (both are exact-match, order is for readers)', () => {
+    const transcribeAt = APP_CONF_CODE.indexOf(TRANSCRIBE_HEADER);
+    const captureAt = APP_CONF_CODE.indexOf(CAPTURE_HEADER);
+    expect(transcribeAt).toBeLessThan(captureAt);
+  });
+
+  it('is POST-only', () => {
+    expect(TRANSCRIBE_CODE).toContain('limit_except POST { deny all; }');
+  });
+
+  it('resolves the upstream at request time through a VARIABLE', () => {
+    expect(TRANSCRIBE_CODE).toContain('resolver 127.0.0.11');
+    expect(TRANSCRIBE_CODE).toContain('proxy_pass $transcribe_upstream/transcribe;');
+    expect(TRANSCRIBE_CODE).not.toMatch(/proxy_pass\s+http:\/\/capture-service/);
+  });
+
+  it('adds the shared-secret header', () => {
+    expect(TRANSCRIBE_CODE).toContain(
+      'proxy_set_header X-Capture-Token "${CAPTURE_SHARED_SECRET}";',
+    );
+  });
+
+  it('has a smaller body limit than /api/capture/local (chunks, not full meetings)', () => {
+    const match = /client_max_body_size\s+(\d+)([km]?);/.exec(TRANSCRIBE_CODE);
+    expect(match, 'no client_max_body_size in the transcribe block').not.toBeNull();
+    const value = Number(match?.[1]);
+    const unit = match?.[2];
+    const bytes =
+      unit === 'k' ? value * 1024 : unit === 'm' ? value * 1024 * 1024 : value;
+    // 10m for a chunk; well under the 200m for a full meeting.
+    expect(bytes).toBeGreaterThanOrEqual(10 * 1024 * 1024);
+    expect(bytes).toBeLessThan(209_715_200);
+  });
+
+  it('has shorter timeouts than /api/capture/local (Whisper only, no LLM)', () => {
+    expect(TRANSCRIBE_CODE).toContain('proxy_read_timeout 120s;');
+    expect(TRANSCRIBE_CODE).toContain('proxy_send_timeout 120s;');
+  });
+});
+
 // ─── Substitution ───────────────────────────────────────────────────────────
 
 describe('deploy/nginx/app.conf — envsubst surface', () => {

@@ -445,6 +445,8 @@ const ConversationPanel: React.FC = () => {
                             )}
                             {chatHistory.map(msg => {
                                 const agent = agents.find(a => a.id === msg.agentId);
+                                const speakerLabel = agent?.name ?? msg.speakerName ?? '';
+                                const speakerColor = agent?.color ?? '#888';
                                 // Source Tracing Logic (Multi-message)
                                 const isSource = hoveredSourceIds.includes(msg.id);
                                 const isDimmed = hoveredSourceIds.length > 0 && !isSource;
@@ -460,8 +462,8 @@ const ConversationPanel: React.FC = () => {
                                             isDimmed ? "opacity-20 blur-[1px]" : "opacity-100"
                                         )}
                                     >
-                                        <div className="font-mono text-[9px] font-bold shrink-0 mt-0.5 opacity-80" style={{color: agent?.color || '#fff'}}>
-                                            {agent?.name}
+                                        <div className="font-mono text-[9px] font-bold shrink-0 mt-0.5 opacity-80" style={{color: speakerColor}}>
+                                            {speakerLabel}
                                         </div>
                                         <div className="flex-1">
                                             <div className={clsx(

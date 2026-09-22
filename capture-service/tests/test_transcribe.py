@@ -222,7 +222,7 @@ def test_the_backend_converts_a_fake_model_s_segments(tmp_path: Path) -> None:
     chunks = backend.transcribe(audio)
 
     assert [c.text for c in chunks] == ["The bracket will crack."]
-    assert model.calls == [{"audio": str(audio), "language": None}]
+    assert model.calls == [{"audio": str(audio), "language": None, "vad_filter": True}]
 
 
 def test_the_configured_language_is_passed_to_whisper(tmp_path: Path) -> None:
@@ -233,6 +233,18 @@ def test_the_configured_language_is_passed_to_whisper(tmp_path: Path) -> None:
     audio.write_bytes(b"x")
     backend.transcribe(audio)
     assert model.calls[0]["language"] == "de"
+
+
+def test_vad_filter_is_enabled_so_silence_does_not_hallucinate(tmp_path: Path) -> None:
+    # Without vad_filter, Whisper invents text for silent stretches ("Thank
+    # you.", "you", ".") — fatal for the live panel, which would show a
+    # hallucination every 8 s. The flag is passed on every transcribe() call,
+    # batch and live alike.
+    backend, model = transcriber_with([FakeSegment(0.0, 1.0, "Word.")])
+    audio = tmp_path / "m.wav"
+    audio.write_bytes(b"x")
+    backend.transcribe(audio)
+    assert model.calls[0]["vad_filter"] is True
 
 
 def test_the_model_is_loaded_once_and_cached(tmp_path: Path) -> None:

@@ -167,6 +167,14 @@ export interface ChatMessage {
   agentId: string;
   text: string;
   timestamp: number;
+  /**
+   * Fallback speaker label for messages whose agentId does not match any
+   * agent in the store (e.g. live-transcript lines from T4.7, where there is
+   * no diarization and every line is labelled 'Meeting'). ConversationPanel
+   * and BoardroomShell fall back to this when `agents.find(a => a.id === agentId)`
+   * returns undefined.
+   */
+  speakerName?: string;
 }
 
 export type InsightType = 'RISK' | 'RATIONALE' | 'ACTION';

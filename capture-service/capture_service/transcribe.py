@@ -226,8 +226,19 @@ class FasterWhisperTranscriber:
             # faster-whisper returns (segments, info) where segments is a
             # GENERATOR: the work happens while iterating, so the list
             # comprehension must stay inside the try.
+            #
+            # vad_filter=True runs Silero VAD before Whisper, suppressing the
+            # hallucinated text Whisper invents for silent stretches ("Thank
+            # you.", "you", "."). Without it the live panel would show a
+            # hallucination every 8 s. Silero is bundled with faster-whisper;
+            # onnxruntime is already a dependency, so no new package is needed.
+            # This also applies to batch /capture — fine, because the batch
+            # path was already dropping empty segments, and VAD just makes the
+            # transcript cleaner.
             segments, _info = model.transcribe(  # type: ignore[attr-defined]
-                str(audio_path), language=self._settings.whisper_language
+                str(audio_path),
+                language=self._settings.whisper_language,
+                vad_filter=True,
             )
             raw = [
                 (float(segment.start), float(segment.end), str(segment.text))

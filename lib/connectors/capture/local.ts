@@ -32,6 +32,12 @@ import { validateExtractionPayload } from './parseInsightCards';
 export const LOCAL_CAPTURE_ENDPOINT = '/api/capture/local';
 
 /**
+ * The live-transcript endpoint. Same proxy pattern as LOCAL_CAPTURE_ENDPOINT:
+ * same-origin, secret added by the proxy layer, browser holds no credential.
+ */
+export const TRANSCRIBE_CHUNK_ENDPOINT = '/api/capture/transcribe';
+
+/**
  * The only shape of upstream error code that is safe to repeat to a user.
  *
  * capture-service's own codes are `[a-z_]+` by construction
@@ -118,6 +124,8 @@ export class LocalCaptureError extends Error {
 export interface LocalCaptureOptions {
   /** Override for tests, or a deployment that mounts the proxy elsewhere. */
   endpoint?: string;
+  /** Override for the live-transcribe endpoint (defaults to /api/capture/transcribe). */
+  transcribeEndpoint?: string;
   fetchFn?: typeof globalThis.fetch;
 }
 
@@ -213,6 +221,101 @@ export class LocalCaptureProvider implements RecordingCaptureProvider {
     // between changes shape. Throws CaptureExtractionError, whose `reason` is an
     // enum and whose message quotes only the payload, never a credential.
     return validateExtractionPayload(payload);
+  }
+
+  /**
+   * Transcribe a short audio slice for the live-transcript path (T4.7).
+   *
+   * POSTs multipart `audio` to /api/capture/transcribe (capture-service's
+   * POST /transcribe) and returns the chunks' texts joined with a space.
+   * Strict response validation: anything that is not `{ transcript: [{ text: string, ... }] }`
+   * is an error, because a malformed response would render as gibberish in the
+   * live panel.
+   */
+  async transcribeChunk(
+    audio: Blob,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<string> {
+    const endpoint = this._options.transcribeEndpoint ?? TRANSCRIBE_CHUNK_ENDPOINT;
+    const doFetch = this._options.fetchFn ?? globalThis.fetch.bind(globalThis);
+
+    const form = new FormData();
+    form.append('audio', audio, recordingFilename(audio.type));
+
+    let response: Response;
+    try {
+      response = await doFetch(endpoint, {
+        method: 'POST',
+        body: form,
+        signal: options.signal,
+      });
+    } catch {
+      if (options.signal?.aborted) {
+        throw new LocalCaptureError('aborted', 'transcribe chunk cancelled');
+      }
+      throw new LocalCaptureError('network', 'transcribe chunk: network error');
+    }
+
+    if (!response.ok) {
+      throw await toLocalCaptureError(endpoint, response);
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      throw new LocalCaptureError(
+        'endpoint_unavailable',
+        `transcribe chunk: ${endpoint} answered ${response.status} ` +
+          `${contentType || 'with no content type'} instead of JSON.`,
+        response.status,
+      );
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new LocalCaptureError(
+        'endpoint_unavailable',
+        'transcribe chunk: response body was not valid JSON.',
+        response.status,
+      );
+    }
+
+    // Strict validation: the wire shape is `{ transcript: [{ speakerId, text, startMs, endMs }] }`
+    // (camelCase via WireModel in capture-service). Only `text` is read here.
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      !Array.isArray((payload as Record<string, unknown>).transcript)
+    ) {
+      throw new LocalCaptureError(
+        'upstream_error',
+        'transcribe chunk: response did not contain a transcript array.',
+        response.status,
+      );
+    }
+    const transcript = (payload as Record<string, unknown>).transcript as unknown[];
+    const texts: string[] = [];
+    for (const chunk of transcript) {
+      if (typeof chunk !== 'object' || chunk === null) {
+        throw new LocalCaptureError(
+          'upstream_error',
+          'transcribe chunk: transcript entry was not an object.',
+          response.status,
+        );
+      }
+      const text = (chunk as Record<string, unknown>).text;
+      if (typeof text !== 'string') {
+        throw new LocalCaptureError(
+          'upstream_error',
+          'transcribe chunk: transcript entry had no string text.',
+          response.status,
+        );
+      }
+      const trimmed = text.trim();
+      if (trimmed) texts.push(trimmed);
+    }
+    return texts.join(' ');
   }
 }
 

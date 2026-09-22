@@ -34,7 +34,7 @@ const BROWSER_MODULES = [
 const SERVER_MODULE = 'api/capture/extract.ts';
 
 /** The module allowed to hold capture-service's shared secret (T4.4). */
-const LOCAL_SERVER_MODULE = 'api/capture/local.ts';
+const LOCAL_SERVER_MODULE = 'api/capture/_proxyShared.ts';
 
 function read(relativePath: string): string {
   return readFileSync(join(__dirname, '..', '..', '..', relativePath), 'utf8');
