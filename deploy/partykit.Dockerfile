@@ -16,7 +16,11 @@
 # self-hosted single-box install and the wrong one for a multi-region
 # deployment. That trade is the reason the Cloudflare option stays documented.
 
-FROM node:24-alpine
+# Debian slim, NOT alpine. `partykit dev` runs rooms inside Cloudflare's workerd,
+# which ships glibc-only binaries. On alpine (musl) workerd never starts, nothing
+# listens on 1999, and every WebSocket gets a 502 from nginx-proxy -- while the
+# CLI still prints "Build succeeded, starting server...". Verified 2026-09-22.
+FROM node:24-slim
 
 WORKDIR /app
 

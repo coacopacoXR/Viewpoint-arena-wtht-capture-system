@@ -29,7 +29,7 @@ re-derived): `app` (nginx serving the Vite build), `partykit` (self-hosted
 node-mode server, or point at their own Cloudflare-hosted PartyKit — document
 both), `capture-service` (new Python/FastAPI or Node/Fastify service),
 `whisper` (`faster-whisper-server`), `ollama`, `postgres` (self-hosted
-Supabase image or plain `postgres:16` — Realtime is optional in fully-local
+Supabase image (`supabase/postgres`) with PostgREST and Realtime — Realtime is optional in fully-local
 mode), `n8n` (optional, `--profile n8n`), `nginx-proxy` (TLS termination, self-
 signed by default).
 

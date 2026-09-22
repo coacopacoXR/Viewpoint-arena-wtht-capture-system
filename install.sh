@@ -443,6 +443,49 @@ NOENTROPY
   exit 1
 }
 
+# ─── Load existing env values (preserve secrets on re-run) ──────────────────
+#
+# The Supabase JWT infrastructure secrets (JWT_SECRET, SECRET_KEY_BASE,
+# REALTIME_DB_ENC_KEY, ANON_KEY) must survive re-runs: changing JWT_SECRET
+# invalidates every anon key already issued, and changing DB_ENC_KEY makes
+# every encrypted realtime row unreadable. If .env already has these values,
+# reuse them. If not, generate fresh ones.
+
+load_existing_env_var() {
+  local name="$1" env_file="${TARGET_DIR}/.env"
+  if [[ -f "$env_file" ]]; then
+    local value
+    value="$(grep -E "^${name}=" "$env_file" 2>/dev/null | head -n1 | cut -d= -f2-)"
+    printf '%s' "$value"
+  fi
+}
+
+# ─── Mint an HS256 anon JWT ────────────────────────────────────────────────
+#
+# The anon key is a JWT signed with JWT_SECRET (HS256). PostgREST and Realtime
+# verify it to decide the request role. The payload carries role=anon, a 10-year
+# expiry, and the supabase issuer claim.
+#
+# Usage: mint_anon_jwt "$JWT_SECRET"
+# Prints the compact JWT (header.payload.signature) to stdout.
+
+mint_anon_jwt() {
+  local secret="$1"
+  local header='{"alg":"HS256","typ":"JWT"}'
+  local now
+  now="$(date +%s)"
+  local exp=$(( now + 315360000 ))
+  local payload
+  payload="{\"role\":\"anon\",\"iss\":\"supabase\",\"iat\":${now},\"exp\":${exp}}"
+
+  local b64url_header b64url_payload signing_input signature
+  b64url_header="$(printf '%s' "$header" | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+  b64url_payload="$(printf '%s' "$payload" | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+  signing_input="${b64url_header}.${b64url_payload}"
+  signature="$(printf '%s' "$signing_input" | openssl dgst -sha256 -hmac "$secret" -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+  printf '%s.%s.%s' "$b64url_header" "$b64url_payload" "$signature"
+}
+
 # ─── Answers ────────────────────────────────────────────────────────────────
 #
 # Collected into globals. Bash has no structures, and threading nineteen values
@@ -459,6 +502,7 @@ A_TURN='' A_TURN_TOKEN_ID='' A_TURN_API_TOKEN='' A_COTURN_HOST='' A_COTURN_PORT=
 A_NOTIFY='' A_TEAMS_WEBHOOK=''
 A_GPU='' A_N8N=''
 S_CAPTURE_SECRET='' S_POSTGRES_PASSWORD='' S_N8N_KEY='' S_COTURN_SECRET=''
+S_JWT_SECRET='' S_SECRET_KEY_BASE='' S_REALTIME_DB_ENC_KEY='' S_ANON_KEY=''
 
 collect_answers() {
   say ''
@@ -540,20 +584,24 @@ collect_answers() {
   # ── Database ───────────────────────────────────────────────────────────
   A_DB="$(ask_choice \
     'Where should the review tracker database live?' \
-    'self-hosted' \
-    'cloud|Hosted Supabase project — paste its URL and anon key' \
-    'self-hosted|The postgres container in this compose stack')"
+    'bundled' \
+    'bundled|Use the bundled database (recommended) — PostgREST + Realtime in this compose stack' \
+    'cloud|Hosted Supabase project — paste its URL and anon key')"
 
   if [[ "$A_DB" == 'cloud' ]]; then
     A_SUPABASE_URL="$(ask 'VITE_SUPABASE_URL (https://your-project.supabase.co)')"
     A_SUPABASE_ANON_KEY="$(ask_secret 'VITE_SUPABASE_ANON_KEY (client-safe by design; RLS enforces access)')"
   else
-    # Left empty and marked TODO in .env, because this stack ships plain
-    # postgres:16 and supabase-js needs a PostgREST/GoTrue gateway in front of
-    # Postgres. See the KNOWN GAP block at the top of docker-compose.yml.
-    # Inventing a plausible URL here would produce a config that looks complete
-    # and cannot connect — worse than an honest blank.
-    A_SUPABASE_URL=''
+    # The bundled database: the compose stack runs supabase/postgres + PostgREST
+    # + Realtime, and nginx-proxy routes /rest/v1/ and /realtime/v1/ to them
+    # from the same origin as the app. VITE_SUPABASE_URL is the app's own URL.
+    local https_port="${HTTPS_PORT:-443}"
+    if [[ "$https_port" == '443' ]]; then
+      A_SUPABASE_URL="https://${A_HOSTNAME}"
+    else
+      A_SUPABASE_URL="https://${A_HOSTNAME}:${https_port}"
+    fi
+    # The anon key is minted below (after secrets are generated/preserved).
     A_SUPABASE_ANON_KEY=''
   fi
 
@@ -607,6 +655,29 @@ collect_answers() {
   S_N8N_KEY="$(generate_secret)"
   if [[ "$A_TURN" == 'selfHostedCoturn' ]]; then
     S_COTURN_SECRET="$(generate_secret)"
+  fi
+
+  # Supabase JWT infrastructure secrets. These MUST survive re-runs: changing
+  # JWT_SECRET invalidates every anon key already issued, and changing
+  # DB_ENC_KEY makes every encrypted realtime row unreadable. If .env already
+  # has values, reuse them; otherwise generate fresh.
+  S_JWT_SECRET="$(load_existing_env_var JWT_SECRET)"
+  [[ -z "$S_JWT_SECRET" ]] && S_JWT_SECRET="$(generate_secret)"
+
+  S_SECRET_KEY_BASE="$(load_existing_env_var SECRET_KEY_BASE)"
+  [[ -z "$S_SECRET_KEY_BASE" ]] && S_SECRET_KEY_BASE="$(generate_secret)"
+
+  S_REALTIME_DB_ENC_KEY="$(load_existing_env_var REALTIME_DB_ENC_KEY)"
+  if [[ -z "$S_REALTIME_DB_ENC_KEY" ]]; then
+    # EXACTLY 16 characters: Realtime uses it as an AES-128 key.
+    S_REALTIME_DB_ENC_KEY="$(openssl rand -hex 8)"
+  fi
+
+  # Mint the anon key for the bundled database. For cloud Supabase the operator
+  # pasted their own key above.
+  if [[ "$A_DB" == 'bundled' ]]; then
+    S_ANON_KEY="$(mint_anon_jwt "$S_JWT_SECRET")"
+    A_SUPABASE_ANON_KEY="$S_ANON_KEY"
   fi
 }
 
@@ -930,6 +1001,22 @@ POSTGRES_PASSWORD=${S_POSTGRES_PASSWORD}
 # Encrypts n8n's own stored credentials. Only used with --profile n8n; losing it
 # makes every credential n8n already holds unreadable.
 N8N_ENCRYPTION_KEY=${S_N8N_KEY}
+
+# The JWT secret PostgREST and Realtime use to verify tokens. Preserved across
+# re-runs: changing it invalidates every anon key already issued.
+JWT_SECRET=${S_JWT_SECRET}
+
+# Phoenix secret for the Realtime service's internal session encryption.
+SECRET_KEY_BASE=${S_SECRET_KEY_BASE}
+
+# AES-128 key for Realtime's tenant data encryption. EXACTLY 16 characters.
+# Preserved across re-runs: changing it makes encrypted rows unreadable.
+REALTIME_DB_ENC_KEY=${S_REALTIME_DB_ENC_KEY}
+
+# The anon key: an HS256 JWT signed with JWT_SECRET. Carries role=anon, a
+# 10-year expiry. VITE_SUPABASE_ANON_KEY below is the same value (the browser
+# reads it). Preserved across re-runs via JWT_SECRET preservation.
+ANON_KEY=${S_ANON_KEY}
 SECRETS
 
   env_comment ''
@@ -942,8 +1029,6 @@ SECRETS
   printf 'HTTP_PORT=%s\n' "${HTTP_PORT:-80}"
   printf 'HTTPS_PORT=%s\n' "${HTTPS_PORT:-443}"
   printf 'WSS_PORT=%s\n' "${WSS_PORT:-8443}"
-  printf 'POSTGRES_DB=%s\n' "${POSTGRES_DB:-viewpoint}"
-  printf 'POSTGRES_USER=%s\n' "${POSTGRES_USER:-viewpoint}"
 
   env_comment ''
   env_comment '# ── 3. PLM ─────────────────────────────────────────────────────────────────'
@@ -1021,19 +1106,27 @@ SECRETS
 
   env_comment ''
   env_comment '# ── 5. Database ────────────────────────────────────────────────────────────'
-  if [[ -n "$A_SUPABASE_URL" ]]; then
+  if [[ "$A_DB" == 'bundled' ]]; then
     printf 'VITE_SUPABASE_URL=%s\n' "$A_SUPABASE_URL"
-  else
-    todo_var 'VITE_SUPABASE_URL' 'Supabase-compatible project URL (db.urlEnv). This stack ships plain postgres:16, which supabase-js cannot talk to directly — read the KNOWN GAP block in docker-compose.yml.'
-  fi
-  if [[ -n "$A_SUPABASE_ANON_KEY" ]]; then
     printf 'VITE_SUPABASE_ANON_KEY=%s\n' "$A_SUPABASE_ANON_KEY"
+    env_comment '# Bundled database: the compose stack serves /rest/v1/ and /realtime/v1/'
+    env_comment '# from the same origin as the app. The anon key (ANON_KEY above) is the'
+    env_comment '# same value as VITE_SUPABASE_ANON_KEY. Both are VITE_-prefixed because'
+    env_comment '# the browser reads them. The anon key is client-safe by design: RLS is'
+    env_comment '# the access control, not key secrecy.'
+    env_comment '#'
+    env_comment '# When A_DB is "cloud" the db/rest/realtime services still start but are'
+    env_comment '# unused — the app talks to the external Supabase project instead.'
+  elif [[ -n "$A_SUPABASE_URL" ]]; then
+    printf 'VITE_SUPABASE_URL=%s\n' "$A_SUPABASE_URL"
+    printf 'VITE_SUPABASE_ANON_KEY=%s\n' "$A_SUPABASE_ANON_KEY"
+    env_comment '# Both are VITE_-prefixed because the browser reads them. That is the one'
+    env_comment '# approved exception to the prefix rule, and it is why the anon key is not a'
+    env_comment '# secret: RLS is the access control, not key secrecy.'
   else
+    todo_var 'VITE_SUPABASE_URL' 'Supabase-compatible project URL (db.urlEnv).'
     todo_var 'VITE_SUPABASE_ANON_KEY' 'Supabase anon key (db.anonKeyEnv). Client-safe by design; Row Level Security enforces access.'
   fi
-  env_comment '# Both are VITE_-prefixed because the browser reads them. That is the one'
-  env_comment '# approved exception to the prefix rule, and it is why the anon key is not a'
-  env_comment '# secret: RLS is the access control, not key secrecy.'
 
   env_comment ''
   env_comment '# ── 6. TURN relay ──────────────────────────────────────────────────────────'
@@ -1075,7 +1168,9 @@ SECRETS
 # Image tags — pin these before a production deploy. `latest` is a moving
 # target, and a stack that builds on Monday can fail to pull on Tuesday.
 #NGINX_IMAGE_TAG=alpine
-#POSTGRES_IMAGE_TAG=16-alpine
+#SUPABASE_POSTGRES_IMAGE_TAG=17.6.1.136
+#POSTGREST_IMAGE_TAG=v14.17
+#REALTIME_IMAGE_TAG=2.134.10
 #OLLAMA_IMAGE_TAG=latest
 #N8N_IMAGE_TAG=latest
 #
@@ -1226,25 +1321,43 @@ pull_model() {
   fi
 }
 
+wait_for_db() {
+  local attempts=12 attempt=1
+  say ''
+  say 'Waiting for the database to be healthy (supabase/postgres first init takes a minute)'
+  while (( attempt <= attempts )); do
+    local status
+    status="$(cd -- "$TARGET_DIR" && "${COMPOSE[@]}" "${COMPOSE_ARGS[@]}" \
+      ps --format json db 2>/dev/null | grep -o '"healthy"' || true)"
+    if [[ "$status" == *'"healthy"'* ]]; then
+      note "database healthy after ${attempt} check(s)"
+      return 0
+    fi
+    printf '  attempt %d/%d\n' "$attempt" "$attempts" >&2
+    attempt=$(( attempt + 1 ))
+    sleep 5
+  done
+  say 'warning: the database did not become healthy within the expected time.'
+  say '         Check with:  docker compose logs db'
+  return 1
+}
+
 apply_schema() {
   local schema="${TARGET_DIR}/docs/supabase-schema.sql"
   [[ -f "$schema" ]] || return 0
 
   say ''
-  say 'Applying docs/supabase-schema.sql to the postgres container'
-  # ON_ERROR_STOP=0, deliberately. The schema ends with a DO block that adds
-  # review_curations to the `supabase_realtime` publication and catches only
-  # `duplicate_object`. On plain postgres:16 that publication does not exist, so
-  # the statement raises `undefined_object` — and with ON_ERROR_STOP=1 the whole
-  # load would abort on its last line, leaving an operator convinced the schema
-  # is broken. It is not; that one statement is Supabase-only. docker-compose.yml
-  # explains why this is not done through /docker-entrypoint-initdb.d instead.
+  say 'Applying docs/supabase-schema.sql to the db container'
+  # ON_ERROR_STOP=1: the supabase/postgres image has the supabase_realtime
+  # publication (created by deploy/db/realtime.sql), so the schema's DO block
+  # that adds review_curations to the publication succeeds. The grants DO block
+  # at the end is guarded by a pg_roles check and is a no-op on plain Postgres.
   if ! ( cd -- "$TARGET_DIR" && "${COMPOSE[@]}" "${COMPOSE_ARGS[@]}" \
-           exec -T postgres psql -v ON_ERROR_STOP=0 \
-             -U "${POSTGRES_USER:-viewpoint}" -d "${POSTGRES_DB:-viewpoint}" ) \
+           exec -T db psql -v ON_ERROR_STOP=1 \
+             -U postgres -d postgres ) \
          < "$schema"; then
     say 'warning: the schema load reported errors. Inspect with:'
-    say '  docker compose exec postgres psql -U viewpoint -d viewpoint -c "\dt"'
+    say '  docker compose exec db psql -U postgres -d postgres -c "\dt"'
   fi
 }
 
@@ -1401,6 +1514,7 @@ main() {
   generate_certs
   compose_up
   pull_model
+  wait_for_db
   apply_schema
 
   local health_status=0
@@ -1408,4 +1522,7 @@ main() {
   exit "$health_status"
 }
 
-main "$@"
+# Allow sourcing for function-level testing (deploy/__tests__/mintAnonJwt.test.ts).
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

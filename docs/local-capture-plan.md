@@ -48,7 +48,7 @@
 │       │                                                           │
 │       ▼                                                           │
 │  ┌──────────────────────────────────────────────────────────┐    │
-│  │ Postgres  (self-hosted Supabase OR plain Postgres)        │    │
+│  │ Postgres  (self-hosted Supabase: PostgREST + Realtime)    │    │
 │  │ - review_curations / tracker_* tables (already defined)   │    │
 │  └──────────────────────────────────────────────────────────┘    │
 └───────────────────────────────────────────────────────────────────┘
@@ -178,8 +178,8 @@ curl -fsSL https://<your-host>/install.sh | bash
 - `capture-service` — the new Python/Node service
 - `whisper` — `faster-whisper-server` image
 - `ollama` — `ollama/ollama` image, volume-mounted model cache
-- `postgres` — `supabase/postgres` (or plain `postgres:16` for the lighter
-  variant — Supabase Realtime is optional in fully-local mode)
+- `postgres` — `supabase/postgres` with PostgREST and Realtime (the bundled
+  database layer; Supabase Realtime is optional in fully-local mode)
 - `n8n` — `n8nio/n8n`, behind `--profile n8n` so it's opt-in
 - `nginx-proxy` — terminates TLS with self-signed certs by default, or
   Let's Encrypt if a real domain is provided

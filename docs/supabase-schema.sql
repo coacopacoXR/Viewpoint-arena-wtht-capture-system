@@ -150,5 +150,28 @@ create policy "public delete curations" on review_curations for delete using (tr
 do $$
 begin
   alter publication supabase_realtime add table review_curations;
-exception when duplicate_object then null;
+-- duplicate_object: already a member (a re-run). undefined_object: plain
+-- Postgres has no supabase_realtime publication; the schema is complete anyway.
+exception when duplicate_object or undefined_object then null;
+end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Grants for the self-hosted PostgREST stack.
+--
+-- On a bundled install the deploy/db/roles.sql init script creates the anon
+-- and authenticated roles and sets default privileges, so tables created AFTER
+-- that script already have the right grants. But the default-privileges mechanism
+-- does not retroactively cover tables that already exist (e.g. after an upgrade
+-- that adds a new table before the roles init ran). These explicit grants are
+-- idempotent and cover both cases.
+--
+-- On hosted Supabase the roles already exist and the grants are redundant but
+-- harmless. On plain Postgres (no anon role) the DO block is a no-op.
+-- ─────────────────────────────────────────────────────────────────────────────
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    grant select, insert, update, delete on all tables in schema public to anon, authenticated;
+    grant usage, select on all sequences in schema public to anon, authenticated;
+  end if;
 end $$;
