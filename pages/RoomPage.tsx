@@ -13,6 +13,7 @@ import { useReviewSetupStore } from '../lib/reviewSetupStore';
 import { useActiveReviewStore } from '../lib/activeReviewStore';
 import { loadCuration, saveCuration } from '../lib/curationsRepo';
 import { useIsMobile } from '../lib/useIsMobile';
+import { RecordingProvider } from '../lib/RecordingContext';
 
 function getMobileUserName(): string {
   try {
@@ -116,10 +117,14 @@ const RoomPage: React.FC = () => {
     active: isBoardroomMode,
   });
 
-  // PresenceContext wraps BOTH mobile and desktop so ViewpointCanvas works in both
+  // PresenceContext wraps BOTH mobile and desktop so ViewpointCanvas works in both.
+  // RecordingProvider sits inside WebRTCContext (it reads localStream /
+  // remoteStreams) and outside the layout so both the sidebar ConversationPanel
+  // and the Manager Workspace share one recorder instance.
   return (
     <PresenceContext.Provider value={presence}>
     <WebRTCContext.Provider value={webrtc}>
+    <RecordingProvider>
       {isMobile ? (
         <MobileRoomView
           roomId={roomId ?? ''}
@@ -128,6 +133,7 @@ const RoomPage: React.FC = () => {
       ) : (
         <DesktopRoomLayout isMeetingEnded={isMeetingEnded} />
       )}
+    </RecordingProvider>
     </WebRTCContext.Provider>
     </PresenceContext.Provider>
   );

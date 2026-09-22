@@ -1,24 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   X, AlertTriangle, CheckCircle2, Lightbulb, Check, XCircle, Pencil,
   ClipboardList, StickyNote, ChevronDown, ChevronLeft, ChevronRight,
   Mic, MessageSquare, MessageCircle, Layers, Camera,
-  Info, ShieldAlert, Square, RefreshCw, Loader2,
+  Info, ShieldAlert,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../store';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { usePresence } from '../../lib/PresenceContext';
-import { useConnectorConfig } from '../../lib/config/ConfigContext';
-import { useWebRTCContext } from '../../lib/WebRTCContext';
-import { useMeetingRecorder } from '../../lib/useMeetingRecorder';
-import { useLiveTranscript } from '../../lib/useLiveTranscript';
-import { LocalCaptureProvider, meetingSlideContext } from '../../lib/connectors/capture/local';
 import InsightDetailModal from './InsightDetailModal';
 import ConversationPanel from './ConversationPanel';
 import CommentsPanel from './CommentsPanel';
 import ChatPanel from './ChatPanel';
 import ReviewPanelContent from './ReviewPanelContent';
+import RecordingControls from './RecordingControls';
 import type { InsightCard } from '../../types';
 import type { PinSeverity } from '../../lib/reviewSetupStore';
 
@@ -62,10 +58,6 @@ const ManagerPanel: React.FC = () => {
   const insightCards = useStore((s) => s.insightCards);
   const comments = useStore((s) => s.comments);
   const liveChat = useStore((s) => s.liveChat);
-  // Only the 'local' provider records and uploads audio. Every other provider
-  // leaves this panel exactly as it was, which is why the section below is
-  // conditional rather than rendered-but-disabled.
-  const captureProvider = useConnectorConfig().capture;
 
   const [tab, setTab] = useState<TabId>('actions');
   const [lastSeenChat, setLastSeenChat] = useState(0);
@@ -107,8 +99,8 @@ const ManagerPanel: React.FC = () => {
       {/* ─── Persistent slide-context hero ──────────────────────────────────── */}
       <SlideHero />
 
-      {/* ─── Post-meeting recording (capture.provider 'local' only) ─────────── */}
-      {captureProvider === 'local' && <PostMeetingSummary />}
+      {/* ─── Post-meeting recording (host-only, capture.provider 'local') ─────── */}
+      <RecordingControls />
 
       {/* ─── Tab bar ────────────────────────────────────────────────────────── */}
       <nav className="flex border-b border-gray-200 bg-white shrink-0 overflow-x-auto custom-scrollbar">
@@ -261,228 +253,6 @@ const SlideHero: React.FC = () => {
           />
         ))}
       </div>
-    </section>
-  );
-};
-
-// ─── Post-meeting summary (local capture only) ──────────────────────────────
-
-/** mm:ss, the shape a host reads off a wall clock mid-review. */
-function formatElapsed(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-type SummaryOutcome = { added: number } | { message: string };
-
-// Records the meeting, uploads the recording when the host stops it, and puts
-// the returned cards in the store so they land in the Actions tab beside every
-// other insight.
-//
-// Three things this component is careful about:
-//   * it NEVER starts recording on its own — a review is sensitive audio and
-//     the host decides when the tape rolls;
-//   * a failed upload keeps the Blob, so "Retry" re-sends the same recording
-//     instead of asking five engineers to have the meeting again;
-//   * it renders only under capture.provider 'local', so a mock or cloud
-//     deployment sees no recording UI at all.
-const PostMeetingSummary: React.FC = () => {
-  const { localStream, remoteStreams } = useWebRTCContext();
-  const addInsightCard = useStore((s) => s.addInsightCard);
-  const reviewConfig = useActiveReviewStore((s) => s.config);
-  const agendaIdx = useActiveReviewStore((s) => s.agendaIdx);
-
-  // Holds no credential: the shared secret is added by the same-origin proxy.
-  const provider = useMemo(() => new LocalCaptureProvider(), []);
-
-  // Live transcript (T4.7). recordingStartMs is set when the host presses
-  // Start and used to build unique message IDs for each transcript line.
-  const [recordingStartMs, setRecordingStartMs] = useState(0);
-  // Which recording's lines the live box shows. Unlike recordingStartMs it
-  // survives Stop, so the text stays visible while the cards are made.
-  const [shownRecordingStart, setShownRecordingStart] = useState(0);
-  const chatHistory = useStore((s) => s.chatHistory);
-  const liveLines = useMemo(
-    () =>
-      shownRecordingStart > 0
-        ? chatHistory.filter((m) => m.id.startsWith(`live-${shownRecordingStart}-`)).slice(-4)
-        : [],
-    [chatHistory, shownRecordingStart],
-  );
-  const { onLiveChunk, finish: finishLiveTranscript } = useLiveTranscript({
-    provider,
-    recordingStartMs,
-  });
-
-  const { state, start, stop } = useMeetingRecorder({
-    localStream,
-    remoteStreams,
-    onLiveChunk: recordingStartMs > 0 ? onLiveChunk : undefined,
-  });
-
-  const [summarising, setSummarising] = useState(false);
-  const [outcome, setOutcome] = useState<SummaryOutcome | null>(null);
-  const [recording, setRecording] = useState<Blob | null>(null);
-  const [elapsedMs, setElapsedMs] = useState(0);
-
-  useEffect(() => {
-    if (state !== 'recording') return;
-    const startedAt = Date.now();
-    setElapsedMs(0);
-    const timer = window.setInterval(() => setElapsedMs(Date.now() - startedAt), 1000);
-    return () => window.clearInterval(timer);
-  }, [state]);
-
-  // Batch mode has one context for the whole recording: the slide the host is
-  // on now, or the review title when there is no agenda. Both already exist in
-  // the store, so nothing new is persisted for this.
-  const summarise = async (audio: Blob): Promise<void> => {
-    setSummarising(true);
-    setOutcome(null);
-    try {
-      const cards = await provider.captureRecording(
-        audio,
-        meetingSlideContext(reviewConfig, agendaIdx),
-      );
-      for (const card of cards) addInsightCard(card);
-      setOutcome({ added: cards.length });
-    } catch (err) {
-      setOutcome({
-        message: err instanceof Error ? err.message : 'The summary request failed.',
-      });
-    } finally {
-      setSummarising(false);
-    }
-  };
-
-  const handleStart = async (): Promise<void> => {
-    setOutcome(null);
-    const startedAt = Date.now();
-    setRecordingStartMs(startedAt);
-    setShownRecordingStart(startedAt);
-    try {
-      await start();
-    } catch (err) {
-      setRecordingStartMs(0);
-      setOutcome({
-        message: err instanceof Error ? err.message : 'Recording could not be started.',
-      });
-    }
-  };
-
-  const handleStop = async (): Promise<void> => {
-    try {
-      const audio = await stop();
-      finishLiveTranscript();
-      setRecording(audio);
-      setRecordingStartMs(0);
-      await summarise(audio);
-    } catch (err) {
-      finishLiveTranscript();
-      setRecordingStartMs(0);
-      setOutcome({
-        message: err instanceof Error ? err.message : 'Recording could not be stopped.',
-      });
-    }
-  };
-
-  return (
-    <section className="shrink-0 border-b border-gray-200 bg-white px-4 py-2.5">
-      <div className="flex items-center gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-widest text-gray-500 shrink-0">
-          Post-meeting summary
-        </h2>
-        <span className="text-[9px] font-mono text-gray-300 shrink-0">local capture</span>
-        <div className="flex-1 min-w-0" />
-
-        {state === 'recording' && (
-          <>
-            <span
-              className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-red-50 border border-red-300 text-[10px] font-bold uppercase tracking-wider text-red-600 shrink-0"
-              role="status"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-              Recording {formatElapsed(elapsedMs)}
-            </span>
-            <button
-              onClick={() => void handleStop()}
-              disabled={summarising}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-red-600 hover:bg-red-700 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-            >
-              <Square size={10} /> Stop &amp; summarise
-            </button>
-          </>
-        )}
-
-        {state === 'idle' && (
-          <button
-            onClick={() => void handleStart()}
-            disabled={summarising}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-          >
-            <Mic size={11} /> Start recording
-          </button>
-        )}
-
-        {state === 'unsupported' && (
-          <span className="text-[10px] text-gray-400 italic truncate">
-            This browser cannot record audio.
-          </span>
-        )}
-      </div>
-
-      {/* The host records from this workspace, which replaces the room
-          sidebar that holds the LIVE TRANSCRIPT panel; without this box the
-          person recording was the only one who could not see the text. */}
-      {(state === 'recording' || summarising) && (
-        <div className="mt-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5" aria-live="polite">
-          <div className="text-[9px] font-bold uppercase tracking-wider text-gray-400">
-            Live transcript
-          </div>
-          {liveLines.length === 0 ? (
-            <p className="text-[10px] italic text-gray-400">
-              Listening… the first words appear about 10 seconds in.
-            </p>
-          ) : (
-            liveLines.map((m) => (
-              <p key={m.id} className="text-[10px] leading-snug text-gray-700">
-                {m.text}
-              </p>
-            ))
-          )}
-        </div>
-      )}
-
-      {summarising && (
-        <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-gray-500">
-          <Loader2 size={11} className="animate-spin" /> Summarising…
-        </div>
-      )}
-
-      {!summarising && outcome !== null && 'added' in outcome && (
-        <div className="mt-1.5 text-[10px] font-bold text-emerald-700">
-          {outcome.added} insight{outcome.added === 1 ? '' : 's'} added
-        </div>
-      )}
-
-      {!summarising && outcome !== null && !('added' in outcome) && (
-        <div className="mt-1.5 flex items-start gap-2">
-          <p className="flex-1 min-w-0 text-[10px] text-red-600 leading-snug break-words">
-            {outcome.message}
-          </p>
-          {recording !== null && (
-            <button
-              onClick={() => void summarise(recording)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200 transition-colors shrink-0"
-              title="Re-send the same recording"
-            >
-              <RefreshCw size={10} /> Retry
-            </button>
-          )}
-        </div>
-      )}
     </section>
   );
 };

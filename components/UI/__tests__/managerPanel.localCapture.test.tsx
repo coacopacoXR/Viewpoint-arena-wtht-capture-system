@@ -1,16 +1,15 @@
-// ManagerPanel's post-meeting summary section (T4.4).
+// ManagerPanel — structure and config-driven rendering.
 //
-// The section is new UI in a panel that every host sees, so the requirement
-// worth a test is the negative one: with any capture provider OTHER than
-// 'local' the panel renders exactly as it did before, because a deployment that
-// has no capture-service must not be offered a recorder that cannot upload.
-//
-// The second requirement is that recording never starts on its own. A design
-// review is sensitive audio; the host decides when the tape rolls.
+// The recording UI moved to RecordingControls (tested in
+// RecordingControls.test.tsx) which reads from RecordingContext. Without a
+// RecordingProvider above the panel, RecordingControls renders nothing — so
+// the panel itself is free of recording state and these tests focus on the
+// panel structure: header, tabs, and the fact that no recording UI leaks
+// through regardless of the capture provider.
 //
 // Config is driven through the real ConfigProvider with /api/public-config
-// stubbed, the same way integrationsPanel.config.test.tsx does it, so "read the
-// config" is never confusable with "fell back to the default provider".
+// stubbed, the same way integrationsPanel.config.test.tsx does it, so "read
+// the config" is never confusable with "fell back to the default provider".
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -91,36 +90,7 @@ function expectExistingTabsIntact(): void {
   }
 }
 
-/** Enough of a MediaRecorder/AudioContext for the hook's feature-detect. */
-function stubRecordingGlobals() {
-  class FakeMediaRecorder {
-    static isTypeSupported = (): boolean => true;
-    state = 'inactive';
-    ondataavailable: unknown = null;
-    onstop: unknown = null;
-    start(): void {
-      this.state = 'recording';
-    }
-    stop(): void {
-      this.state = 'inactive';
-    }
-  }
-  class FakeAudioContext {
-    createMediaStreamSource(): { connect: () => void; disconnect: () => void } {
-      return { connect: () => {}, disconnect: () => {} };
-    }
-    createMediaStreamDestination(): { stream: MediaStream } {
-      return { stream: {} as MediaStream };
-    }
-    close(): Promise<void> {
-      return Promise.resolve();
-    }
-  }
-  vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
-  vi.stubGlobal('AudioContext', FakeAudioContext);
-}
-
-describe('ManagerPanel — post-meeting summary section', () => {
+describe('ManagerPanel — structure', () => {
   beforeEach(() => {
     resetPublicConfigCache();
   });
@@ -136,58 +106,29 @@ describe('ManagerPanel — post-meeting summary section', () => {
     async (provider) => {
       await renderPanel(provider);
 
+      // RecordingControls renders nothing without a RecordingProvider, so no
+      // recording text or buttons appear regardless of the provider.
       expect(screen.queryByText('Post-meeting summary')).toBeNull();
       expect(screen.queryByText('local capture')).toBeNull();
       expect(
         screen.queryByRole('button', { name: /start recording/i }),
       ).toBeNull();
-      // And the panel it replaces is untouched.
       expectExistingTabsIntact();
       expect(screen.getByText('Manager Workspace')).toBeInTheDocument();
     },
   );
 
-  it('renders the section when capture.provider is "local"', async () => {
-    stubRecordingGlobals();
+  it('renders the panel structure when capture.provider is "local"', async () => {
     await renderPanel('local');
 
-    expect(screen.getByText('Post-meeting summary')).toBeInTheDocument();
-    expect(screen.getByText('local capture')).toBeInTheDocument();
-    // Everything that was there before is still there.
+    // The recording UI lives in RecordingControls (RecordingControls.test.tsx),
+    // which renders nothing without a RecordingProvider. The panel itself
+    // keeps its header, tabs, and layout.
+    expect(screen.getByText('Manager Workspace')).toBeInTheDocument();
     expectExistingTabsIntact();
   });
 
-  it('offers recording and does not start it on its own', async () => {
-    stubRecordingGlobals();
-    await renderPanel('local');
-
-    expect(
-      screen.getByRole('button', { name: /start recording/i }),
-    ).toBeInTheDocument();
-    // No recorder was constructed behind the host's back: the indicator, the
-    // elapsed clock and the stop button all appear only after a click.
-    expect(screen.queryByText(/recording \d\d:\d\d/i)).toBeNull();
-    expect(
-      screen.queryByRole('button', { name: /stop & summarise/i }),
-    ).toBeNull();
-    expect(screen.queryByText(/summarising/i)).toBeNull();
-  });
-
-  it('says the browser cannot record rather than offering a control that lies', async () => {
-    // jsdom ships neither MediaRecorder nor an AudioContext, which is exactly
-    // the environment this branch exists for.
-    await renderPanel('local');
-
-    expect(screen.getByText('Post-meeting summary')).toBeInTheDocument();
-    expect(
-      screen.getByText('This browser cannot record audio.'),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /start recording/i }),
-    ).toBeNull();
-  });
-
-  it('renders no section when the config endpoint is unreachable', async () => {
+  it('renders the panel structure when the config endpoint is unreachable', async () => {
     // The documented fail-safe: config unavailable means "behave as before",
     // which for this panel means no recorder.
     stubConfigFetch(new Error('network down'));

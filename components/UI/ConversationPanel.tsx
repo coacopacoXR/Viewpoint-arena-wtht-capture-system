@@ -10,6 +10,7 @@ import { clsx } from 'clsx';
 import { ViewMode, InsightCard } from '../../types';
 import InsightDetailModal from './InsightDetailModal';
 import InsightExplainer from './InsightExplainer';
+import RecordingControls from './RecordingControls';
 
 // --- MAIN PANEL ---
 
@@ -427,6 +428,7 @@ const ConversationPanel: React.FC = () => {
                 {/* LIVE CHAT CONTENT */}
                 {activeTab === 'LIVE' && (
                     <>
+                        <RecordingControls theme="dark" />
                         <div className="px-2 py-1 border-b border-white/5 flex justify-end">
                              <div className="flex items-center gap-1.5">
                                 <span className={clsx("text-[8px] font-mono transition-colors", isSticky ? "text-green-500" : "text-orange-400")}>
