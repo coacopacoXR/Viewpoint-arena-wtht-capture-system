@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 import {
   ChevronLeft, Camera, MapPin, ListOrdered, Box, Trash2,
   Play, Plus, GripVertical, X, AlertTriangle, Info, ShieldAlert,
-  FileBox, Layers, Cloud, CloudOff, Check, Link2, Move3D, RotateCcw, Scale, Users
+  FileBox, Layers, Cloud, CloudOff, Check, Link2, Move3D, RotateCcw, Scale, Users, Tags
 } from 'lucide-react';
 import ReviewSetupCanvas, { type ReviewSetupCanvasHandle, type GizmoMode } from '../components/Scene/ReviewSetupCanvas';
 import {
@@ -20,6 +20,7 @@ import { useStore } from '../store';
 import type { ModelType, Requirement } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
+import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import { getIdentity } from '../lib/identity';
 import { useFlushingDebounce } from '../lib/useFlushingDebounce';
 import OnshapeBrowser, { type OnshapeLaunchDocument } from '../components/UI/OnshapeBrowser';
@@ -36,7 +37,7 @@ import {
 // See lib/people.ts.
 const EMPTY_TEAM: never[] = [];
 
-export type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda' | 'requirements' | 'people';
+export type TabId = 'asset' | 'viewpoints' | 'pins' | 'agenda' | 'requirements' | 'people' | 'labels';
 
 // Vertical icon rail configuration. The visible label is shortened to fit the
 // 56 px rail without clipping; ariaLabel carries the full section name for
@@ -50,6 +51,7 @@ export const RAIL_TABS: {
   { id: 'agenda',       label: 'Agenda', ariaLabel: 'Agenda',       icon: <ListOrdered size={18} /> },
   { id: 'requirements', label: 'Reqs',   ariaLabel: 'Requirements', icon: <Scale size={18} />, divider: true },
   { id: 'people',       label: 'People', ariaLabel: 'People',       icon: <Users size={18} /> },
+  { id: 'labels',       label: 'Labels', ariaLabel: 'Labels',       icon: <Tags size={18} />, divider: true },
 ];
 
 // ─── Page ────────────────────────────────────────────────────────────────────
@@ -95,7 +97,7 @@ const ReviewSetupPage: React.FC = () => {
     return JSON.stringify({
       title: d.title, description: d.description, asset,
       viewpoints: d.viewpoints, pins: d.pins, agenda: d.agenda,
-      requirements: d.requirements, team: d.team,
+      requirements: d.requirements, team: d.team, labels: d.labels,
     });
   };
 
@@ -363,6 +365,7 @@ const ReviewSetupPage: React.FC = () => {
                 agenda: draft.agenda.length,
                 requirements: draft.requirements.length,
                 people: draft.team.length,
+                labels: Object.keys(draft.labels).length,
               }}
             />
             <div role="tabpanel" aria-label={RAIL_TABS.find((t) => t.id === tab)?.ariaLabel} className="flex-1 flex flex-col min-h-0">
@@ -393,6 +396,7 @@ const ReviewSetupPage: React.FC = () => {
                 )}
                 {tab === 'requirements' && <RequirementsTab requirements={draft.requirements} />}
                 {tab === 'people' && <PeopleTab />}
+                {tab === 'labels' && <LabelsTab />}
               </div>
             </div>
           </div>
@@ -1283,6 +1287,91 @@ const PeopleTab: React.FC = () => {
       >
         <Plus size={14} /> Add team member
       </button>
+    </div>
+  );
+};
+
+// ─── Labels tab ────────────────────────────────────────────────────────────
+
+const LabelsTab: React.FC = () => {
+  const labels = useReviewSetupStore((s) => s.draft?.labels ?? {});
+  const setLabel = useReviewSetupStore((s) => s.setLabel);
+  const clearLabel = useReviewSetupStore((s) => s.clearLabel);
+  const fields = useLabelFieldsStore((s) => s.fields);
+  const loadFields = useLabelFieldsStore((s) => s.load);
+  const loaded = useLabelFieldsStore((s) => s.loaded);
+
+  useEffect(() => {
+    if (!loaded) loadFields();
+  }, [loaded, loadFields]);
+
+  return (
+    <div className="p-5 flex flex-col gap-3">
+      <p className="text-[11px] text-gray-500 leading-relaxed">
+        Tag this review with values for each grouping field. The tracker uses these to organise sessions.
+      </p>
+
+      {fields.length === 0 && loaded && (
+        <div className="text-center py-10 flex flex-col items-center gap-3 text-gray-500 text-xs italic">
+          <Tags size={28} className="opacity-30" />
+          No label fields defined
+          <span className="text-[10px] text-gray-600 max-w-[240px]">
+            Add grouping fields in the tracker settings to organise your reviews.
+          </span>
+        </div>
+      )}
+
+      {fields.map((field) => {
+        const currentValue = labels[field.id] ?? '';
+        const hasValues = field.values.length > 0;
+        return (
+          <div key={field.id} className="rounded border border-white/10 bg-white/5 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-gray-300">{field.name}</span>
+              {currentValue && (
+                <button
+                  onClick={() => clearLabel(field.id)}
+                  className="text-[10px] text-gray-500 hover:text-red-400 transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {hasValues ? (
+              <select
+                value={currentValue}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setLabel(field.id, e.target.value);
+                  } else {
+                    clearLabel(field.id);
+                  }
+                }}
+                className="w-full bg-white/5 text-xs rounded px-2 py-1.5 border border-white/10 outline-none focus:border-emerald-400/50 text-gray-200"
+              >
+                <option value="">— unset —</option>
+                {field.values.map((v) => (
+                  <option key={v} value={v}>{v}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={currentValue}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setLabel(field.id, e.target.value);
+                  } else {
+                    clearLabel(field.id);
+                  }
+                }}
+                placeholder="Type a value…"
+                list={`label-suggestions-${field.id}`}
+                className="w-full bg-white/5 text-xs rounded px-2 py-1.5 border border-white/10 outline-none focus:border-emerald-400/50 placeholder:text-gray-600"
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };

@@ -4,6 +4,22 @@ import clsx from 'clsx';
 import IntegrationsPanel from '../components/UI/IntegrationsPanel';
 import AssigneeComboBox from '../components/UI/AssigneeComboBox';
 import { getDisplayName } from '../lib/identity';
+import { useLabelFieldsStore } from '../lib/labelFieldsStore';
+import {
+  groupSessions,
+  filterSessions,
+  collectFieldValues,
+  loadGroupByChoice,
+  saveGroupByChoice,
+  loadGroupFilters,
+  saveGroupFilters,
+  pruneGroupByChoice,
+  UNASSIGNED,
+  type GroupByChoice,
+  type GroupFilters,
+  type GroupNode,
+} from '../lib/trackerGrouping';
+import type { LabelField } from '../lib/supabase';
 import {
   DndContext,
   DragEndEvent,
@@ -918,6 +934,89 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate, onDele
   );
 };
 
+// ─── Grouped Sidebar Nodes ───────────────────────────────────────────────────
+
+const GroupedSidebarNodes: React.FC<{
+  nodes: GroupNode[];
+  allItems: TrackerItem[];
+  selectedSessionId: string | null;
+  onSelect: (id: string | null) => void;
+  depth: number;
+}> = ({ nodes, allItems, selectedSessionId, onSelect, depth }) => {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggle = (value: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  };
+
+  // Expand all top-level nodes by default
+  useEffect(() => {
+    if (depth === 0) {
+      setExpanded(new Set(nodes.map((n) => n.value)));
+    }
+  }, [nodes, depth]);
+
+  return (
+    <div className={depth > 0 ? 'ml-3 border-l border-white/10 pl-1' : ''}>
+      {nodes.map((node) => {
+        const isLeaf = node.children.length === 0;
+        const isExpanded = expanded.has(node.value);
+        const sessionCount = node.sessions.length;
+        const key = `${depth}-${node.value}`;
+        return (
+          <div key={key}>
+            <button
+              onClick={() => {
+                if (!isLeaf) toggle(node.value);
+                else if (node.sessions.length === 1) onSelect(node.sessions[0].id);
+              }}
+              className={clsx(
+                'w-full text-left px-2 py-1.5 rounded text-xs transition-colors flex items-center gap-1',
+                !isLeaf ? 'text-gray-300 hover:bg-white/10 hover:text-white font-semibold' : 'text-gray-400 hover:bg-white/10 hover:text-white'
+              )}
+            >
+              {!isLeaf && (
+                <span className="text-[8px] text-gray-500 w-3">{isExpanded ? '▾' : '▸'}</span>
+              )}
+              <span className={clsx('truncate flex-1', node.value === UNASSIGNED && 'italic text-gray-500')}>
+                {node.value}
+              </span>
+              <span className="font-mono text-[9px] text-gray-600">{sessionCount}</span>
+            </button>
+            {!isLeaf && isExpanded && (
+              <GroupedSidebarNodes
+                nodes={node.children}
+                allItems={allItems}
+                selectedSessionId={selectedSessionId}
+                onSelect={onSelect}
+                depth={depth + 1}
+              />
+            )}
+            {isLeaf && isExpanded && node.sessions.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => onSelect(s.id)}
+                className={clsx(
+                  'w-full text-left px-3 py-1.5 rounded text-[11px] transition-colors ml-3',
+                  selectedSessionId === s.id ? 'bg-white text-gray-900' : 'text-gray-400 hover:bg-white/10 hover:text-white'
+                )}
+              >
+                <span className="truncate block">{s.title}</span>
+                <span className="font-mono text-[9px] text-gray-600">{fmtShort(s.ended_at)}</span>
+              </button>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 // ─── Session Sidebar ──────────────────────────────────────────────────────────
 
 const SessionSidebar: React.FC<{
@@ -927,7 +1026,9 @@ const SessionSidebar: React.FC<{
   onSelect: (id: string | null) => void;
   onDeleteSession: (id: string) => Promise<void>;
   onUpdateSession: (id: string, updates: Partial<Pick<TrackerSession, 'title' | 'ended_at'>>) => Promise<void>;
-}> = ({ sessions, allItems, selectedSessionId, onSelect, onDeleteSession, onUpdateSession }) => {
+  groupedNodes?: GroupNode[];
+  isGrouped?: boolean;
+}> = ({ sessions, allItems, selectedSessionId, onSelect, onDeleteSession, onUpdateSession, groupedNodes, isGrouped }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDate, setEditDate] = useState('');
@@ -962,7 +1063,16 @@ const SessionSidebar: React.FC<{
           <span className={clsx('ml-2 font-mono text-xs font-normal', selectedSessionId === null ? 'text-gray-500' : 'text-gray-600')}>{allItems.length}</span>
         </button>
         <div className="h-px bg-white/10 my-3 mx-2" />
-        {sessions.map(s => {
+        {isGrouped && groupedNodes ? (
+          <GroupedSidebarNodes
+            nodes={groupedNodes}
+            allItems={allItems}
+            selectedSessionId={selectedSessionId}
+            onSelect={onSelect}
+            depth={0}
+          />
+        ) : (
+          sessions.map(s => {
           const { R, A, Ra, total } = counts(s.id);
           const active = selectedSessionId === s.id;
           const editing = editingId === s.id;
@@ -1017,7 +1127,8 @@ const SessionSidebar: React.FC<{
               )}
             </div>
           );
-        })}
+        })
+        )}
       </div>
     </aside>
   );
@@ -1428,6 +1539,36 @@ const TrackerPage: React.FC = () => {
   const [seeding, setSeeding] = useState(false);
   const [filters, setFilters] = useState<Filters>({ type: 'All', priority: 'All', status: 'All', assignee: 'All', search: '' });
   const [addItemState, setAddItemState] = useState<{ open: boolean; status: TrackerItem['status'] }>({ open: false, status: 'Open' });
+  const [groupBy, setGroupBy] = useState<GroupByChoice>({ fieldIds: [] });
+  const [groupFilters, setGroupFilters] = useState<GroupFilters>({});
+  const [labelSettingsOpen, setLabelSettingsOpen] = useState(false);
+
+  // Label fields store
+  const labelFields = useLabelFieldsStore((s) => s.fields);
+  const loadLabelFields = useLabelFieldsStore((s) => s.load);
+  const labelFieldsLoaded = useLabelFieldsStore((s) => s.loaded);
+
+  useEffect(() => {
+    if (!labelFieldsLoaded) loadLabelFields();
+  }, [labelFieldsLoaded, loadLabelFields]);
+
+  // Hydrate group-by choice from localStorage, pruning deleted fields
+  useEffect(() => {
+    const saved = loadGroupByChoice();
+    setGroupBy(pruneGroupByChoice(saved, labelFields));
+    setGroupFilters(loadGroupFilters());
+  }, [labelFields]);
+
+  // Persist group-by choice
+  const updateGroupBy = useCallback((choice: GroupByChoice) => {
+    setGroupBy(choice);
+    saveGroupByChoice(choice);
+  }, []);
+
+  const updateGroupFilters = useCallback((f: GroupFilters) => {
+    setGroupFilters(f);
+    saveGroupFilters(f);
+  }, []);
 
   const fetchSessions = useCallback(async () => {
     const { data } = await supabase.from('tracker_sessions').select('*').order('ended_at', { ascending: false });
@@ -1511,6 +1652,12 @@ const TrackerPage: React.FC = () => {
     return true;
   }), [allItems, filters]);
 
+  // Grouped sessions: apply label filters, then group by chosen fields.
+  const groupedSessions = useMemo(() => {
+    const filtered = filterSessions(sessions, groupFilters);
+    return groupSessions(filtered, groupBy.fieldIds);
+  }, [sessions, groupBy.fieldIds, groupFilters]);
+
   const stats = useMemo(() => computeStats(allItems), [allItems]);
 
   if (loading) {
@@ -1540,6 +1687,10 @@ const TrackerPage: React.FC = () => {
           <button onClick={handleSeed} disabled={seeding} className="font-mono text-xs text-gray-600 hover:text-gray-300 transition-colors disabled:opacity-40">
             {seeding ? 'Seeding…' : '+ Demo Data'}
           </button>
+          <button onClick={() => setLabelSettingsOpen(true)}
+            className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
+            <span>🏷</span> Label fields
+          </button>
           <button onClick={() => setIntegrationsOpen(true)}
             className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
             <span>⚡</span> Integrations
@@ -1560,7 +1711,10 @@ const TrackerPage: React.FC = () => {
         <SessionSidebar sessions={sessions} allItems={allItems} selectedSessionId={selectedSessionId}
           onSelect={id => { setSelectedSessionId(id); setSelectedItem(null); }}
           onDeleteSession={deleteSession}
-          onUpdateSession={updateSession} />
+          onUpdateSession={updateSession}
+          groupedNodes={groupedSessions}
+          isGrouped={groupBy.fieldIds.length > 0}
+        />
 
         <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
           {/* Toolbar */}
@@ -1581,6 +1735,18 @@ const TrackerPage: React.FC = () => {
               ))}
             </div>
           </div>
+
+          {/* Group by bar — only visible when label fields exist */}
+          {labelFields.length > 0 && (
+            <GroupByBar
+              fields={labelFields}
+              choice={groupBy}
+              onChange={updateGroupBy}
+              filters={groupFilters}
+              onFiltersChange={updateGroupFilters}
+              sessions={sessions}
+            />
+          )}
 
           {/* Content */}
           {sessions.length === 0 ? (
@@ -1620,6 +1786,14 @@ const TrackerPage: React.FC = () => {
       {/* Command Palette */}
       {paletteOpen && <CommandPalette items={allItems} sessions={sessions} onItemClick={item => { setSelectedItem(item); }} onClose={() => setPaletteOpen(false)} />}
 
+      {/* Label Fields Settings */}
+      {labelSettingsOpen && (
+        <LabelFieldsSettings
+          fields={labelFields}
+          onClose={() => setLabelSettingsOpen(false)}
+        />
+      )}
+
       {/* Integrations Panel */}
       {integrationsOpen && (
         <IntegrationsPanel
@@ -1629,6 +1803,196 @@ const TrackerPage: React.FC = () => {
         />
       )}
     </div>
+  );
+};
+
+// ─── Group By Bar ────────────────────────────────────────────────────────────
+
+const GroupByBar: React.FC<{
+  fields: LabelField[];
+  choice: GroupByChoice;
+  onChange: (c: GroupByChoice) => void;
+  filters: GroupFilters;
+  onFiltersChange: (f: GroupFilters) => void;
+  sessions: TrackerSession[];
+}> = ({ fields, choice, onChange, filters, onFiltersChange, sessions }) => {
+  const sel = 'border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-black cursor-pointer hover:border-gray-300 transition-colors';
+
+  const availableFields = fields.filter((f) => !choice.fieldIds.includes(f.id));
+
+  const addField = (fieldId: string) => {
+    if (choice.fieldIds.length >= 3) return;
+    onChange({ fieldIds: [...choice.fieldIds, fieldId] });
+  };
+
+  const removeField = (idx: number) => {
+    const next = choice.fieldIds.filter((_, i) => i !== idx);
+    onChange({ fieldIds: next });
+    // Clean up filters for removed field
+    const removedId = choice.fieldIds[idx];
+    const { [removedId]: _, ...rest } = filters;
+    onFiltersChange(rest);
+  };
+
+  const moveField = (idx: number, dir: -1 | 1) => {
+    const arr = [...choice.fieldIds];
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= arr.length) return;
+    [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+    onChange({ fieldIds: arr });
+  };
+
+  return (
+    <div className="flex-shrink-0 flex items-center gap-3 px-6 py-2 bg-gray-50 border-b border-gray-100 flex-wrap">
+      <span className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">Group by</span>
+      {choice.fieldIds.length === 0 && (
+        <span className="text-xs text-gray-400 italic">All sessions</span>
+      )}
+      {choice.fieldIds.map((fid, idx) => {
+        const field = fields.find((f) => f.id === fid);
+        if (!field) return null;
+        const filterVal = filters[fid] ?? '';
+        const values = collectFieldValues(sessions, fid);
+        return (
+          <div key={fid} className="flex items-center gap-1">
+            {idx > 0 && <span className="text-gray-300 text-xs">→</span>}
+            <span className="text-xs font-semibold text-gray-700 bg-white border border-gray-200 rounded px-2 py-1">{field.name}</span>
+            <button onClick={() => moveField(idx, -1)} disabled={idx === 0}
+              className="text-gray-400 hover:text-gray-700 disabled:opacity-20 text-xs px-0.5">←</button>
+            <button onClick={() => moveField(idx, 1)} disabled={idx === choice.fieldIds.length - 1}
+              className="text-gray-400 hover:text-gray-700 disabled:opacity-20 text-xs px-0.5">→</button>
+            <button onClick={() => removeField(idx)}
+              className="text-gray-400 hover:text-red-400 text-xs px-0.5">✕</button>
+            {values.length > 0 && (
+              <select value={filterVal} onChange={(e) => onFiltersChange({ ...filters, [fid]: e.target.value })}
+                className={clsx(sel, 'text-[10px]')}>
+                <option value="">All</option>
+                {values.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            )}
+          </div>
+        );
+      })}
+      {choice.fieldIds.length < 3 && availableFields.length > 0 && (
+        <select value="" onChange={(e) => { if (e.target.value) addField(e.target.value); }}
+          className={clsx(sel, 'text-[10px]')}>
+          <option value="">+ Add field…</option>
+          {availableFields.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+      )}
+    </div>
+  );
+};
+
+// ─── Label Fields Settings Modal ─────────────────────────────────────────────
+
+const LabelFieldsSettings: React.FC<{
+  fields: LabelField[];
+  onClose: () => void;
+}> = ({ fields, onClose }) => {
+  const addField = useLabelFieldsStore((s) => s.addField);
+  const renameField = useLabelFieldsStore((s) => s.renameField);
+  const updateFieldValues = useLabelFieldsStore((s) => s.updateFieldValues);
+  const _reorderFields = useLabelFieldsStore((s) => s.reorderFields);
+  const removeField = useLabelFieldsStore((s) => s.removeField);
+
+  const [newName, setNewName] = useState('');
+  const [editingValuesId, setEditingValuesId] = useState<string | null>(null);
+  const [valuesDraft, setValuesDraft] = useState('');
+
+  const startEditValues = (field: LabelField) => {
+    setEditingValuesId(field.id);
+    setValuesDraft(field.values.join('\n'));
+  };
+
+  const saveValues = async (id: string) => {
+    const vals = valuesDraft.split('\n').map((v) => v.trim()).filter(Boolean);
+    await updateFieldValues(id, vals);
+    setEditingValuesId(null);
+  };
+
+  const handleAdd = async () => {
+    if (!newName.trim()) return;
+    await addField(newName.trim());
+    setNewName('');
+  };
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50" onClick={onClose} />
+      <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[520px] max-h-[80vh] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <h2 className="font-semibold text-gray-900 text-sm">Label Fields</h2>
+          <button onClick={onClose} className="text-gray-300 hover:text-gray-700 text-xl leading-none">✕</button>
+        </div>
+        <div className="px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <p className="text-xs text-gray-500 leading-relaxed">
+            Define how reviews are organised. Each field becomes a grouping dimension in the tracker. Deleting a field hides it from grouping but leaves stored values untouched.
+          </p>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+          {fields.length === 0 && (
+            <p className="text-xs text-gray-400 italic text-center py-4">No label fields yet. Add one below.</p>
+          )}
+          {fields.map((field, idx) => (
+            <div key={field.id} className="rounded-lg border border-gray-200 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono text-gray-400 w-4">{idx + 1}</span>
+                <input
+                  value={field.name}
+                  onChange={(e) => renameField(field.id, e.target.value)}
+                  className="flex-1 text-sm font-semibold text-gray-900 border border-transparent hover:border-gray-200 focus:border-black rounded px-2 py-1 focus:outline-none"
+                />
+                <button
+                  onClick={() => startEditValues(field)}
+                  className="text-[10px] font-mono text-gray-400 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
+                >
+                  {field.values.length > 0 ? `${field.values.length} values` : 'Free text'}
+                </button>
+                <button
+                  onClick={() => removeField(field.id)}
+                  className="text-gray-300 hover:text-red-400 transition-colors text-sm px-1"
+                  title="Delete field (stored values are preserved)"
+                >✕</button>
+              </div>
+              {editingValuesId === field.id && (
+                <div className="space-y-2 pl-6">
+                  <p className="text-[10px] text-gray-400 font-mono">One value per line. Empty = free text.</p>
+                  <textarea
+                    value={valuesDraft}
+                    onChange={(e) => setValuesDraft(e.target.value)}
+                    rows={4}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-black resize-none"
+                    placeholder="Value 1&#10;Value 2&#10;Value 3"
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={() => saveValues(field.id)}
+                      className="px-3 py-1 bg-black text-white text-xs font-semibold rounded hover:bg-gray-800 transition-colors">Save</button>
+                    <button onClick={() => setEditingValuesId(null)}
+                      className="px-3 py-1 text-xs text-gray-500 hover:text-gray-700 transition-colors">Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="px-6 py-4 border-t border-gray-100 flex-shrink-0">
+          <div className="flex gap-2">
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
+              placeholder="New field name…"
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+            />
+            <button onClick={handleAdd} disabled={!newName.trim()}
+              className="px-4 py-2 bg-black text-white text-xs font-semibold rounded-lg hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              Add field
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 };
 

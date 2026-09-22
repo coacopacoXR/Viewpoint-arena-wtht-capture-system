@@ -12,6 +12,11 @@ create table if not exists tracker_sessions (
   model_name text
 );
 
+-- Labels snapshot copied from the review at meeting-end (added 2026-09-23).
+-- Lets the tracker group sessions by the review's label values at the time.
+alter table tracker_sessions
+  add column if not exists labels jsonb not null default '{}'::jsonb;
+
 -- Tracker items (one per InsightCard)
 create table if not exists tracker_items (
   id uuid primary key default gen_random_uuid(),
@@ -136,6 +141,13 @@ alter table review_curations
 alter table review_curations
   add column if not exists team jsonb not null default '[]'::jsonb;
 
+-- User-defined label values (added 2026-09-23). Keys are field ids from
+-- review_label_fields; values are free-text or chosen from the field's value
+-- list. Stored on the review so the tracker can group by what the review
+-- said at the time. Idempotent like requirements/team.
+alter table review_curations
+  add column if not exists labels jsonb not null default '{}'::jsonb;
+
 create index if not exists review_curations_updated_at_idx
   on review_curations (updated_at desc);
 
@@ -166,6 +178,43 @@ begin
 -- Postgres has no supabase_realtime publication; the schema is complete anyway.
 exception when duplicate_object or undefined_object then null;
 end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Label fields (added 2026-09-23). User-defined grouping dimensions: one team
+-- groups by Product → Variant → Phase, another by Programme → Gate. The app
+-- ships suggested fields and lets people change them. values text[] is empty
+-- when the field is free-text.
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists review_label_fields (
+  id text primary key,
+  name text not null,
+  position int not null default 0,
+  values text[] not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+alter table review_label_fields enable row level security;
+
+drop policy if exists "public read label fields" on review_label_fields;
+drop policy if exists "public insert label fields" on review_label_fields;
+drop policy if exists "public update label fields" on review_label_fields;
+drop policy if exists "public delete label fields" on review_label_fields;
+create policy "public read label fields"   on review_label_fields for select using (true);
+create policy "public insert label fields" on review_label_fields for insert with check (true);
+create policy "public update label fields" on review_label_fields for update using (true);
+create policy "public delete label fields" on review_label_fields for delete using (true);
+
+-- Seed suggested fields on first run ONLY. If the user deleted a field,
+-- re-running install.sh must not resurrect it. The `where not exists` guard
+-- checks whether ANY row exists — if the table is empty, insert the seeds.
+insert into review_label_fields (id, name, position, values)
+select id, name, position, values
+from (values
+  ('product',  'Product',  0, array['Headphones', 'Bicycle', 'Synth']::text[]),
+  ('variant',  'Variant',  1, array['Mk I', 'Mk II', 'Prototype']::text[]),
+  ('phase',    'Phase',    2, array['Concept', 'Detailed Design', 'Validation']::text[])
+) as seeds(id, name, position, values)
+where not exists (select 1 from review_label_fields);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Grants for the self-hosted PostgREST stack.

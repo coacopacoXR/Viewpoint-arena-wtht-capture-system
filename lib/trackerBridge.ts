@@ -6,8 +6,9 @@ export async function flushSessionToTracker(opts: {
   insightCards: InsightCard[];
   participantCount: number;
   modelName: string | null;
+  labels?: Record<string, string>;
 }): Promise<string | null> {
-  const { roomId, insightCards, participantCount, modelName } = opts;
+  const { roomId, insightCards, participantCount, modelName, labels } = opts;
 
   if (insightCards.length === 0) return null;
 
@@ -20,6 +21,7 @@ export async function flushSessionToTracker(opts: {
       ended_at: new Date().toISOString(),
       participant_count: participantCount,
       model_name: modelName,
+      labels: labels ?? {},
     })
     .select()
     .single();

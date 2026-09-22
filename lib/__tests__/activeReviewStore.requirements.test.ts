@@ -14,6 +14,7 @@ function baseDraft(overrides: Partial<ReviewDraft> = {}): ReviewDraft {
     agenda: [],
     requirements: [],
     team: [],
+    labels: {},
     createdAt: Date.now(),
     updatedAt: Date.now(),
     ...overrides,

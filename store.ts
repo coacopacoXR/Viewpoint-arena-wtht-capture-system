@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, BoardroomLayout, LiveChatMessage } from './types';
 import { Vector3, Group } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
+import { useReviewSetupStore } from './lib/reviewSetupStore';
 
 const INITIAL_AGENTS: AgentState[] = [
   { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: '#ff4400', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
@@ -494,6 +495,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (ended) {
       const { insightCards, agents, activeModelType, hideAgents } = get();
       const roomId = window.location.pathname.split('/room/')[1] ?? 'local';
+      const reviewDraft = useReviewSetupStore.getState().draft;
       flushSessionToTracker({
         roomId,
         insightCards,
@@ -503,6 +505,7 @@ export const useStore = create<AppState>((set, get) => ({
         // recorded four people who were never there.
         participantCount: participantCount ?? (hideAgents ? 1 : agents.length),
         modelName: activeModelType ?? null,
+        labels: reviewDraft?.labels ?? {},
       });
     }
     set({ isMeetingEnded: ended, isPlaying: !ended });

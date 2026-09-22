@@ -79,6 +79,7 @@ export interface ReviewDraft {
   agenda: AgendaItem[];
   requirements: Requirement[];
   team: TeamMember[];
+  labels: Record<string, string>;
   createdAt: number;
   updatedAt: number;
 }
@@ -150,6 +151,10 @@ interface ReviewSetupState {
   updateTeamMember: (id: string, patch: Partial<TeamMember>) => void;
   removeTeamMember: (id: string) => void;
   reorderTeam: (fromIdx: number, toIdx: number) => void;
+
+  // Labels (user-defined grouping values)
+  setLabel: (fieldId: string, value: string) => void;
+  clearLabel: (fieldId: string) => void;
 }
 
 const uid = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
@@ -169,6 +174,7 @@ const emptyDraft = (reviewId: string): ReviewDraft => ({
   agenda: [],
   requirements: [],
   team: [],
+  labels: {},
   createdAt: Date.now(),
   updatedAt: Date.now(),
 });
@@ -544,6 +550,22 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         arr.splice(toIdx, 0, moved);
         return { draft: touch({ ...s.draft, team: arr }) };
       }),
+
+      setLabel: (fieldId, value) => set((s) => {
+        if (!s.draft) return s;
+        const next: ReviewDraft = {
+          ...s.draft,
+          labels: { ...s.draft.labels, [fieldId]: value },
+        };
+        return { draft: touch(next) };
+      }),
+
+      clearLabel: (fieldId) => set((s) => {
+        if (!s.draft) return s;
+        const { [fieldId]: _removed, ...rest } = s.draft.labels;
+        const next: ReviewDraft = { ...s.draft, labels: rest };
+        return { draft: touch(next) };
+      }),
     }),
     {
       name: 'vp_review_draft',
@@ -568,6 +590,9 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         }
         if (!Array.isArray(draft.team)) {
           draft = { ...draft, team: [] };
+        }
+        if (!draft.labels || typeof draft.labels !== 'object') {
+          draft = { ...draft, labels: {} };
         }
         return { ...persisted, draft };
       },

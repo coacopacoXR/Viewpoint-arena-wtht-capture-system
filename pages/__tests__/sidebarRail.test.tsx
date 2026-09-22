@@ -1,11 +1,11 @@
 // Tests for the vertical icon rail in ReviewSetupPage (plan §L).
 //
 // What is pinned here:
-//   1. Six tabs render in grouped order with correct ARIA roles and labels
+//   1. Seven tabs render in grouped order with correct ARIA roles and labels
 //   2. Active tab has aria-selected="true", others have "false"
 //   3. Arrow Up/Down and Home/End move selection and fire onSelect
 //   4. Count badges appear when counts > 0
-//   5. Dividers separate the three groups (Model | Views·Pins·Agenda | Reqs·People)
+//   5. Dividers separate the four groups (Model | Views·Pins·Agenda | Reqs·People | Labels)
 //   6. Clicking a tab calls onSelect with the correct id
 
 import React from 'react';
@@ -23,6 +23,7 @@ describe('SidebarRail', () => {
       agenda: 1,
       requirements: 5,
       people: 4,
+      labels: 2,
     },
   };
 
@@ -34,13 +35,13 @@ describe('SidebarRail', () => {
     cleanup();
   });
 
-  it('renders six tabs in the correct grouped order', () => {
+  it('renders seven tabs in the correct grouped order', () => {
     render(<SidebarRail {...defaultProps} />);
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(6);
-    // Grouped order: Model | Views · Pins · Agenda | Reqs · People
+    expect(tabs).toHaveLength(7);
+    // Grouped order: Model | Views · Pins · Agenda | Reqs · People | Labels
     const labels = tabs.map((t) => t.getAttribute('aria-label'));
-    expect(labels).toEqual(['Asset', 'Viewpoints', 'Pins', 'Agenda', 'Requirements', 'People']);
+    expect(labels).toEqual(['Asset', 'Viewpoints', 'Pins', 'Agenda', 'Requirements', 'People', 'Labels']);
   });
 
   it('marks the active tab with aria-selected="true"', () => {
@@ -64,16 +65,17 @@ describe('SidebarRail', () => {
   it('renders dividers between groups', () => {
     render(<SidebarRail {...defaultProps} />);
     const separators = screen.getAllByRole('separator');
-    // Two dividers: before Views (group 2) and before Reqs (group 3)
-    expect(separators).toHaveLength(2);
+    // Three dividers: before Views (group 2), before Reqs (group 3), before Labels (group 4)
+    expect(separators).toHaveLength(3);
   });
 
   it('shows count badges when count > 0', () => {
     render(<SidebarRail {...defaultProps} />);
-    // Viewpoints=3, Pins=2, Agenda=1, Reqs=5, People=4
+    // Viewpoints=3, Pins=2, Agenda=1, Reqs=5, People=4, Labels=2
     // Asset has no count (always 0)
     expect(screen.getByText('3')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
+    // Pins=2 and Labels=2 both produce '2' badges
+    expect(screen.getAllByText('2')).toHaveLength(2);
     expect(screen.getByText('1')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
@@ -104,7 +106,7 @@ describe('SidebarRail', () => {
       render(<SidebarRail {...defaultProps} tab="asset" />);
       const tablist = screen.getByRole('tablist');
       fireEvent.keyDown(tablist, { key: 'ArrowUp' });
-      expect(defaultProps.onSelect).toHaveBeenCalledWith('people');
+      expect(defaultProps.onSelect).toHaveBeenCalledWith('labels');
     });
 
     it('Home jumps to the first tab', () => {
@@ -118,11 +120,11 @@ describe('SidebarRail', () => {
       render(<SidebarRail {...defaultProps} tab="asset" />);
       const tablist = screen.getByRole('tablist');
       fireEvent.keyDown(tablist, { key: 'End' });
-      expect(defaultProps.onSelect).toHaveBeenCalledWith('people');
+      expect(defaultProps.onSelect).toHaveBeenCalledWith('labels');
     });
 
     it('ArrowDown from last tab wraps to first', () => {
-      render(<SidebarRail {...defaultProps} tab="people" />);
+      render(<SidebarRail {...defaultProps} tab="labels" />);
       const tablist = screen.getByRole('tablist');
       fireEvent.keyDown(tablist, { key: 'ArrowDown' });
       expect(defaultProps.onSelect).toHaveBeenCalledWith('asset');

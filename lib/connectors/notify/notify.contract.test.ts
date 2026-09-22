@@ -91,6 +91,7 @@ describe('NotificationSinkAdapter contract suite', () => {
     created_at: '2026-01-15T09:00:00Z',
     participant_count: 3,
     model_name: 'Test Model',
+    labels: {},
   };
 
   const mockItem: TrackerItem = {

@@ -48,6 +48,15 @@ export type TrackerSession = {
   created_at: string;
   participant_count: number;
   model_name: string | null;
+  labels: Record<string, string>;
+};
+
+export type LabelField = {
+  id: string;
+  name: string;
+  position: number;
+  values: string[];
+  created_at: string;
 };
 
 export type TrackerItem = {

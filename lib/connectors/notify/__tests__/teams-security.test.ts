@@ -16,6 +16,7 @@ const mockSession: TrackerSession = {
   created_at: '2026-01-15T09:00:00Z',
   participant_count: 2,
   model_name: null,
+  labels: {},
 };
 
 const mockItem: TrackerItem = {
