@@ -69,6 +69,14 @@ The right-hand panel serves as the cognitive engine of the review, transforming 
 
 ---
 
+## Install it yourself
+
+To run the whole app on your own computer with Docker (reviews, live rooms,
+video calls, and meeting capture on your own hardware, no cloud accounts),
+follow **[docs/INSTALL.md](docs/INSTALL.md)**: one installer, about 15 minutes.
+
+---
+
 ## Configuration
 
 Viewpoint Arena uses a two-layer configuration system:

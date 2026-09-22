@@ -1203,6 +1203,28 @@ SECRETS
     env_comment '# notifications is empty: no sinks enabled. Sessions stay in the app.'
   fi
 
+  # Docker Compose reads COMPOSE_FILE and COMPOSE_PROFILES from the .env in the
+  # project directory. Writing them here means a plain `docker compose ps`,
+  # `up -d`, `logs` or `down` covers exactly the services this install runs.
+  # Without them, `docker compose down` silently left coturn and Ollama running
+  # and `ps` did not list them (found while writing the install guide).
+  local compose_file='docker-compose.yml' profiles=()
+  [[ "$A_GPU" == 'yes' ]] && compose_file+=':docker-compose.gpu.yml'
+  [[ "$A_CAPTURE" == 'local' || "$A_CAPTURE" == 'ollamaDirect' ]] && profiles+=(capture-local)
+  [[ "$A_TURN" == 'bundled' ]] && profiles+=(turn)
+  [[ "$A_N8N" == 'yes' ]] && profiles+=(n8n)
+  local profile_list
+  profile_list="$(IFS=,; printf '%s' "${profiles[*]}")"
+  cat <<COMPOSE
+
+# ── 7b. Which compose files and profiles this install uses ───────────────────
+# Read by Docker Compose itself, so plain \`docker compose up -d\`, \`ps\`,
+# \`logs\` and \`down\` act on exactly this install's services. Re-run
+# ./install.sh to change them rather than editing by hand.
+COMPOSE_FILE=${compose_file}
+COMPOSE_PROFILES=${profile_list}
+COMPOSE
+
   cat <<'FOOTER'
 
 # ── 8. Optional ──────────────────────────────────────────────────────────────
@@ -1213,7 +1235,7 @@ SECRETS
 #NGINX_IMAGE_TAG=alpine
 #SUPABASE_POSTGRES_IMAGE_TAG=17.6.1.136
 #POSTGREST_IMAGE_TAG=v14.17
-#REALTIME_IMAGE_TAG=2.134.10
+#REALTIME_IMAGE_TAG=v2.134.10
 #OLLAMA_IMAGE_TAG=latest
 #N8N_IMAGE_TAG=latest
 #
@@ -1354,10 +1376,16 @@ compose_up() {
   say ''
   say "Bringing the stack up: ${COMPOSE[*]} ${PROFILE_ARGS[*]+"${PROFILE_ARGS[*]}"} up -d --build"
   say '(the first build runs npm ci and pip install; give it several minutes)'
-  local compose_output compose_rc
-  compose_output="$(cd -- "$TARGET_DIR" && "${COMPOSE[@]}" "${COMPOSE_ARGS[@]}" \
-      ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d --build 2>&1)" && compose_rc=0 || compose_rc=$?
-  printf '%s\n' "$compose_output" >&2
+  # Streamed live through tee, not captured and printed afterwards: a first
+  # build takes minutes, and a silent terminal for that long reads as a hang.
+  # The copy in $compose_log is what the port-clash check below scans.
+  local compose_log compose_output compose_rc
+  compose_log="$(mktemp)"
+  ( cd -- "$TARGET_DIR" && "${COMPOSE[@]}" "${COMPOSE_ARGS[@]}" \
+      ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} up -d --build ) 2>&1 \
+    | tee "$compose_log" >&2 && compose_rc=0 || compose_rc=$?
+  compose_output="$(cat "$compose_log")"
+  rm -f "$compose_log"
 
   if [[ $compose_rc -ne 0 ]]; then
     # Port clash: Docker refuses to start when a host port is already held.
@@ -1580,6 +1608,14 @@ print_summary() {
     say '  correct. For off-machine browsers under Docker Desktop, set it to the'
     say '  Windows/macOS host LAN IP so coturn advertises a reachable address.'
   fi
+  say ''
+  say '  Everyday commands, from this directory (.env tells compose which'
+  say '  services this install runs, so no flags are needed):'
+  say '    docker compose ps          what is running'
+  say '    docker compose stop        stop, keeping all data'
+  say '    docker compose up -d       start again'
+  say '    ./install.sh               change a setting (safe to re-run)'
+  say '  docs/INSTALL.md walks through testing each feature.'
   say '──────────────────────────────────────────────────────────────────'
 }
 
