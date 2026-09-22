@@ -118,6 +118,56 @@ a phone must be on the same network; a real certificate (Let's Encrypt) and
 access from outside the network are separate work; and the app has no sign-in,
 so anyone with the link and network access can join.
 
+## J. Agents off by default
+
+Today four scripted agents (SYS.OP, ENG.UNIT, DES.LEAD, VR.USER in
+`INITIAL_AGENTS`, `store.ts`) appear in every room: in the 3D scene, the
+participants list, the boardroom tiles and the AI-camera weights. They are
+demo furniture, and in a real review they are noise — and confusing beside
+real participants.
+
+- `hideAgents` defaults to **true** (it is `false` today), so a fresh room has
+  only real people. The existing toggle switches them back on for a demo.
+- Everything downstream must read correctly with zero agents: the participants
+  list, the boardroom layouts, the AI-camera weights panel, POI/attention
+  code, and `flushSessionToTracker`'s `participant_count` (real people, not
+  agents).
+- The mock capture simulation already only runs under capture.provider
+  'mock'; leave that as is.
+
+## K. Agent programmer, version 0.1
+
+The agents should do something. 0.1 gives a review a small set of
+user-written agents that read what actually happened and answer in the
+meeting, using the local model already installed.
+
+- **Definition** (edited on the curate page, stored with the review):
+  `agents: ReviewAgent[]` = `{ id, name, colour, role (free text),
+  instructions (the prompt), output: 'cards' | 'note' | 'both',
+  runs: 'onDemand' | 'onDemand+atEnd' }`. No tools, no autonomy, no
+  scheduling engine.
+- **Input** when it runs: the meeting transcript so far (speaker-labelled once
+  09-B lands), the component tree, the pointing timeline (09-C), the agenda
+  item, and the requirements (E). The same material the extractor gets.
+- **Execution**: a new `POST /agent` on capture-service — system prompt =
+  the agent's instructions plus the house rules (answer only from the
+  material; cite the part ids you were given; say "nothing to add" when there
+  is nothing), user turn = the material. Runs on the same Ollama model.
+  One run at a time per room, a hard cap on input size, and a visible
+  "<name> is thinking…" state.
+- **Output**: insight cards (typed RISK / RATIONALE / ACTION, attributed to
+  the agent, marked AI-generated and dismissible) and/or one note in the
+  transcript panel labelled with the agent's name.
+- **Trigger**: an "Ask <agent>" button per agent in the room; optionally also
+  a run at END SESSION alongside the extraction.
+- **Honesty**: agent output is never silently merged with what people said.
+  Cards carry the agent as `agentId`; the panel shows an AI badge; nothing an
+  agent writes is committed to the tracker without a human approving the card
+  (the approve/reject buttons already exist).
+- Out of scope for 0.1: agents that speak unprompted, agents that watch every
+  utterance in real time, tool use (PLM lookups, web), and per-install agent
+  libraries. Note them; do not build them.
+
 ---
 
 ## Sequencing
@@ -129,6 +179,8 @@ so anyone with the link and network access can join.
 | AB | H (people: roster + room participants, drop TEAM_MEMBERS) | medium |
 | AC | F (user-defined label fields + tracker grouping, settings screen) | medium-large |
 | AD | G (commit pins/viewpoints as comments) | small-medium |
+| AE | J (agents off by default) | small |
+| AF | K (agent programmer 0.1) | large; after 09-D, which gives it the tree + grounding |
 
 Each batch: Qwen drafts from a written spec, Claude reviews and runs it live
 in the Docker install (two browsers, phone-sized viewport for I) before
