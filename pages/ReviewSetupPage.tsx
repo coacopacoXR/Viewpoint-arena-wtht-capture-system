@@ -21,6 +21,7 @@ import type { ModelType } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { getIdentity } from '../lib/identity';
+import { useFlushingDebounce } from '../lib/useFlushingDebounce';
 import OnshapeBrowser, { type OnshapeLaunchDocument } from '../components/UI/OnshapeBrowser';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
 import {
@@ -100,18 +101,28 @@ const ReviewSetupPage: React.FC = () => {
   }, [reviewId, hydrateDraft, startNewDraft]);
 
   // ─── Auto-save the draft to the cloud (debounced + fingerprint) ───────────
+  // useFlushingDebounce, not a bare setTimeout: leaving the page (LOBBY, OPEN
+  // REVIEW ROOM, closing the tab) inside the 800 ms window used to cancel the
+  // pending save, so a just-captured viewpoint never reached the database.
+  const { schedule: scheduleSave, cancel: cancelSave } = useFlushingDebounce(
+    async (d: ReviewDraft) => {
+      const fp = fingerprint(d);
+      const res = await saveCuration(d);
+      if (res.ok) lastSyncedRef.current = fp;
+      setSaveState(res.ok ? 'saved' : 'error');
+    },
+    800,
+  );
   useEffect(() => {
     if (!hydrated || !draft || draft.reviewId !== reviewId) return;
     const fp = fingerprint(draft);
-    if (fp === lastSyncedRef.current) return; // no change since last sync
+    if (fp === lastSyncedRef.current) {
+      cancelSave(); // no change since last sync (or a remote echo landed)
+      return;
+    }
     setSaveState('saving');
-    const handle = setTimeout(async () => {
-      const res = await saveCuration(draft);
-      if (res.ok) lastSyncedRef.current = fp;
-      setSaveState(res.ok ? 'saved' : 'error');
-    }, 800);
-    return () => clearTimeout(handle);
-  }, [hydrated, draft, reviewId]);
+    scheduleSave(draft);
+  }, [hydrated, draft, reviewId, scheduleSave, cancelSave]);
 
   // ─── Live multi-user sync: pull remote edits as they happen ───────────────
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('connecting');
