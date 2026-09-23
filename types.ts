@@ -261,7 +261,9 @@ export interface Requirement {
   id: string;
   code: string;
   description: string;
-  category: 'MECHANICAL' | 'ELECTRICAL' | 'ERGONOMIC' | 'SAFETY';
+  /** Free text. A fixed list (MECHANICAL/ELECTRICAL/...) was our vocabulary
+   *  imposed on the user's; they type their own (user, 2026-09-23). */
+  category: string;
   status: 'MET' | 'PENDING' | 'AT_RISK';
 }
 

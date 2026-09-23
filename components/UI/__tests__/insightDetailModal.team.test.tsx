@@ -72,14 +72,16 @@ describe('InsightDetailModal — team (no hardcoded names)', () => {
     expect(inputs.length).toBeGreaterThan(0);
   });
 
-  it('shows room participants and roster when the combo box is focused', () => {
+  it('offers the people currently in the room when the combo box is focused', () => {
+    // There is no stored roster any more (user, 2026-09-23): the list is the
+    // room plus whatever the user types.
     render(<InsightDetailModal card={makeCard()} onClose={() => {}} />);
     const inputs = screen.getAllByRole('combobox');
     const input = inputs[inputs.length - 1];
     fireEvent.focus(input);
-    // Room participants and roster should appear in the dropdown.
+    // The people in the room appear; a stored roster no longer exists.
     expect(screen.getByText('Maria')).toBeInTheDocument();
-    expect(screen.getByText('TeamAlice')).toBeInTheDocument();
     expect(screen.getByText('LocalUser')).toBeInTheDocument();
+    expect(screen.queryByText('TeamAlice')).not.toBeInTheDocument();
   });
 });

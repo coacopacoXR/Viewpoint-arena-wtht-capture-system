@@ -204,17 +204,10 @@ create policy "public insert label fields" on review_label_fields for insert wit
 create policy "public update label fields" on review_label_fields for update using (true);
 create policy "public delete label fields" on review_label_fields for delete using (true);
 
--- Seed suggested fields on first run ONLY. If the user deleted a field,
--- re-running install.sh must not resurrect it. The `where not exists` guard
--- checks whether ANY row exists — if the table is empty, insert the seeds.
-insert into review_label_fields (id, name, position, values)
-select id, name, position, values
-from (values
-  ('product',  'Product',  0, array['Headphones', 'Bicycle', 'Synth']::text[]),
-  ('variant',  'Variant',  1, array['Mk I', 'Mk II', 'Prototype']::text[]),
-  ('phase',    'Phase',    2, array['Concept', 'Detailed Design', 'Validation']::text[])
-) as seeds(id, name, position, values)
-where not exists (select 1 from review_label_fields);
+-- NOT SEEDED. The fields are the user's own vocabulary (user, 2026-09-23:
+-- "the labels should be set by the user, not pre filled"), so the table
+-- starts empty and the tracker's "Label fields" screen is where they are
+-- created. Shipping Product/Variant/Phase made our guess look like a rule.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Grants for the self-hosted PostgREST stack.

@@ -64,23 +64,7 @@ describe('usePeopleOptions', () => {
     expect(remoteA!.inRoom).toBe(true);
   });
 
-  it('includes team roster members tagged as roster', () => {
-    mockTeam = [{ id: 't1', name: 'RosterPerson' }];
-    const { result } = renderHook(() => usePeopleOptions());
-    const roster = result.current.find((o) => o.name === 'RosterPerson');
-    expect(roster).toBeDefined();
-    expect(roster!.inRoom).toBe(false);
-    expect(roster!.source).toBe('roster');
-  });
 
-  it('de-duplicates same name from room and roster (room wins, tagged inRoom)', () => {
-    mockPresence.remoteParticipantList = [{ userId: 'r1', name: 'Alice', color: '#f00' }];
-    mockTeam = [{ id: 't1', name: 'Alice' }];
-    const { result } = renderHook(() => usePeopleOptions());
-    const alices = result.current.filter((o) => o.name.toLowerCase() === 'alice');
-    expect(alices).toHaveLength(1);
-    expect(alices[0].inRoom).toBe(true);
-  });
 
   it('de-duplicates case-insensitively', () => {
     mockPresence.remoteParticipantList = [{ userId: 'r1', name: 'alice', color: '#f00' }];
@@ -98,12 +82,12 @@ describe('usePeopleOptions', () => {
     expect(orphan!.inRoom).toBe(false);
   });
 
-  it('does not duplicate the card existing value when it matches someone', () => {
-    mockTeam = [{ id: 't1', name: 'OldAssignee' }];
+  it('does not duplicate the card existing value when someone in the room has that name', () => {
+    mockPresence.remoteParticipantList = [{ userId: 'u2', name: 'OldAssignee', color: '#fff' }];
     const { result } = renderHook(() => usePeopleOptions('OldAssignee'));
     const matches = result.current.filter((o) => o.name === 'OldAssignee');
     expect(matches).toHaveLength(1);
-    expect(matches[0].source).toBe('roster');
+    expect(matches[0].source).toBe('room');
   });
 
   it('does not add orphan for Unassigned', () => {
@@ -112,16 +96,4 @@ describe('usePeopleOptions', () => {
     expect(unassigned).toHaveLength(1);
   });
 
-  it('ordering: Unassigned, room (local first), roster, orphan', () => {
-    mockIdentity = { name: 'LocalUser', color: '#000' };
-    mockPresence.remoteParticipantList = [{ userId: 'r1', name: 'RemoteA', color: '#f00' }];
-    mockTeam = [{ id: 't1', name: 'RosterPerson' }];
-    const { result } = renderHook(() => usePeopleOptions('Ghost'));
-    const names = result.current.map((o) => o.name);
-    expect(names[0]).toBe('Unassigned');
-    expect(names[1]).toBe('LocalUser');
-    expect(names[2]).toBe('RemoteA');
-    expect(names[3]).toBe('RosterPerson');
-    expect(names[4]).toBe('Ghost');
-  });
 });

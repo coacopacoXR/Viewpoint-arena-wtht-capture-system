@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { clsx } from 'clsx';
-import { ChevronDown, Plus, User } from 'lucide-react';
+import { ChevronDown, Plus } from 'lucide-react';
 import { usePeopleOptions } from '../../lib/people';
-import { useActiveReviewStore } from '../../lib/activeReviewStore';
 
 interface AssigneeComboBoxProps {
   value: string;
@@ -12,9 +11,9 @@ interface AssigneeComboBoxProps {
 }
 
 // Combo box for assignee selection. Replaces the old hardcoded <select> with
-// a list assembled from live room participants and the review's team roster.
+// a list assembled from the people currently in the room, plus free text.
 // Typing a name that matches nobody offers "Add <name> to the team", which
-// appends to the roster (and therefore persists) and selects it.
+// is simply used as typed.
 const AssigneeComboBox: React.FC<AssigneeComboBoxProps> = ({
   value,
   onChange,
@@ -29,7 +28,6 @@ const AssigneeComboBox: React.FC<AssigneeComboBoxProps> = ({
   const listRef = useRef<HTMLUListElement>(null);
 
   const options = usePeopleOptions(value || undefined);
-  const addTeamMember = useActiveReviewStore((s) => s.addTeamMember);
 
   // Filter options by query.
   const filtered = query.trim()
@@ -70,12 +68,14 @@ const AssigneeComboBox: React.FC<AssigneeComboBoxProps> = ({
     setHighlightIdx(-1);
   }, [onChange]);
 
-  const handleAddToTeam = useCallback(() => {
+  // Typing a name simply uses it. There is no stored roster to add it to —
+  // per-review people lists were removed on request (user, 2026-09-23);
+  // managing people is the admin panel's job (docs/plan/11).
+  const handleUseTypedName = useCallback(() => {
     const name = query.trim();
     if (!name) return;
-    addTeamMember({ name });
     selectValue(name);
-  }, [query, addTeamMember, selectValue]);
+  }, [query, selectValue]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
@@ -92,7 +92,7 @@ const AssigneeComboBox: React.FC<AssigneeComboBoxProps> = ({
       if (highlightIdx < filtered.length) {
         selectValue(filtered[highlightIdx].name);
       } else if (showAddOption) {
-        handleAddToTeam();
+        handleUseTypedName();
       }
     } else if (e.key === 'Escape') {
       setOpen(false);
@@ -157,7 +157,6 @@ const AssigneeComboBox: React.FC<AssigneeComboBoxProps> = ({
               )}
             >
               {opt.inRoom && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />}
-              {opt.source === 'roster' && <User size={10} className="text-gray-400 shrink-0" />}
               <span className="truncate">{opt.name}</span>
             </li>
           ))}
@@ -165,7 +164,7 @@ const AssigneeComboBox: React.FC<AssigneeComboBoxProps> = ({
             <li
               role="option"
               aria-selected={highlightIdx === filtered.length}
-              onClick={handleAddToTeam}
+              onClick={handleUseTypedName}
               onMouseEnter={() => setHighlightIdx(filtered.length)}
               className={clsx(
                 'px-3 py-1.5 text-xs cursor-pointer flex items-center gap-2 border-t border-gray-100',

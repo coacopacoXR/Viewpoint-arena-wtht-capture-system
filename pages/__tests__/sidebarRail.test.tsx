@@ -35,13 +35,13 @@ describe('SidebarRail', () => {
     cleanup();
   });
 
-  it('renders seven tabs in the correct grouped order', () => {
+  it('renders six tabs in the correct grouped order', () => {
     render(<SidebarRail {...defaultProps} />);
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(7);
+    expect(tabs).toHaveLength(6);
     // Grouped order: Model | Views · Pins · Agenda | Reqs · People | Labels
     const labels = tabs.map((t) => t.getAttribute('aria-label'));
-    expect(labels).toEqual(['Asset', 'Viewpoints', 'Pins', 'Agenda', 'Requirements', 'People', 'Labels']);
+    expect(labels).toEqual(['Asset', 'Viewpoints', 'Pins', 'Agenda', 'Requirements', 'Labels']);
   });
 
   it('marks the active tab with aria-selected="true"', () => {
@@ -71,14 +71,13 @@ describe('SidebarRail', () => {
 
   it('shows count badges when count > 0', () => {
     render(<SidebarRail {...defaultProps} />);
-    // Viewpoints=3, Pins=2, Agenda=1, Reqs=5, People=4, Labels=2
+    // Viewpoints=3, Pins=2, Agenda=1, Reqs=5, Labels=2 (People is gone).
     // Asset has no count (always 0)
     expect(screen.getByText('3')).toBeInTheDocument();
     // Pins=2 and Labels=2 both produce '2' badges
     expect(screen.getAllByText('2')).toHaveLength(2);
     expect(screen.getByText('1')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('4')).toBeInTheDocument();
   });
 
   it('does not show a count badge for asset (count=0)', () => {

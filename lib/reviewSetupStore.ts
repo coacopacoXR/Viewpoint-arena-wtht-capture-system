@@ -84,16 +84,6 @@ export interface ReviewDraft {
   updatedAt: number;
 }
 
-// Seed set offered by the "Start from the sample set" button on an empty
-// requirements tab. Moved here from store.ts so it travels with the review
-// instead of being a global constant.
-export const SAMPLE_REQUIREMENTS: Requirement[] = [
-  { id: 'r1', code: 'REQ-M-042', description: 'Rotary knobs must withstand 50N shear force.', category: 'MECHANICAL', status: 'MET' },
-  { id: 'r2', code: 'REQ-E-101', description: 'Main display assembly must be removable within 60s.', category: 'ELECTRICAL', status: 'PENDING' },
-  { id: 'r3', code: 'REQ-U-305', description: 'Primary controls must be reachable from 5th %ile female hand size.', category: 'ERGONOMIC', status: 'AT_RISK' },
-  { id: 'r4', code: 'REQ-S-900', description: 'No sharp edges < 0.5mm radius on user interface surfaces.', category: 'SAFETY', status: 'MET' },
-  { id: 'r5', code: 'REQ-M-200', description: 'Total unit weight must not exceed 3.2kg.', category: 'MECHANICAL', status: 'PENDING' },
-];
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
@@ -144,7 +134,7 @@ interface ReviewSetupState {
   updateRequirement: (id: string, patch: Partial<Requirement>) => void;
   removeRequirement: (id: string) => void;
   reorderRequirements: (fromIdx: number, toIdx: number) => void;
-  insertSampleRequirements: () => void;
+
 
   // Team (people roster)
   addTeamMember: (member: Omit<TeamMember, 'id'>) => string;
@@ -460,7 +450,10 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
 
       addRequirement: (req) => {
         const id = uid();
-        const code = req.code.trim() || `REQ-${id.slice(0, 4).toUpperCase()}`;
+        // No invented code. A blank one stays blank: naming is the user's
+        // job, and "REQ-A1B2" pretending to be their scheme is worse than
+        // an empty field (user, 2026-09-23).
+        const code = req.code.trim();
         set((s) => {
           if (!s.draft) return s;
           const next: ReviewDraft = {
@@ -502,14 +495,6 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         return { draft: touch({ ...s.draft, requirements: arr }) };
       }),
 
-      insertSampleRequirements: () => set((s) => {
-        if (!s.draft) return s;
-        const next: ReviewDraft = {
-          ...s.draft,
-          requirements: [...s.draft.requirements, ...SAMPLE_REQUIREMENTS],
-        };
-        return { draft: touch(next) };
-      }),
 
       addTeamMember: (member) => {
         const id = uid();

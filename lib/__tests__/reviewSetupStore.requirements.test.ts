@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useReviewSetupStore, SAMPLE_REQUIREMENTS, type ReviewDraft } from '../reviewSetupStore';
+import { useReviewSetupStore, type ReviewDraft } from '../reviewSetupStore';
 
 function resetStore() {
   useReviewSetupStore.setState({ draft: null });
@@ -30,19 +30,6 @@ describe('reviewSetupStore — requirements', () => {
     expect(draft.requirements[0].id).toBe(id);
     expect(draft.requirements[0].code).toBe('REQ-001');
     expect(draft.requirements[0].description).toBe('Test requirement');
-  });
-
-  it('addRequirement falls back to a generated code when code is blank', () => {
-    useReviewSetupStore.getState().startNewDraft('rev-1');
-    useReviewSetupStore.getState().addRequirement({
-      code: '   ',
-      description: 'No code given',
-      category: 'SAFETY',
-      status: 'MET',
-    });
-    const req = useReviewSetupStore.getState().draft!.requirements[0];
-    expect(req.code).toMatch(/^REQ-/);
-    expect(req.code.length).toBeGreaterThan(4);
   });
 
   it('updateRequirement patches a single requirement', () => {
@@ -83,13 +70,17 @@ describe('reviewSetupStore — requirements', () => {
     expect(codes).toEqual(['B', 'C', 'A']);
   });
 
-  it('insertSampleRequirements inserts exactly five sample rows', () => {
+
+  it('leaves a blank code blank instead of inventing one', () => {
+    // "REQ-A1B2" pretended to be the user's numbering scheme (user, 2026-09-23).
     useReviewSetupStore.getState().startNewDraft('rev-1');
-    useReviewSetupStore.getState().insertSampleRequirements();
-    const reqs = useReviewSetupStore.getState().draft!.requirements;
-    expect(reqs).toHaveLength(SAMPLE_REQUIREMENTS.length);
-    expect(reqs).toHaveLength(5);
-    expect(reqs.map((r) => r.code)).toEqual(SAMPLE_REQUIREMENTS.map((r) => r.code));
+    useReviewSetupStore.getState().addRequirement({
+      code: '   ',
+      description: 'No code given',
+      category: '',
+      status: 'PENDING',
+    });
+    expect(useReviewSetupStore.getState().draft!.requirements[0].code).toBe('');
   });
 
   it('updatedAt changes when a requirement is added', () => {

@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import { usePresence } from './PresenceContext';
-import { useActiveReviewStore } from './activeReviewStore';
 import { getIdentity } from './identity';
 
-// A person on the review's team roster. Stored as jsonb on ReviewDraft.
+// A person. Kept as a type for the admin panel work (plan 11); no per-review
+// roster is stored any more.
 // `id` is a stable key for reordering / editing; `name` is what gets written
 // onto cards as the assignee string.
 export interface TeamMember {
@@ -19,23 +19,13 @@ export interface TeamMember {
 export interface PeopleOption {
   name: string;
   inRoom: boolean;
-  // 'unassigned' | 'room' | 'roster' | 'orphan' — lets the UI group or tag.
-  source: 'unassigned' | 'room' | 'roster' | 'orphan';
+  // 'unassigned' | 'room' | 'orphan' — lets the UI group or tag.
+  source: 'unassigned' | 'room' | 'orphan';
 }
-
-// Assignees on cards/tracker items stay plain strings (`assignee: string`).
-// This helper assembles the dropdown list from live sources; it does NOT
-// introduce user ids on cards. The boundary is intentional — a name is the
-// assignee's identity until a later batch adds real user ids.
-// A stable empty array. `?? []` inside a zustand selector builds a NEW array
-// on every render whenever the source is null, so the store sees a changed
-// snapshot forever and React throws "Maximum update depth exceeded" (error
-// #185 — it took down the lobby on 2026-09-22).
-const NO_TEAM: TeamMember[] = [];
 
 export function usePeopleOptions(currentAssignee?: string): PeopleOption[] {
   const { remoteParticipantList, localUserId } = usePresence();
-  const team = useActiveReviewStore((s) => s.config?.team ?? NO_TEAM);
+
 
   return useMemo(() => {
     const result: PeopleOption[] = [{ name: 'Unassigned', inRoom: false, source: 'unassigned' }];
@@ -60,13 +50,10 @@ export function usePeopleOptions(currentAssignee?: string): PeopleOption[] {
       result.push({ name: p.name, inRoom: true, source: 'room' });
     }
 
-    // Review's team roster.
-    for (const m of team) {
-      const key = m.name.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      result.push({ name: m.name, inRoom: false, source: 'roster' });
-    }
+    // No stored roster. A per-review list of people was removed on request
+    // (user, 2026-09-23: "the adding people shouldn't be done that way,
+    // remove it all together"); managing people belongs to the admin panel
+    // in docs/plan/11-accounts-and-admin.md, not to every review.
 
     // Preserve the card's existing value even if it matches nobody — an old
     // assignee must never be silently dropped from the list.
@@ -79,5 +66,5 @@ export function usePeopleOptions(currentAssignee?: string): PeopleOption[] {
     }
 
     return result;
-  }, [remoteParticipantList, localUserId, team, currentAssignee]);
+  }, [remoteParticipantList, localUserId, currentAssignee]);
 }
