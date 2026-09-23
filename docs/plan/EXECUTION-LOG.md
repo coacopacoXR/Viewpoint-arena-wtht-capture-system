@@ -598,11 +598,15 @@ runs caught, batch by batch, is the point of this entry:
 - Requirements: no sample set, no generated codes, free-text category.
 
 ### Follow-ups
-- **Rate limiting on the capture endpoints is still missing.** They are now
-  behind the front-door password on every path, but a deployment that chose to
-  stay open (the default) can still be asked to transcribe on a loop by anyone
-  who can reach it, and an unlocked user can do the same. The password is a
-  door, not a budget.
+- **Capture spending is bounded per IP, not per deployment.** Correcting what
+  the previous entry claimed: `/api/capture/` IS rate-limited in the
+  self-hosted stack — `deploy/nginx/proxy.conf` has had
+  `limit_req_zone ... rate=30r/m` with `burst=20` all along, which the
+  8-second live-transcript chunk rate (7.5 req/min) sits well inside. What is
+  actually missing: the same limit on **Vercel**, where there is no nginx in
+  front, and any ceiling on total spend — 30 requests a minute from each of
+  many addresses, or from one unlocked insider, is still a lot of GPU. A
+  password is a door and a per-IP limit is a throttle; neither is a budget.
 - **Vercel limits vs capture:** Functions accept 100 MB bodies, capture-service
   allows 200 MB, and the proxy waits up to 15 minutes. A long meeting on
   Vercel will hit the platform limit first. Self-hosted nginx has no such cap.
