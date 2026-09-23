@@ -34,7 +34,7 @@ interface Props {
 const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
   const {
     insightCards, isBoardroomMode, sessionHostId,
-    followingRemoteUserId, setFollowingRemoteUser,
+    followingRemoteUserId, setFollowingRemoteUser, followNudged,
     boardroomLeaderId, time, isPrivacyMode, endMeeting,
     liveChat, addLiveChatMessage,
   } = useStore(useShallow(state => ({
@@ -43,6 +43,7 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
     sessionHostId: state.sessionHostId,
     followingRemoteUserId: state.followingRemoteUserId,
     setFollowingRemoteUser: state.setFollowingRemoteUser,
+    followNudged: state.followNudged,
     boardroomLeaderId: state.boardroomLeaderId,
     time: state.time,
     isPrivacyMode: state.isPrivacyMode,
@@ -93,14 +94,16 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
     return () => clearInterval(interval);
   }, [broadcastPresence]);
 
-  // Auto-follow host or first remote participant
+  // Auto-follow host or first remote participant — but never over the user's
+  // own choice: once they tap Explore, someone joining or leaving (which
+  // changes the list length) must not pull them back onto the host.
   useEffect(() => {
+    if (freeExplore) return;
     const hostId = sessionHostId ?? remoteParticipantList[0]?.userId ?? null;
     if (hostId && hostId !== localUserId) {
       setFollowingRemoteUser(hostId);
-      setFreeExplore(false);
     }
-  }, [sessionHostId, remoteParticipantList.length]);
+  }, [sessionHostId, remoteParticipantList.length, freeExplore]);
 
   // When boardroom activates, make sure we follow the boardroom leader
   useEffect(() => {
@@ -362,7 +365,12 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
                 <div className="w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0" style={{ background: followingParticipant.color }}>
                   {followingParticipant.name[0]}
                 </div>
-                <span className="text-white text-[11px] font-mono">Following <span className="font-bold">{followingParticipant.name}</span></span>
+                <span className="text-white text-[11px] font-mono">
+                  Following <span className="font-bold">{followingParticipant.name}</span>
+                  {followNudged && (
+                    <span className="text-white/60"> — moving on your own · snapping back</span>
+                  )}
+                </span>
                 <button
                   onClick={() => { setFollowingRemoteUser(null); setFreeExplore(true); }}
                   className="text-[10px] font-mono px-1.5 py-0.5 rounded"

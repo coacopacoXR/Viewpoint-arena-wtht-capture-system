@@ -7,6 +7,11 @@ export interface ParticipantPresence {
   position: [number, number, number];
   lookAt: [number, number, number];
   sameRoom?: boolean;
+  // Who this client's camera is locked to, and whether they are mid-nudge
+  // (dragging their own view without leaving the follow). Optional so an
+  // older client's payload stays valid — a missing field means "not following".
+  followingUserId?: string | null;
+  followNudged?: boolean;
 }
 
 type RoomMessage =

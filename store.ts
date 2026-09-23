@@ -200,6 +200,10 @@ interface AppState {
   // Advanced Collaboration Features
   leaderId: string | 'USER' | null;
   followingRemoteUserId: string | null; // camera + agents locked to a remote participant
+  // True while the user is dragging their own view *without* leaving the
+  // follow: the camera stops tracking the leader for the length of the drag
+  // plus FOLLOW_RESUME_DELAY_MS, then eases back. Still counts as following.
+  followNudged: boolean;
   // Split screen can follow either an AI agent or a real participant.
   // Discriminated by `kind` so the renderer knows which lookup path to use.
   splitScreenTarget:
@@ -298,6 +302,7 @@ interface AppState {
   setActiveAgent: (id: string | null) => void;
   setLeader: (id: string | 'USER' | null) => void;
   setFollowingRemoteUser: (userId: string | null) => void;
+  setFollowNudged: (nudged: boolean) => void;
   setSplitScreenTarget: (target: AppState['splitScreenTarget']) => void;
   setUserInteractionPoint: (pos: Vector3) => void;
   setLaserActive: (active: boolean) => void;
@@ -422,6 +427,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeAgentId: null,
   leaderId: null,
   followingRemoteUserId: null,
+  followNudged: false,
   splitScreenTarget: null,
   userInteractionPoint: new Vector3(),
   isLaserActive: false,
@@ -518,13 +524,16 @@ export const useStore = create<AppState>((set, get) => ({
     return { pois: next };
   }),
   setActiveAgent: (id) => set({ activeAgentId: id }),
-  setLeader: (id) => set({ leaderId: id, followingRemoteUserId: null }),
+  // A nudge belongs to the follow it happened during, so every change of who
+  // leads clears it — otherwise a stale nudge would freeze the next follow.
+  setLeader: (id) => set({ leaderId: id, followingRemoteUserId: null, followNudged: false }),
   // Follow a remote user: locks camera and makes agents follow too
   setFollowingRemoteUser: (userId) => set(
     userId
-      ? { followingRemoteUserId: userId, leaderId: 'USER', viewMode: ViewMode.FREE, activeAgentId: null }
-      : { followingRemoteUserId: null, leaderId: null }
+      ? { followingRemoteUserId: userId, leaderId: 'USER', viewMode: ViewMode.FREE, activeAgentId: null, followNudged: false }
+      : { followingRemoteUserId: null, leaderId: null, followNudged: false }
   ),
+  setFollowNudged: (followNudged) => set({ followNudged }),
   setSplitScreenTarget: (target) => set({ splitScreenTarget: target }),
   setUserInteractionPoint: (pos) => set({ userInteractionPoint: pos }),
   setLaserActive: (active) => set({ isLaserActive: active }),

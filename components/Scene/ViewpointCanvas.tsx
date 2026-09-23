@@ -16,7 +16,14 @@ import type { RemoteLaserState } from '../../lib/usePartyPresence';
 import { isLaserEntryFresh } from '../../lib/laserTargetRef';
 import { ViewMode } from '../../types';
 import { xrStore } from '../../lib/xrStore';
+import { computeOrbitPivot, getModelCenter } from '../../lib/orbitPivot';
+import { FOLLOW_RESUME_DELAY_MS } from '../../lib/followTiming';
 import * as THREE from 'three';
+
+// Follow ease, expressed per second instead of per frame: 1 - e^(-k·dt) equals
+// the old 0.06-per-frame lerp at 60fps (-60·ln(1-0.06) ≈ 3.7) but no longer
+// runs three times as fast on a 180Hz display.
+const FOLLOW_EASE_K = 3.7;
 
 // Syncs followingRemoteUserId with boardroomLeaderId when in boardroom mode.
 // Lives outside the Canvas so it can use both useStore and usePresence.
@@ -132,6 +139,7 @@ const SceneRenderer = () => {
   // Use selectors to avoid re-rendering on every store update (like time)
   const viewMode = useStore(state => state.viewMode);
   const followingRemoteUserId = useStore(state => state.followingRemoteUserId);
+  const setFollowNudged = useStore(state => state.setFollowNudged);
   const { remoteParticipants } = usePresence();
   const activeAgentId = useStore(state => state.activeAgentId);
   const splitScreenTarget = useStore(state => state.splitScreenTarget);
@@ -164,6 +172,7 @@ const SceneRenderer = () => {
   const targetVec = useRef(new THREE.Vector3());
   const aiTargetRef = useRef(new THREE.Vector3(0,0,0));
   const aiPosRef = useRef(new THREE.Vector3(0,5,5));
+  const forwardVec = useRef(new THREE.Vector3());
 
   // Interaction State for AI Mode Override
   const isInteracting = useRef(false);
@@ -171,21 +180,66 @@ const SceneRenderer = () => {
 
   // Idle timeout for auto-resume after disengage
   const idleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const IDLE_RESUME_DELAY = 3000; // 3 seconds of idle time before resuming
+  // Separate timer for the follow nudge, so looking around and an
+  // agent/boardroom detach can't cancel each other's resume.
+  const followResumeTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const prevFollowingIdRef = useRef<string | null>(followingRemoteUserId);
+  const prevViewModeRef = useRef<ViewMode>(viewMode);
 
-  // Clear idle timeout on unmount
+  // Clear idle timeouts on unmount
   useEffect(() => {
     return () => {
-      if (idleTimeoutRef.current) {
-        clearTimeout(idleTimeoutRef.current);
-      }
+      if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+      if (followResumeTimerRef.current) clearTimeout(followResumeTimerRef.current);
     };
   }, []);
+
+  // Move the orbit pivot out to the model's depth *along the current line of
+  // sight*. Every driven camera mode parks the target one unit in front of the
+  // eye (presence broadcasts lookAt = position + forward), so without this a
+  // drag after leaving a follow spins the user on the spot instead of orbiting
+  // the model, and zoom is stuck at minDistance. The pivot stays on the view
+  // ray, so nothing the user sees moves.
+  const repivot = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    const cam = defaultCamera as THREE.PerspectiveCamera;
+    forwardVec.current.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    controls.target.copy(
+      computeOrbitPivot(cam.position, forwardVec.current, getModelCenter(scene)),
+    );
+    controls.update();
+  }, [defaultCamera, scene]);
+
+  // Repivot exactly where a driven camera hands control back — and nowhere
+  // else: a camera jump to a review pin sets the target on purpose.
+  useEffect(() => {
+    const prev = prevFollowingIdRef.current;
+    prevFollowingIdRef.current = followingRemoteUserId;
+    if (!prev || followingRemoteUserId) return;
+    if (followResumeTimerRef.current) {
+      clearTimeout(followResumeTimerRef.current);
+      followResumeTimerRef.current = null;
+    }
+    repivot();
+  }, [followingRemoteUserId, repivot]);
+
+  useEffect(() => {
+    const prev = prevViewModeRef.current;
+    prevViewModeRef.current = viewMode;
+    // Only the modes whose frame branch drives controls.target leave a pivot
+    // worth correcting. Split screen leaves the user's own target alone.
+    const prevDroveTarget =
+      prev === ViewMode.FOLLOW_PRESENTER ||
+      prev === ViewMode.POV_AGENT ||
+      prev === ViewMode.AI_GUIDED;
+    if (prevDroveTarget && viewMode === ViewMode.FREE) repivot();
+  }, [viewMode, repivot]);
 
   // Handle idle timeout for auto-resume when temporarily disengaged from agent POV
   useEffect(() => {
     if (temporarilyDisengagedFromAgentId && !isInteracting.current) {
-      idleTimeoutRef.current = setTimeout(() => { resumeFollowingAgent(); }, IDLE_RESUME_DELAY);
+      idleTimeoutRef.current = setTimeout(() => { resumeFollowingAgent(); }, FOLLOW_RESUME_DELAY_MS);
       return () => { if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current); };
     }
   }, [temporarilyDisengagedFromAgentId, resumeFollowingAgent]);
@@ -193,7 +247,7 @@ const SceneRenderer = () => {
   // Handle idle timeout for auto-resume when detached from boardroom presenter
   useEffect(() => {
     if (boardroomPresenterDetachedId && !isInteracting.current) {
-      idleTimeoutRef.current = setTimeout(() => { resumeBoardroomPresenter(); }, IDLE_RESUME_DELAY);
+      idleTimeoutRef.current = setTimeout(() => { resumeBoardroomPresenter(); }, FOLLOW_RESUME_DELAY_MS);
       return () => { if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current); };
     }
   }, [boardroomPresenterDetachedId, resumeBoardroomPresenter]);
@@ -207,9 +261,26 @@ const SceneRenderer = () => {
       idleTimeoutRef.current = null;
     }
 
+    // Following a person in the arena: a drag is a look-around, not a
+    // departure. The frame loop stops tracking the leader while the flag is
+    // set, and the pivot moves to the model's depth so the drag orbits the
+    // model rather than the user's own head. followingRemoteUserId is left
+    // alone — only the Free View button ends a follow.
+    if (followingRemoteUserId && !isBoardroomMode) {
+      if (followResumeTimerRef.current) {
+        clearTimeout(followResumeTimerRef.current);
+        followResumeTimerRef.current = null;
+      }
+      setFollowNudged(true);
+      repivot();
+    }
+
     // If following an agent, disengage on drag
     if (viewMode === ViewMode.POV_AGENT && activeAgentId) {
       temporarilyDisengageFromAgent();
+      // Right now, not in the viewMode effect below: OrbitControls reads the
+      // target on the very next pointermove, before React re-renders.
+      repivot();
     }
 
     if (isBoardroomMode) {
@@ -230,41 +301,57 @@ const SceneRenderer = () => {
         detachBoardroomPresenter(followingRemoteUserId);
       }
     }
-  }, [viewMode, activeAgentId, isBoardroomMode, followingRemoteUserId, boardroomPresenterDetachedId, localUserId, temporarilyDisengageFromAgent, detachBoardroomPresenter, broadcastTakeoverAttempt]);
+  }, [viewMode, activeAgentId, isBoardroomMode, followingRemoteUserId, boardroomPresenterDetachedId, localUserId, temporarilyDisengageFromAgent, detachBoardroomPresenter, broadcastTakeoverAttempt, setFollowNudged, repivot]);
 
   const handleCanvasInteractionEnd = useCallback(() => {
     isInteracting.current = false;
     lastInteractionEnd.current = Date.now();
 
+    // Follow nudge: ease back to the leader once the user lets go and idles.
+    // The next drag cancels this timer (see interaction start).
+    if (useStore.getState().followNudged) {
+      if (followResumeTimerRef.current) clearTimeout(followResumeTimerRef.current);
+      followResumeTimerRef.current = setTimeout(() => {
+        followResumeTimerRef.current = null;
+        setFollowNudged(false);
+      }, FOLLOW_RESUME_DELAY_MS);
+    }
+
     // Agent POV detach: auto-resume after idle
     if (temporarilyDisengagedFromAgentId) {
       if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
-      idleTimeoutRef.current = setTimeout(() => { resumeFollowingAgent(); }, IDLE_RESUME_DELAY);
+      idleTimeoutRef.current = setTimeout(() => { resumeFollowingAgent(); }, FOLLOW_RESUME_DELAY_MS);
     }
 
     // Boardroom presenter detach: auto-resume after idle
     if (boardroomPresenterDetachedId) {
       if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
-      idleTimeoutRef.current = setTimeout(() => { resumeBoardroomPresenter(); }, IDLE_RESUME_DELAY);
+      idleTimeoutRef.current = setTimeout(() => { resumeBoardroomPresenter(); }, FOLLOW_RESUME_DELAY_MS);
     }
-  }, [temporarilyDisengagedFromAgentId, boardroomPresenterDetachedId, resumeFollowingAgent, resumeBoardroomPresenter]);
+  }, [temporarilyDisengagedFromAgentId, boardroomPresenterDetachedId, resumeFollowingAgent, resumeBoardroomPresenter, setFollowNudged]);
 
   // We use render priority 1 to run after standard r3f loops.
-  useFrame((state) => {
+  useFrame((state, delta) => {
     const mainCam = defaultCamera as THREE.PerspectiveCamera;
     const controls = controlsRef.current;
     const elapsedTime = state.clock.getElapsedTime();
-    
+
     // --- 1. CAMERA MOVEMENT LOGIC (Main View) ---
 
     if (followingRemoteUserId) {
-      // Highest priority: follow a remote participant's camera
-      const remote = remoteParticipants.current.get(followingRemoteUserId);
+      // Highest priority: follow a remote participant's camera — unless the
+      // user is mid-nudge, in which case their drag owns the camera until the
+      // resume timer clears the flag. Read per frame from the store so the
+      // flag costs no re-render.
+      const remote = useStore.getState().followNudged
+        ? undefined
+        : remoteParticipants.current.get(followingRemoteUserId);
       if (remote) {
+        const alpha = 1 - Math.exp(-FOLLOW_EASE_K * delta);
         posVec.current.set(...remote.position);
         targetVec.current.set(...remote.lookAt);
-        mainCam.position.lerp(posVec.current, 0.06);
-        if (controls) controls.target.lerp(targetVec.current, 0.06);
+        mainCam.position.lerp(posVec.current, alpha);
+        if (controls) controls.target.lerp(targetVec.current, alpha);
       }
     } else if (viewMode === ViewMode.FOLLOW_PRESENTER) {
        const angle = (elapsedTime * 0.2);

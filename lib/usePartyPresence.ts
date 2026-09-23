@@ -211,6 +211,10 @@ export interface RemoteParticipantInfo {
   name: string;
   color: string;
   sameRoom?: boolean;
+  /** Whose camera this participant is locked to. Absent = following nobody. */
+  followingUserId?: string | null;
+  /** True while they are dragging their own view without leaving the follow. */
+  followNudged?: boolean;
 }
 
 export interface UsePartyPresenceReturn {
@@ -267,7 +271,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
 
   function syncList() {
     setRemoteParticipantList(
-      Array.from(remoteParticipants.current.values()).map(({ userId, name, color, sameRoom }) => ({ userId, name, color, sameRoom })),
+      Array.from(remoteParticipants.current.values()).map(({ userId, name, color, sameRoom, followingUserId, followNudged }) => ({ userId, name, color, sameRoom, followingUserId, followNudged })),
     );
   }
 
@@ -302,6 +306,11 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       if (!s || s.readyState !== WebSocket.OPEN) return;
       if (joinStateRef.current === 'admitted' || joinStateRef.current === 'declined') return;
       const { position, lookAt } = lastPresenceRef.current;
+      // Same follow fields broadcastPresence sends: a PartySocket reconnect
+      // re-identifies itself through here, and a knock without them would
+      // blank the leader's "who is following me" badge until the scene's next
+      // frame broadcast (~100ms later).
+      const { followingRemoteUserId, followNudged } = useStore.getState();
       s.send(JSON.stringify({
         type: 'PRESENCE',
         payload: {
@@ -311,6 +320,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
           position,
           lookAt,
           sameRoom: sameRoomRef.current,
+          followingUserId: followingRemoteUserId,
+          followNudged,
         },
       } as RoomMessage));
     };
@@ -336,9 +347,15 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         syncList();
       } else if (msg.type === 'PRESENCE') {
         if (msg.payload.userId !== userRef.current.userId) {
-          const isNew = !remoteParticipants.current.has(msg.payload.userId);
+          const prev = remoteParticipants.current.get(msg.payload.userId);
           remoteParticipants.current.set(msg.payload.userId, msg.payload);
-          if (isNew) syncList();
+          // The follow fields drive the leader's "who is following me" badge,
+          // so a change in either has to reach the list — not only a new join.
+          // Missing fields (an older client) read as "following nobody".
+          const followChanged =
+            (prev?.followingUserId ?? null) !== (msg.payload.followingUserId ?? null) ||
+            (prev?.followNudged ?? false) !== (msg.payload.followNudged ?? false);
+          if (!prev || followChanged) syncList();
         }
       } else if (msg.type === 'LEAVE') {
         const leavingId = msg.payload.userId;
@@ -583,9 +600,22 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
 
     lastPresenceRef.current = { position, lookAt };
 
+    // Read here rather than passed in, so every broadcaster — the scene's
+    // frame loop and mobile's 5s ping alike — reports who it is following.
+    const { followingRemoteUserId, followNudged } = useStore.getState();
+
     const msg: RoomMessage = {
       type: 'PRESENCE',
-      payload: { userId: userRef.current.userId, name: userRef.current.name, color: userRef.current.color, position, lookAt, sameRoom: sameRoomRef.current },
+      payload: {
+        userId: userRef.current.userId,
+        name: userRef.current.name,
+        color: userRef.current.color,
+        position,
+        lookAt,
+        sameRoom: sameRoomRef.current,
+        followingUserId: followingRemoteUserId,
+        followNudged,
+      },
     };
     socket.send(JSON.stringify(msg));
   }

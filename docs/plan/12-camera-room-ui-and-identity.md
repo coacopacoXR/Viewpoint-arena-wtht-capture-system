@@ -104,6 +104,16 @@ Reaching a workspace only when a comment already exists is a rule nobody
 would choose deliberately; it is most likely an accident of where the button
 was put. Find out why, then give it an honest entry point.
 
+**DECIDED 2026-09-23 (night): Option B** from the sketch published as the
+"Room Layout Options" artifact (https://claude.ai/artifact/LxwpgbWA2vueWeriaFu5bu).
+Bottom: a short call bar (mic, speaker, same room · Free/Lead/AI/Split ·
+leave) plus a separate host-only **Manage** button beside it. Top: one bar with
+Highlight Part/Model and a "Pointer ▾" menu (finger, hover) on the left and
+people / share / privacy / boardroom on the right. Right: the side panel runs
+the full height with the transcript at its foot. The manager view opens IN
+PLACE of the side panel and closing it brings the panel back. Play/stop and
+OP.STATUS are removed.
+
 **B1–B4 are one layout pass, not four tickets.** They all move the same few
 pixels, and doing them separately means three re-layouts. Worth a sketch the
 user can look at before any of it is built.

@@ -1,28 +1,19 @@
 import React, { useRef, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
-import { Vector3, Vector2, Raycaster, Mesh, Group, Box3 } from 'three';
+import { Vector3, Vector2, Raycaster, Mesh, Group } from 'three';
 import * as THREE from 'three';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
 import { setLaserEntry, clearLaserEntry } from '../../lib/laserTargetRef';
 import { fingerPointerRef } from '../../lib/fingerPointerRef';
 import { pointingSourceRef } from '../../lib/pointingSourceRef';
+import { getModelCenter } from '../../lib/orbitPivot';
 
-// Find the active model in the scene (any object tagged with userData.modelId)
-// and project its center to NDC. Returns true on success.
+// Project the active model's center to NDC. Returns true on success.
 function computeModelCenterNDC(scene: THREE.Scene, camera: THREE.Camera, out: Vector2): boolean {
-    const box = new Box3();
-    let found = false;
-    scene.traverse((obj) => {
-        if ((obj as any).isMesh && obj.userData?.modelId) {
-            box.expandByObject(obj);
-            found = true;
-        }
-    });
-    if (!found) return false;
-    const center = new Vector3();
-    box.getCenter(center);
+    const center = getModelCenter(scene);
+    if (!center) return false;
     center.project(camera); // world → NDC
     out.set(center.x, center.y);
     return true;

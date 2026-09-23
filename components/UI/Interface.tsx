@@ -34,6 +34,8 @@ import BoardroomShell from './Boardroom/BoardroomShell';
 import BoardroomCountdown from './BoardroomCountdown';
 import SplitViewOverlay from './SplitViewOverlay';
 import JoinRequests from './JoinRequests';
+import FollowersBadge, { FollowingBadge } from './FollowersBadge';
+import { useLeaderAutoRelease } from '../../lib/useLeaderAutoRelease';
 
 const Button: React.FC<{ 
   active?: boolean; 
@@ -198,6 +200,11 @@ const Interface: React.FC = () => {
   // Derived state for HUD: Who is following me?
   const myFollowers = agents.filter(a => a.behavior === 'FOLLOWING' || (leaderId === 'USER'));
 
+  // Real people whose camera is locked to mine (myFollowers above is the agents).
+  const humanFollowers = remoteParticipantList.filter(p => p.followingUserId === localUserId);
+  // When the last of them leaves, leading has nothing left to lead.
+  const { noteVisible: leaderReleaseNote } = useLeaderAutoRelease();
+
   const handleSplitToggle = () => {
       if (viewMode === ViewMode.SPLIT_SCREEN) {
           setViewMode(ViewMode.FREE);
@@ -210,14 +217,31 @@ const Interface: React.FC = () => {
   };
 
   const handleLeaderToggle = () => {
-      if (leaderId || followingRemoteUserId) {
-          setLeader(null);
+      // A follower detaches only themselves. Broadcasting null here used to
+      // stop *every* client following, so one person leaving the follow ended
+      // the session for people who never asked to leave it.
+      if (followingRemoteUserId) {
           setFollowingRemoteUser(null);
+          return;
+      }
+      if (leaderId) {
+          setLeader(null);
           broadcastLeaderChange(null);
       } else {
           setLeader('USER');
           broadcastLeaderChange(localUserId);
       }
+  };
+
+  // The only control that leaves a follow or stops leading. Local when I am
+  // following; a leader has to tell the room too, or the followers stay locked
+  // to someone who has stopped leading.
+  const handleFreeView = () => {
+      const iAmLeading = leaderId === 'USER' && !followingRemoteUserId;
+      setViewMode(ViewMode.FREE);
+      setActiveAgent(null);
+      if (iAmLeading) broadcastLeaderChange(null);
+      setLeader(null);
   };
   
   const handleAcceptFollow = () => {
@@ -346,7 +370,10 @@ const Interface: React.FC = () => {
               </button>
               {leaderId && !followingRemoteUserId && (
                   <div className="w-64 mt-1 px-2 py-1.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] text-indigo-800 leading-tight">
-                      You are the session leader. All agents are currently following your viewport formation.
+                      You are the session leader.{' '}
+                      {humanFollowers.length > 0
+                          ? `${humanFollowers.map(p => p.name).join(', ')} ${humanFollowers.length === 1 ? 'is' : 'are'} following your view.`
+                          : 'Nobody is following yet.'}
                   </div>
               )}
               {followingRemoteUserId && (
@@ -693,8 +720,9 @@ const Interface: React.FC = () => {
                                       key={p.userId}
                                       onClick={() => {
                                           if (isFollowing) {
+                                              // Local only — the leader (and everyone
+                                              // else following them) keeps going.
                                               setFollowingRemoteUser(null);
-                                              broadcastLeaderChange(null);
                                           } else {
                                               // Anti-circular: cannot follow someone who is already following you
                                               if (leaderId === 'USER' && !followingRemoteUserId) return;
@@ -979,16 +1007,23 @@ const Interface: React.FC = () => {
 
         {/* Center: View Modes */}
         <div className="flex flex-col items-center gap-2 pointer-events-auto">
-            <button 
+            {/* Who is locked to my camera, so leading is not a guess */}
+            <FollowersBadge />
+            {leaderReleaseNote && (
+              <div className="px-3 py-1 rounded-full bg-white/90 backdrop-blur-md border border-gray-200 shadow-sm font-mono text-[10px] uppercase tracking-wide text-gray-500">
+                Nobody is following any more — back to free view
+              </div>
+            )}
+            <button
                 onClick={() => setShowExplainer(true)}
                 className="text-[10px] font-mono uppercase text-gray-400 tracking-widest mb-1 bg-white/40 px-2 py-0.5 rounded backdrop-blur-sm shadow-sm hover:bg-white/80 hover:text-black transition-colors"
             >
                 View Configuration
             </button>
             <div className="flex gap-2 bg-white/90 backdrop-blur-md p-1.5 rounded-md border border-gray-200 shadow-sm transition-all hover:shadow-md">
-                <Button 
-                    active={viewMode === ViewMode.FREE && !leaderId} 
-                    onClick={() => { setViewMode(ViewMode.FREE); setActiveAgent(null); setLeader(null); }}
+                <Button
+                    active={viewMode === ViewMode.FREE && !leaderId}
+                    onClick={handleFreeView}
                     title="Free View"
                 >
                     <Activity size={16} />
@@ -1064,6 +1099,16 @@ const Interface: React.FC = () => {
         {/* Right: Active Review pane (replaces the old Visual Aids panel) */}
         <ReviewViewpointsDock isRightPanelCollapsed={isRightPanelCollapsed} />
 
+      </div>
+
+      {/* Follow state, top-centre. Dragging is only a nudge that snaps back;
+          this pill says so, and holds the one control that actually leaves.
+          Dropped below JoinRequests when I host, so the two never overlap. */}
+      <div className={clsx(
+        "absolute left-1/2 -translate-x-1/2 z-[240] pointer-events-auto",
+        isHost ? "top-[76px]" : "top-6"
+      )}>
+        <FollowingBadge onFreeView={handleFreeView} />
       </div>
 
       </> /* end !isBoardroomMode */}
