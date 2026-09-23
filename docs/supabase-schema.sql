@@ -148,6 +148,13 @@ alter table review_curations
 alter table review_curations
   add column if not exists labels jsonb not null default '{}'::jsonb;
 
+-- Per-review visibility (added 2026-09-23). When false the review still
+-- exists and the link still works, but it does not appear in the lobby's
+-- Saved Reviews list. Default true so every existing review keeps behaving
+-- exactly as before. Idempotent like the other add-column blocks.
+alter table review_curations
+  add column if not exists listed boolean not null default true;
+
 create index if not exists review_curations_updated_at_idx
   on review_curations (updated_at desc);
 

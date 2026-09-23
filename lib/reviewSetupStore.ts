@@ -84,6 +84,7 @@ export interface ReviewDraft {
   requirements: Requirement[];
   team: TeamMember[];
   labels: Record<string, string>;
+  listed: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -100,9 +101,10 @@ interface ReviewSetupState {
   hydrateDraft: (draft: ReviewDraft) => void; // adopt a remote/loaded draft
   discardDraft: () => void;
 
-  // Title / description
+  // Title / description / visibility
   setTitle: (title: string) => void;
   setDescription: (desc: string) => void;
+  setListed: (listed: boolean) => void;
 
   // Asset
   setModelType: (modelType: ModelType) => void;
@@ -169,6 +171,7 @@ const emptyDraft = (reviewId: string): ReviewDraft => ({
   requirements: [],
   team: [],
   labels: {},
+  listed: true,
   createdAt: Date.now(),
   updatedAt: Date.now(),
 });
@@ -204,6 +207,7 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
 
       setTitle: (title) => set((s) => s.draft ? { draft: touch({ ...s.draft, title }) } : s),
       setDescription: (description) => set((s) => s.draft ? { draft: touch({ ...s.draft, description }) } : s),
+      setListed: (listed) => set((s) => s.draft ? { draft: touch({ ...s.draft, listed }) } : s),
 
       setModelType: (modelType) => set((s) => {
         if (!s.draft) return s;
@@ -582,6 +586,9 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         }
         if (!draft.labels || typeof draft.labels !== 'object') {
           draft = { ...draft, labels: {} };
+        }
+        if (typeof draft.listed !== 'boolean') {
+          draft = { ...draft, listed: true };
         }
         return { ...persisted, draft };
       },

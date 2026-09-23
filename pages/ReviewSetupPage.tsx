@@ -91,7 +91,7 @@ const ReviewSetupPage: React.FC = () => {
     return JSON.stringify({
       title: d.title, description: d.description, asset,
       viewpoints: d.viewpoints, pins: d.pins, agenda: d.agenda,
-      requirements: d.requirements, labels: d.labels,
+      requirements: d.requirements, labels: d.labels, listed: d.listed,
     });
   };
 
@@ -507,6 +507,7 @@ const AssetTab: React.FC = () => {
   const addReference = useReviewSetupStore((s) => s.addReference);
   const removeReference = useReviewSetupStore((s) => s.removeReference);
   const setDescription = useReviewSetupStore((s) => s.setDescription);
+  const setListed = useReviewSetupStore((s) => s.setListed);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { modelImport } = useConnectorConfig();
 
@@ -579,6 +580,47 @@ const AssetTab: React.FC = () => {
           placeholder="What is this review covering? What outcomes do you want?"
           className="w-full h-20 bg-white/5 text-sm rounded p-2 border border-white/10 outline-none focus:border-emerald-400/50 placeholder:text-gray-600"
         />
+      </Section>
+
+      <Section label="Visibility">
+        <div className="flex flex-col gap-1.5">
+          <label
+            className={clsx(
+              'flex items-center gap-2 px-3 py-2 rounded border text-xs cursor-pointer transition-colors',
+              draft.listed
+                ? 'bg-emerald-500/15 border-emerald-400/50 text-emerald-100'
+                : 'bg-white/5 border-white/10 text-gray-400 hover:border-white/30'
+            )}
+          >
+            <input
+              type="radio"
+              name="listed"
+              checked={draft.listed}
+              onChange={() => setListed(true)}
+              className="accent-emerald-500"
+            />
+            <span className="font-bold">Listed</span>
+            <span className="text-[10px] text-gray-500 ml-auto">Anyone who opens this deployment sees it in Saved Reviews.</span>
+          </label>
+          <label
+            className={clsx(
+              'flex items-center gap-2 px-3 py-2 rounded border text-xs cursor-pointer transition-colors',
+              !draft.listed
+                ? 'bg-emerald-500/15 border-emerald-400/50 text-emerald-100'
+                : 'bg-white/5 border-white/10 text-gray-400 hover:border-white/30'
+            )}
+          >
+            <input
+              type="radio"
+              name="listed"
+              checked={!draft.listed}
+              onChange={() => setListed(false)}
+              className="accent-emerald-500"
+            />
+            <span className="font-bold">Link only</span>
+            <span className="text-[10px] text-gray-500 ml-auto">Only people with the link can find it.</span>
+          </label>
+        </div>
       </Section>
 
       <Section label="Model">

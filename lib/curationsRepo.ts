@@ -36,6 +36,7 @@ interface CurationRow {
   requirements?: ReviewDraft['requirements'];
   team?: ReviewDraft['team'];
   labels?: ReviewDraft['labels'];
+  listed?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +53,7 @@ function rowToDraft(row: CurationRow): ReviewDraft {
     requirements: row.requirements ?? [],
     team: row.team ?? [],
     labels: row.labels ?? {},
+    listed: row.listed ?? true,
     createdAt: Date.parse(row.created_at),
     updatedAt: Date.parse(row.updated_at),
   };
@@ -71,6 +73,7 @@ function draftToRow(draft: ReviewDraft) {
     requirements: draft.requirements,
     team: draft.team,
     labels: draft.labels,
+    listed: draft.listed,
   };
 }
 
@@ -98,12 +101,35 @@ export async function saveCuration(draft: ReviewDraft): Promise<{ ok: boolean; e
   return { ok: true };
 }
 
+// PostgREST's code for "column does not exist" — an install whose database
+// predates a column and has not re-applied docs/supabase-schema.sql yet.
+const UNDEFINED_COLUMN = '42703';
+
 export async function listRecentCurations(limit = 8): Promise<CurationSummary[]> {
-  const { data, error } = await supabase
+  const columns =
+    'id,title,description,viewpoints,pins,agenda,requirements,team,labels,created_at,updated_at';
+
+  // Only listed reviews appear here; a link-only one is still reachable by its
+  // link through loadCuration / getCurationSummary.
+  let { data, error } = await supabase
     .from('review_curations')
-    .select('id,title,description,viewpoints,pins,agenda,requirements,team,labels,created_at,updated_at')
+    .select(columns)
+    .eq('listed', true)
     .order('updated_at', { ascending: false })
     .limit(limit);
+
+  // An older database has no `listed` column, and filtering on a column that
+  // does not exist fails the whole query — which would empty the lobby for
+  // someone who has not re-run ./install.sh since this shipped. Every review in
+  // such a database is listed by definition, so ask again without the filter.
+  if (error?.code === UNDEFINED_COLUMN) {
+    ({ data, error } = await supabase
+      .from('review_curations')
+      .select(columns)
+      .order('updated_at', { ascending: false })
+      .limit(limit));
+  }
+
   if (error) {
     console.error('[curationsRepo] listRecentCurations failed:', error);
     return [];

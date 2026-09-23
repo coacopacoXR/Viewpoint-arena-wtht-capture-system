@@ -509,6 +509,23 @@ runs caught, batch by batch, is the point of this entry:
   next knock (so a host who walks away does not strand a waiter — verified
   live by closing the host's browser), and an admission survives a reconnect.
 
+- **Per-review visibility (batch AJ)**. A review is listed in the lobby or
+  link-only; the switch sits with the title and description on the curate
+  page, because it is a property of the review. `listed boolean not null
+  default true`, so every existing review stays exactly as it was, and
+  `loadCuration`/`getCurationSummary` deliberately do NOT filter — the link is
+  how a link-only review is reached. Caught in review: filtering on a column
+  an older database does not have fails the whole query, so an install that
+  had not re-applied the schema would have opened to an empty Saved Reviews
+  list; `listRecentCurations` now retries without the filter on PostgREST's
+  42703, with a test for it. Verified live after applying the column: a new
+  review is listed, switching it to link-only removes it from the lobby, and
+  its own link still opens it.
+- **"AGENTS ON" no longer overlaps the playback controls.** The centred dock
+  is ~1030px wide, so at 1280px its left edge lands 11px inside the toggle
+  cluster. Below 1360px the cluster sits above the dock, 11px clear each side;
+  measured at four window sizes rather than eyeballed.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.
@@ -540,7 +557,6 @@ runs caught, batch by batch, is the point of this entry:
 - **CAPTURE VIEW silently does nothing** until the setup canvas has
   initialised (`captureViewpoint()` returns null). A person rarely clicks that
   fast; a disabled state or a toast would be better.
-- **"AGENTS ON" overlaps the playback controls** at 1280x720 (bottom left).
 - **A shell with .env exported overrides it**: compose interpolation prefers
   the environment, so `set -a; . ./.env` before a re-run left capture-service
   and coturn on the old secrets. Test-harness trap, not a user path.
