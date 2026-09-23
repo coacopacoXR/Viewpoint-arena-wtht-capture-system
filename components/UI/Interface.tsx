@@ -423,13 +423,6 @@ const Interface: React.FC = () => {
           </div>
       )}
 
-      {/* JOIN REQUESTS — host-only, shown when someone is waiting to be admitted */}
-      {isHost && (
-        <div className="absolute top-8 left-1/2 -translate-x-1/2 z-[200] pointer-events-auto">
-          <JoinRequests />
-        </div>
-      )}
-
       {/* Right Header Area (Agent Status / End Meeting) */}
       <div className="absolute top-6 right-6 flex flex-col items-end gap-2 pointer-events-auto z-[40]">
 
@@ -1089,6 +1082,17 @@ const Interface: React.FC = () => {
       </div>
 
       </> /* end !isBoardroomMode */}
+
+      {/* JOIN REQUESTS — host-only, shown when someone is waiting to be admitted.
+          OUTSIDE the !isBoardroomMode branch above, and above the boardroom
+          overlay's z-[150]: a knock during a boardroom session was invisible to
+          the host, so the person outside waited until the host happened to
+          leave the boardroom. */}
+      {isHost && (
+        <div className="absolute top-8 left-1/2 -translate-x-1/2 z-[250] pointer-events-auto">
+          <JoinRequests />
+        </div>
+      )}
 
       {/* Boardroom Mode Overlay — pointer-events-none so transparent area passes events to canvas */}
       {isBoardroomMode && (

@@ -667,6 +667,17 @@ runs caught, batch by batch, is the point of this entry:
   browsers unlock, the cookie rides along to the capture endpoints, and the
   live transcript and cards behave exactly as on an open install.
 
+- **A knock during a boardroom session reached nobody.** The join-request
+  prompt was inside Interface's `!isBoardroomMode` branch, so while the host
+  was presenting, the person at the door waited until the host happened to
+  leave the boardroom — no notice, no sound, nothing. It renders in both modes
+  now, above the boardroom overlay's z-[150]. Verified live: the host is shown
+  the request without leaving the boardroom, and admitting from there works.
+- **The phone path through the gate was checked too**, since the knock gate
+  landed after the last phone test: an iPhone-sized client gets the waiting
+  room (no overflow), the host is asked by name, and admitting drops the phone
+  into the mobile room view.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.
@@ -680,6 +691,12 @@ runs caught, batch by batch, is the point of this entry:
 - Requirements: no sample set, no generated codes, free-text category.
 
 ### Follow-ups
+- **The boardroom still shows the four demo agent tiles** (SYS.OP, ENG.UNIT,
+  DES.LEAD, VR.USER) even though agents are off by default since `aa4bd38`.
+  `hideAgents` evidently does not reach the boardroom's participant strip.
+  Left alone deliberately: whether agents should appear there at all is a
+  product call, not a bug to be guessed at.
+
 - **Capture spending is bounded per IP, not per deployment.** Correcting what
   the previous entry claimed: `/api/capture/` IS rate-limited in the
   self-hosted stack — `deploy/nginx/proxy.conf` has had
