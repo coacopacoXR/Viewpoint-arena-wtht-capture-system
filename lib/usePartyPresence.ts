@@ -47,7 +47,15 @@ type RoomMessage =
   | { type: 'XR_PRESENCE'; payload: XRParticipantData }
   | { type: 'TRANSCRIPT_LINE'; payload: import('../types').ChatMessage }
   | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } }
-  | { type: 'POINTING_SEGMENT'; payload: import('./pointingTimelineStore').PointingSegment };
+  | { type: 'POINTING_SEGMENT'; payload: import('./pointingTimelineStore').PointingSegment }
+  | { type: 'ADMIT'; payload: { userId: string } }
+  | { type: 'DECLINE'; payload: { userId: string } }
+  | { type: 'SET_JOIN_POLICY'; payload: { policy: 'open' | 'ask' } }
+  | { type: 'JOIN_PENDING'; payload: Record<string, never> }
+  | { type: 'JOIN_ADMITTED'; payload: Record<string, never> }
+  | { type: 'JOIN_DECLINED'; payload: Record<string, never> }
+  | { type: 'JOIN_REQUESTS'; payload: { pending: Array<{ userId: string; name: string; since: number }> } }
+  | { type: 'JOIN_POLICY'; payload: { policy: 'open' | 'ask' } };
 
 // Module-level ref so it persists across re-renders and is accessible from the message handler
 const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; data: any }) => void) | null } = { current: null };
@@ -86,6 +94,75 @@ export function subscribeRecordingState(
   recordingStateSubscribers.add(listener);
   listener(recordingStateRef.current);
   return () => { recordingStateSubscribers.delete(listener); };
+}
+
+// Join state: module-level, same pattern as recording state. The hook
+// exposes useJoinState() and useJoinRequests() so components can subscribe
+// without building fresh arrays/objects on every render (React error #185).
+export type JoinState = 'joining' | 'pending' | 'admitted' | 'declined';
+export interface JoinRequest {
+  userId: string;
+  name: string;
+  since: number;
+}
+const joinStateRef: { current: JoinState } = { current: 'joining' };
+const joinStateSubscribers = new Set<(state: JoinState) => void>();
+const joinRequestsRef: { current: JoinRequest[] } = { current: [] };
+const joinRequestsSubscribers = new Set<(reqs: JoinRequest[]) => void>();
+const joinPolicyRef: { current: 'open' | 'ask' } = { current: 'ask' };
+const joinPolicySubscribers = new Set<(policy: 'open' | 'ask') => void>();
+
+function notifyJoinStateSubscribers() {
+  for (const sub of joinStateSubscribers) {
+    sub(joinStateRef.current);
+  }
+}
+function notifyJoinRequestsSubscribers() {
+  for (const sub of joinRequestsSubscribers) {
+    sub(joinRequestsRef.current);
+  }
+}
+function notifyJoinPolicySubscribers() {
+  for (const sub of joinPolicySubscribers) {
+    sub(joinPolicyRef.current);
+  }
+}
+
+export function subscribeJoinState(listener: (state: JoinState) => void): () => void {
+  joinStateSubscribers.add(listener);
+  listener(joinStateRef.current);
+  return () => { joinStateSubscribers.delete(listener); };
+}
+export function subscribeJoinRequests(listener: (reqs: JoinRequest[]) => void): () => void {
+  joinRequestsSubscribers.add(listener);
+  listener(joinRequestsRef.current);
+  return () => { joinRequestsSubscribers.delete(listener); };
+}
+export function subscribeJoinPolicy(listener: (policy: 'open' | 'ask') => void): () => void {
+  joinPolicySubscribers.add(listener);
+  listener(joinPolicyRef.current);
+  return () => { joinPolicySubscribers.delete(listener); };
+}
+
+/** React hook — returns the current join gate state. */
+export function useJoinState(): JoinState {
+  const [state, setState] = React.useState<JoinState>(joinStateRef.current);
+  React.useEffect(() => subscribeJoinState(setState), []);
+  return state;
+}
+
+/** React hook — returns the pending join queue (stable ref when unchanged). */
+export function useJoinRequests(): JoinRequest[] {
+  const [reqs, setReqs] = React.useState<JoinRequest[]>(joinRequestsRef.current);
+  React.useEffect(() => subscribeJoinRequests(setReqs), []);
+  return reqs;
+}
+
+/** React hook — returns the current join policy. */
+export function useJoinPolicy(): 'open' | 'ask' {
+  const [policy, setPolicy] = React.useState<'open' | 'ask'>(joinPolicyRef.current);
+  React.useEffect(() => subscribeJoinPolicy(setPolicy), []);
+  return policy;
 }
 
 // Seen transcript-line IDs for deduplication. A Set that is bounded: the live
@@ -200,6 +277,45 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     const socket = new PartySocket({ host: PARTYKIT_HOST, room: roomId, protocol: partykitProtocol() });
     socketRef.current = socket;
     partySocketRef.current = socket;
+
+    // Reset join state for the new room connection.
+    joinStateRef.current = 'joining';
+    notifyJoinStateSubscribers();
+    joinRequestsRef.current = [];
+    notifyJoinRequestsSubscribers();
+
+    // Knock. PRESENCE is how a connection tells the server who it is, and the
+    // server's knock gate answers it (admitted, or parked in the host's
+    // queue). Until batch AI the first PRESENCE came from the 3D scene's frame
+    // loop — but the scene does not mount until this hook says 'admitted', so
+    // leaving it there deadlocks every room, the host's included: no PRESENCE,
+    // no admission, no scene, no PRESENCE. The knock therefore lives here, in
+    // the only code that is mounted before admission.
+    //
+    // It repeats while we are not admitted, for two reasons: PartySocket
+    // reconnects silently (the new connection has to re-identify itself), and
+    // the server admits a waiter immediately once the room has no admitted
+    // participants left — so a host who closes the tab while someone waits
+    // lets that person in on the next knock instead of stranding them.
+    const knock = () => {
+      const s = socketRef.current;
+      if (!s || s.readyState !== WebSocket.OPEN) return;
+      if (joinStateRef.current === 'admitted' || joinStateRef.current === 'declined') return;
+      const { position, lookAt } = lastPresenceRef.current;
+      s.send(JSON.stringify({
+        type: 'PRESENCE',
+        payload: {
+          userId: userRef.current.userId,
+          name: userRef.current.name,
+          color: userRef.current.color,
+          position,
+          lookAt,
+          sameRoom: sameRoomRef.current,
+        },
+      } as RoomMessage));
+    };
+    socket.addEventListener('open', knock);
+    const knockTimer = setInterval(knock, 3000);
 
     socket.addEventListener('message', (event: MessageEvent) => {
       let msg: RoomMessage;
@@ -417,6 +533,21 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         }
       } else if (msg.type === 'WEBRTC_SIGNAL') {
         webRTCSignalHandlerRef.current?.(msg.payload);
+      } else if (msg.type === 'JOIN_PENDING') {
+        joinStateRef.current = 'pending';
+        notifyJoinStateSubscribers();
+      } else if (msg.type === 'JOIN_ADMITTED') {
+        joinStateRef.current = 'admitted';
+        notifyJoinStateSubscribers();
+      } else if (msg.type === 'JOIN_DECLINED') {
+        joinStateRef.current = 'declined';
+        notifyJoinStateSubscribers();
+      } else if (msg.type === 'JOIN_REQUESTS') {
+        joinRequestsRef.current = msg.payload.pending;
+        notifyJoinRequestsSubscribers();
+      } else if (msg.type === 'JOIN_POLICY') {
+        joinPolicyRef.current = msg.payload.policy;
+        notifyJoinPolicySubscribers();
       }
       } catch (err) {
         // One malformed/unexpected message must NOT take down the whole
@@ -429,6 +560,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     });
 
     return () => {
+      clearInterval(knockTimer);
+      socket.removeEventListener('open', knock);
       socket.close();
       socketRef.current = null;
       partySocketRef.current = null;
@@ -437,6 +570,10 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       setRemoteParticipantList([]);
       recordingStateRef.current = null;
       notifyRecordingStateSubscribers();
+      joinStateRef.current = 'joining';
+      notifyJoinStateSubscribers();
+      joinRequestsRef.current = [];
+      notifyJoinRequestsSubscribers();
     };
   }, [roomId]);
 
@@ -698,4 +835,25 @@ export function broadcastPointingSegment(seg: PointingSegment): void {
   const socket = partySocketRef.current;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: 'POINTING_SEGMENT', payload: seg }));
+}
+
+/** Host-only: admit a pending user. Module-level for the same reason as broadcastRecordingState. */
+export function broadcastAdmit(userId: string): void {
+  const socket = partySocketRef.current;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'ADMIT', payload: { userId } }));
+}
+
+/** Host-only: decline a pending user. */
+export function broadcastDecline(userId: string): void {
+  const socket = partySocketRef.current;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'DECLINE', payload: { userId } }));
+}
+
+/** Host-only: change the join policy for this room session. */
+export function broadcastSetJoinPolicy(policy: 'open' | 'ask'): void {
+  const socket = partySocketRef.current;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'SET_JOIN_POLICY', payload: { policy } }));
 }

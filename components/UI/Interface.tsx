@@ -32,6 +32,7 @@ import DrawingCanvas from './DrawingCanvas';
 import BoardroomShell from './Boardroom/BoardroomShell';
 import BoardroomCountdown from './BoardroomCountdown';
 import SplitViewOverlay from './SplitViewOverlay';
+import JoinRequests from './JoinRequests';
 
 const Button: React.FC<{ 
   active?: boolean; 
@@ -420,6 +421,13 @@ const Interface: React.FC = () => {
                   </div>
               </div>
           </div>
+      )}
+
+      {/* JOIN REQUESTS — host-only, shown when someone is waiting to be admitted */}
+      {isHost && (
+        <div className="absolute top-8 left-1/2 -translate-x-1/2 z-[200] pointer-events-auto">
+          <JoinRequests />
+        </div>
       )}
 
       {/* Right Header Area (Agent Status / End Meeting) */}

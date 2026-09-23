@@ -472,6 +472,43 @@ runs caught, batch by batch, is the point of this entry:
   gated. The admin passphrase answers `required/unlocked` correctly, rejects a
   bogus cookie, and 401s a wrong passphrase.
 
+- **Knock to join (batch AI)**. Under the default policy a new arrival waits
+  and the host sees "Maria wants to join — Admit / Decline"; the invite popup
+  also offers *Anyone with the link*. The gate is server-side, because the
+  browser hiding a screen would be theatre: `onConnect` used to hand over the
+  roster, the model, the review config and every comment before anyone had
+  said who they were. That bundle moved into `sendRoomState`, sent when a
+  connection is admitted. Four things the live run caught, none of which any
+  test suite would have:
+  - **The gate deadlocked every room, the host's included.** PRESENCE is what
+    identifies a connection to the server, and it was only ever sent from the
+    3D scene's frame loop — which no longer mounts until the gate says
+    'admitted'. No PRESENCE, no admission, no scene, no PRESENCE. The knock
+    now lives in `usePartyPresence` itself and repeats every 3 s while it
+    waits. Pinned by `lib/__tests__/joinKnock.test.tsx`, and the pin was
+    mutation-tested: removing the knock fails two of its cases.
+  - **The host could not reload their own room.** A reconnecting user is
+    already in `admitted`, so the server said nothing — while the client's
+    join state starts again at 'joining' on the new socket, leaving it on
+    "Connecting…" for ever. Admission is now delivered per connection
+    (`deliverAdmission`, once each), not per new participant.
+  - **The meeting was still streaming to the people at the door.**
+    `room.broadcast` reaches every open socket, so a parked visitor was
+    receiving other participants' PRESENCE — and by the same route would have
+    received the live transcript, the comments and the pointing segments of a
+    meeting nobody had admitted them to. Found by reading the guest's
+    websocket frames, not by looking at the UI. All 25 relays now go through
+    `relay()`, which excludes any connection that is not admitted; JOIN_POLICY
+    is the one deliberate exception.
+  - **A test fixture had never actually admitted its "guest"** — it sent a
+    bare PRESENCE, which under 'ask' only parks someone, and the assertions
+    passed anyway because broadcasts reached everybody. Fixed with an
+    `admitViaHost` helper; the fixture bug and the leak were the same bug seen
+    from two sides.
+  Two safeguards keep it from being rigid: a room with nobody in it admits its
+  next knock (so a host who walks away does not strand a waiter — verified
+  live by closing the host's browser), and an admission survives a reconnect.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.

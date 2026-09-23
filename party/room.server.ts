@@ -42,7 +42,15 @@ type RoomMessage =
   | { type: 'XR_PRESENCE'; payload: any }
   | { type: 'TRANSCRIPT_LINE'; payload: { id: string; agentId: string; text: string; timestamp: number; speakerName?: string; speakerId?: string; offsetMs?: number } }
   | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } }
-  | { type: 'POINTING_SEGMENT'; payload: { userId: string; userName: string; partId: string; partName: string; source: 'laser' | 'finger' | 'hover'; fromMs: number; toMs: number } };
+  | { type: 'POINTING_SEGMENT'; payload: { userId: string; userName: string; partId: string; partName: string; source: 'laser' | 'finger' | 'hover'; fromMs: number; toMs: number } }
+  | { type: 'ADMIT'; payload: { userId: string } }
+  | { type: 'DECLINE'; payload: { userId: string } }
+  | { type: 'SET_JOIN_POLICY'; payload: { policy: 'open' | 'ask' } }
+  | { type: 'JOIN_PENDING'; payload: Record<string, never> }
+  | { type: 'JOIN_ADMITTED'; payload: Record<string, never> }
+  | { type: 'JOIN_DECLINED'; payload: Record<string, never> }
+  | { type: 'JOIN_REQUESTS'; payload: { pending: Array<{ userId: string; name: string; since: number }> } }
+  | { type: 'JOIN_POLICY'; payload: { policy: 'open' | 'ask' } };
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
 
@@ -69,6 +77,21 @@ export default class RoomServer implements Party.Server {
   // Persisted recording state for late joiners (section B: per-speaker mics).
   // Null when no recording is in progress.
   recordingState: { recording: boolean; startedAt: number; byUserId: string; byName: string } | null = null;
+  // Per-link join policy. 'ask' (default) means new arrivals must be admitted
+  // by the host; 'open' lets anyone through. NOT persisted to Supabase in
+  // batch M2 — a PartyKit room that hibernates comes back at 'ask', which is
+  // the safe direction.
+  joinPolicy: 'open' | 'ask' = 'ask';
+  // UserIds that have been admitted through the knock gate.
+  admitted = new Set<string>();
+  // Pending knock queue: userId → { userId, name, since }.
+  pending = new Map<string, { userId: string; name: string; since: number }>();
+  // Live connection objects keyed by connection id, for targeted sends.
+  connections = new Map<string, Party.Connection>();
+  // Connection ids that have already been told they are in and handed the
+  // room state, so a reconnect gets it once and a chatty client does not
+  // get the whole bundle on every PRESENCE.
+  stateSent = new Set<string>();
 
   constructor(readonly room: Party.Room) {}
 
@@ -95,8 +118,7 @@ export default class RoomServer implements Party.Server {
     this.lastPresenterChange = 0;
   }
 
-  onConnect(conn: Party.Connection) {
-    // Send roster + current host to the new joiner
+  private sendRoomState(conn: Party.Connection) {
     conn.send(JSON.stringify({
       type: 'ROSTER',
       payload: Array.from(this.participants.values()),
@@ -124,6 +146,87 @@ export default class RoomServer implements Party.Server {
     }
   }
 
+  /**
+   * Relay to the room — admitted connections only.
+   *
+   * `room.broadcast` reaches every open socket, which quietly undoes the gate:
+   * a person parked at the door was receiving other people's PRESENCE, and by
+   * the same route would have received the live transcript, the comments and
+   * the pointing segments of a meeting nobody had let them into (found live
+   * 2026-09-23 by reading the guest's websocket frames). Every relay goes
+   * through here instead, so admission is the single thing that decides what
+   * leaves the server. The only exception is JOIN_POLICY, which is not room
+   * content and which the waiting room itself describes.
+   */
+  private relay(data: string, without: string[] = []) {
+    const excluded = [...without];
+    for (const connId of this.connections.keys()) {
+      const uid = this.connToUser.get(connId);
+      if (!uid || !this.admitted.has(uid)) excluded.push(connId);
+    }
+    this.room.broadcast(data, excluded);
+  }
+
+  private broadcastJoinRequests() {
+    const list = Array.from(this.pending.values());
+    const hostId = this.computeHost();
+    if (!hostId) return;
+    for (const [connId, userId] of this.connToUser) {
+      if (userId === hostId && this.admitted.has(userId)) {
+        const conn = this.connections.get(connId);
+        if (conn) {
+          conn.send(JSON.stringify({
+            type: 'JOIN_REQUESTS',
+            payload: { pending: list },
+          } as RoomMessage));
+        }
+      }
+    }
+  }
+
+  private sendToUser(userId: string, msg: RoomMessage) {
+    const json = JSON.stringify(msg);
+    for (const [connId, uid] of this.connToUser) {
+      if (uid === userId) {
+        const conn = this.connections.get(connId);
+        if (conn) conn.send(json);
+      }
+    }
+  }
+
+  /**
+   * Tell every connection of an admitted userId that it is in, and hand it the
+   * room state — once per connection. JOIN_ADMITTED goes first so the client
+   * can leave the waiting room before the state arrives.
+   *
+   * Every admitted connection must hear this, not just a brand new
+   * participant: a reload or a dropped socket reconnects with the same userId,
+   * which is already in `admitted`, and the client's join state starts again at
+   * 'joining' on the new socket. Without this the host who refreshes their own
+   * room sits on "Connecting…" for ever (found live 2026-09-23).
+   */
+  private deliverAdmission(userId: string) {
+    for (const [connId, uid] of this.connToUser) {
+      if (uid !== userId || this.stateSent.has(connId)) continue;
+      const conn = this.connections.get(connId);
+      if (!conn) continue;
+      this.stateSent.add(connId);
+      conn.send(JSON.stringify({ type: 'JOIN_ADMITTED', payload: {} } as RoomMessage));
+      this.sendRoomState(conn);
+    }
+  }
+
+  onConnect(conn: Party.Connection) {
+    this.connections.set(conn.id, conn);
+    // Before the connection has identified itself via PRESENCE we can only
+    // send the current join policy. The full room state bundle is deferred
+    // until the connection is admitted through the knock gate.
+    conn.send(JSON.stringify({
+      type: 'JOIN_POLICY',
+      payload: { policy: this.joinPolicy },
+    } as RoomMessage));
+  }
+
   onMessage(message: string, sender: Party.Connection) {
     let msg: RoomMessage;
     try {
@@ -132,28 +235,158 @@ export default class RoomServer implements Party.Server {
       return;
     }
 
+    // Map the connection to its userId early so the gate and onClose agree.
+    // PRESENCE is the only message that establishes this mapping; LEAVE only
+    // needs it for cleanup, and is also allowed through the gate.
     if (msg.type === 'PRESENCE') {
-      // Track which userId this connection belongs to so onClose can clean up correctly
       this.connToUser.set(sender.id, msg.payload.userId);
-      const isNew = !this.participants.has(msg.payload.userId);
-      this.participants.set(msg.payload.userId, msg.payload);
+    }
 
-      if (isNew) {
-        this.joinOrder.push(msg.payload.userId);
-        // Broadcast updated host (no-op if host hasn't changed, but harmless)
-        this.room.broadcast(JSON.stringify({
-          type: 'HOST_CHANGE',
-          payload: { hostId: this.computeHost() },
-        } as RoomMessage));
+    // Knock gate: a connection that has not been admitted may only send
+    // PRESENCE (the knock itself) and LEAVE. Everything else is dropped.
+    const senderUserId = this.connToUser.get(sender.id);
+    if (senderUserId && !this.admitted.has(senderUserId) && msg.type !== 'PRESENCE' && msg.type !== 'LEAVE') {
+      return;
+    }
+
+    if (msg.type === 'PRESENCE') {
+      const { userId, name } = msg.payload;
+
+      // Already admitted — normal presence update, relay to others.
+      if (this.admitted.has(userId)) {
+        const isNew = !this.participants.has(userId);
+        this.participants.set(userId, msg.payload);
+
+        // A reconnecting connection (reload, dropped socket) is admitted
+        // already but has been told nothing yet. No-op once it has.
+        this.deliverAdmission(userId);
+
+        if (isNew) {
+          this.joinOrder.push(userId);
+          this.relay(JSON.stringify({
+            type: 'HOST_CHANGE',
+            payload: { hostId: this.computeHost() },
+          } as RoomMessage));
+        }
+
+        this.relay(JSON.stringify(msg), [sender.id]);
+        return;
       }
 
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      // Not yet admitted — apply the knock-gate rules.
+
+      // Expire stale pending entries (older than 5 minutes) while we're here.
+      const now = Date.now();
+      for (const [pid, entry] of this.pending) {
+        if (now - entry.since > 5 * 60 * 1000) {
+          this.pending.delete(pid);
+        }
+      }
+
+      // Rule 1: open policy → admit immediately.
+      // Rule 2: nobody is in the room → admit immediately, and this userId
+      //         becomes the host (it is first in joinOrder). Two cases, one
+      //         rule: the very first arrival has nobody to ask, and a waiter
+      //         whose host closed the tab would otherwise wait forever.
+      //         Keyed on live participants, NOT on `admitted` — that set keeps
+      //         past admissions so a reload does not need re-admitting, and so
+      //         it never empties.
+      if (this.joinPolicy === 'open' || this.participants.size === 0) {
+        this.admitted.add(userId);
+        this.pending.delete(userId);
+
+        // Now treat this as a normal first PRESENCE for an admitted user.
+        const isNew = !this.participants.has(userId);
+        this.participants.set(userId, msg.payload);
+
+        if (isNew) {
+          this.joinOrder.push(userId);
+        }
+
+        this.deliverAdmission(userId);
+
+        // Broadcast presence to the rest of the room (normal join).
+        this.relay(JSON.stringify(msg), [sender.id]);
+
+        if (isNew) {
+          this.relay(JSON.stringify({
+            type: 'HOST_CHANGE',
+            payload: { hostId: this.computeHost() },
+          } as RoomMessage));
+        }
+
+        // If the queue changed, tell the host.
+        this.broadcastJoinRequests();
+        return;
+      }
+
+      // Rule 3: park in pending. Idempotent — only notify the host when the
+      // entry is new or the name changed.
+      const existing = this.pending.get(userId);
+      if (!existing || existing.name !== name) {
+        this.pending.set(userId, { userId, name, since: existing?.since ?? now });
+        this.sendToUser(userId, { type: 'JOIN_PENDING', payload: {} });
+        this.broadcastJoinRequests();
+      }
+
+    } else if (msg.type === 'ADMIT') {
+      // Host-only: admit a pending userId.
+      const senderId = this.connToUser.get(sender.id);
+      if (senderId !== this.computeHost() || !this.admitted.has(senderId)) return;
+
+      const { userId } = msg.payload;
+      if (!this.pending.has(userId)) return;
+      this.pending.delete(userId);
+      this.admitted.add(userId);
+
+      this.deliverAdmission(userId);
+
+      // Broadcast a synthetic PRESENCE so the room sees the new participant.
+      // We don't have the full presence payload here, but the newly admitted
+      // client will send its own PRESENCE on the next animation frame.
+      this.broadcastJoinRequests();
+
+    } else if (msg.type === 'DECLINE') {
+      // Host-only: decline a pending userId.
+      const senderId = this.connToUser.get(sender.id);
+      if (senderId !== this.computeHost() || !this.admitted.has(senderId)) return;
+
+      const { userId } = msg.payload;
+      if (!this.pending.has(userId)) return;
+      this.pending.delete(userId);
+
+      this.sendToUser(userId, { type: 'JOIN_DECLINED', payload: {} });
+      this.broadcastJoinRequests();
+
+    } else if (msg.type === 'SET_JOIN_POLICY') {
+      // Host-only: change the join policy.
+      const senderId = this.connToUser.get(sender.id);
+      if (senderId !== this.computeHost() || !this.admitted.has(senderId)) return;
+
+      this.joinPolicy = msg.payload.policy;
+
+      // Switching to 'open' drains the queue — admit everyone pending.
+      if (this.joinPolicy === 'open') {
+        for (const [userId] of this.pending) {
+          this.pending.delete(userId);
+          this.admitted.add(userId);
+          this.deliverAdmission(userId);
+        }
+      }
+
+      // Everyone, waiters included: the policy is what the waiting room and
+      // the invite popup describe, and it is not room content.
+      this.room.broadcast(JSON.stringify({
+        type: 'JOIN_POLICY',
+        payload: { policy: this.joinPolicy },
+      } as RoomMessage));
+      this.broadcastJoinRequests();
 
     } else if (msg.type === 'HOST_TRANSFER') {
       // Move target to front of join order → they become new host
       const { toUserId } = msg.payload;
       this.joinOrder = [toUserId, ...this.joinOrder.filter(id => id !== toUserId)];
-      this.room.broadcast(JSON.stringify({
+      this.relay(JSON.stringify({
         type: 'HOST_CHANGE',
         payload: { hostId: this.computeHost() },
       } as RoomMessage));
@@ -168,7 +401,7 @@ export default class RoomServer implements Party.Server {
       this.boardroomLeaderId = userId;
       this.lastPresenterChange = Date.now();
       // Broadcast to ALL connections (no exclude) so the sender's UI updates too.
-      this.room.broadcast(JSON.stringify(msg));
+      this.relay(JSON.stringify(msg));
 
     } else if (msg.type === 'TAKEOVER_ATTEMPT') {
       // Server validates cooldown + approval and broadcasts authoritative
@@ -184,7 +417,7 @@ export default class RoomServer implements Party.Server {
       ) {
         this.boardroomLeaderId = userId;
         this.lastPresenterChange = now;
-        this.room.broadcast(JSON.stringify({
+        this.relay(JSON.stringify({
           type: 'PRESENTER_CHANGED',
           payload: { userId },
         } as RoomMessage));
@@ -198,22 +431,22 @@ export default class RoomServer implements Party.Server {
       this.takeoverModeEnabled = enabled;
       this.takeoverApprovedUserIds = approvedUserIds.filter(id => this.participants.has(id));
       // Echo the pruned list to everyone so clients stay in lock-step
-      this.room.broadcast(JSON.stringify({
+      this.relay(JSON.stringify({
         type: 'TAKEOVER_SYNC',
         payload: { enabled: this.takeoverModeEnabled, approvedUserIds: this.takeoverApprovedUserIds },
       } as RoomMessage));
 
     } else if (msg.type === 'MODEL_CHANGE') {
       this.currentModel = msg.payload;
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'REVIEW_CONFIG') {
       this.reviewConfig = msg.payload.config;
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'COMMENT_ADD') {
       this.comments.push(msg.payload.comment);
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'COMMENT_UPDATE') {
       const { id, updates } = msg.payload;
@@ -221,22 +454,22 @@ export default class RoomServer implements Party.Server {
       if (idx !== -1) {
         this.comments[idx] = { ...this.comments[idx], ...updates };
       }
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'COMMENT_DELETE') {
       this.comments = this.comments.filter((c: any) => c.id !== msg.payload.id);
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'COMMENT_RESOLVE') {
       const idx = this.comments.findIndex((c: any) => c.id === msg.payload.id);
       if (idx !== -1) {
         this.comments[idx] = { ...this.comments[idx], resolved: true };
       }
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'WEBRTC_SIGNAL') {
       // Relay to all peers; client filters by `to` field
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'BOARDROOM_COUNTDOWN') {
       // Seed boardroom state. Leader defaults to the current host until someone
@@ -247,12 +480,12 @@ export default class RoomServer implements Party.Server {
       this.takeoverModeEnabled = false;
       this.takeoverApprovedUserIds = [];
       this.lastPresenterChange = Date.now();
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'ARENA_ENTRY') {
       // Leaving boardroom — wipe all boardroom state so the next entry is clean
       this.resetBoardroomState();
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'RECORDING_STATE') {
       // Persist for late joiners. Only the host should send this, but the
@@ -260,7 +493,7 @@ export default class RoomServer implements Party.Server {
       // gates it behind canRecord (host-only). Broadcasting to ALL (no
       // exclude) so the sender's own indicator stays in sync.
       this.recordingState = msg.payload;
-      this.room.broadcast(JSON.stringify(msg));
+      this.relay(JSON.stringify(msg));
 
     } else if (msg.type === 'TRANSCRIPT_LINE') {
       // Server-authoritative speaker stamp: overwrite speakerId with the
@@ -271,7 +504,7 @@ export default class RoomServer implements Party.Server {
       if (userId) {
         msg.payload.speakerId = userId;
       }
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'POINTING_SEGMENT') {
       // Same trust model as TRANSCRIPT_LINE: the server stamps userId from
@@ -280,7 +513,7 @@ export default class RoomServer implements Party.Server {
       if (userId) {
         msg.payload.userId = userId;
       }
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (
       msg.type === 'PRESENTER_CHANGE' ||
@@ -294,13 +527,24 @@ export default class RoomServer implements Party.Server {
       msg.type === 'LIVE_CHAT' ||
       msg.type === 'XR_PRESENCE'
     ) {
-      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+      this.relay(JSON.stringify(msg), [sender.id]);
     }
   }
 
   onClose(conn: Party.Connection) {
+    this.connections.delete(conn.id);
+    this.stateSent.delete(conn.id);
     const userId = this.connToUser.get(conn.id);
     this.connToUser.delete(conn.id);
+
+    // Drop any pending knock entry for this connection.
+    if (userId) {
+      const wasPending = this.pending.has(userId);
+      this.pending.delete(userId);
+      if (wasPending) {
+        this.broadcastJoinRequests();
+      }
+    }
 
     if (!userId || !this.participants.has(userId)) return;
 
@@ -322,28 +566,41 @@ export default class RoomServer implements Party.Server {
       leaderChanged = true;
     }
 
-    this.room.broadcast(JSON.stringify({
+    this.relay(JSON.stringify({
       type: 'LEAVE',
       payload: { userId },
     } as RoomMessage));
 
-    this.room.broadcast(JSON.stringify({
+    this.relay(JSON.stringify({
       type: 'HOST_CHANGE',
       payload: { hostId: this.computeHost() },
     } as RoomMessage));
 
     if (takeoverChanged) {
-      this.room.broadcast(JSON.stringify({
+      this.relay(JSON.stringify({
         type: 'TAKEOVER_SYNC',
         payload: { enabled: this.takeoverModeEnabled, approvedUserIds: this.takeoverApprovedUserIds },
       } as RoomMessage));
     }
 
     if (leaderChanged && this.boardroomLeaderId) {
-      this.room.broadcast(JSON.stringify({
+      this.relay(JSON.stringify({
         type: 'LEADER_TAKEOVER',
         payload: { userId: this.boardroomLeaderId },
       } as RoomMessage));
+    }
+
+    // The admission is deliberately NOT revoked here. PartySocket reconnects
+    // on its own after a network blip, and a browser reload keeps the same
+    // userId (sessionStorage), so revoking would send the host to the back of
+    // their own queue for refreshing the page. A new tab gets a new userId and
+    // knocks like any other arrival, and a room with nobody left in it admits
+    // its next knock by rule 2 — so nothing stays locked.
+
+    // Send the pending queue to the new host (if any) so they see waiters
+    // immediately after a host transfer.
+    if (this.pending.size > 0) {
+      this.broadcastJoinRequests();
     }
   }
 }

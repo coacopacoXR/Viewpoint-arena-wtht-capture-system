@@ -1,7 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { X, Copy, Check, QrCode, Link, AlertTriangle } from 'lucide-react';
+import { X, Copy, Check, QrCode, Link, AlertTriangle, Globe, BellRing } from 'lucide-react';
 import { useConnectorConfig } from '../../lib/config/ConfigContext.tsx';
+import { useJoinPolicy, broadcastSetJoinPolicy } from '../../lib/usePartyPresence';
+import { usePresence } from '../../lib/PresenceContext';
+import { useStore } from '../../store';
 
 interface SharePanelProps {
   roomId: string;
@@ -28,6 +31,10 @@ const SharePanel: React.FC<SharePanelProps> = ({ roomId, onClose }) => {
   const [tab, setTab] = useState<'link' | 'qr'>('qr');
   const panelRef = useRef<HTMLDivElement>(null);
   const config = useConnectorConfig();
+  const joinPolicy = useJoinPolicy();
+  const { localUserId } = usePresence();
+  const sessionHostId = useStore(state => state.sessionHostId);
+  const isHost = sessionHostId === localUserId || sessionHostId === null;
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const baseUrl = config.publicUrl || origin;
@@ -169,6 +176,54 @@ const SharePanel: React.FC<SharePanelProps> = ({ roomId, onClose }) => {
                 {copied ? <Check size={13} /> : <Copy size={13} />}
                 {copied ? 'Copied!' : 'Copy Link'}
               </button>
+            </div>
+          )}
+        </div>
+
+        {/* Join Policy */}
+        <div className="px-4 pb-2">
+          <div
+            className="flex items-center gap-2 mb-1.5"
+            style={{ color: 'rgba(255,255,255,0.4)' }}
+          >
+            <span className="text-[9px] font-bold uppercase tracking-widest">
+              Who can join
+            </span>
+          </div>
+          {isHost ? (
+            <div className="flex flex-col gap-1">
+              <button
+                onClick={() => broadcastSetJoinPolicy('open')}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-colors text-left"
+                style={{
+                  background: joinPolicy === 'open' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: joinPolicy === 'open' ? '#fff' : 'rgba(255,255,255,0.4)',
+                  border: joinPolicy === 'open' ? '1px solid rgba(255,255,255,0.2)' : '1px solid transparent',
+                }}
+              >
+                <Globe size={11} />
+                Anyone with the link
+              </button>
+              <button
+                onClick={() => broadcastSetJoinPolicy('ask')}
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-colors text-left"
+                style={{
+                  background: joinPolicy === 'ask' ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: joinPolicy === 'ask' ? '#fff' : 'rgba(255,255,255,0.4)',
+                  border: joinPolicy === 'ask' ? '1px solid rgba(255,255,255,0.2)' : '1px solid transparent',
+                }}
+              >
+                <BellRing size={11} />
+                Ask me first
+              </button>
+            </div>
+          ) : (
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px]"
+              style={{ color: 'rgba(255,255,255,0.35)' }}
+            >
+              {joinPolicy === 'open' ? <Globe size={11} /> : <BellRing size={11} />}
+              {joinPolicy === 'open' ? 'Anyone with the link' : 'Ask the host first'}
             </div>
           )}
         </div>

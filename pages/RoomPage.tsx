@@ -15,6 +15,8 @@ import { loadCuration, saveCuration } from '../lib/curationsRepo';
 import { useIsMobile } from '../lib/useIsMobile';
 import { RecordingProvider } from '../lib/RecordingContext';
 import RemoteAudioSink from '../components/UI/RemoteAudioSink';
+import { useJoinState } from '../lib/usePartyPresence';
+import JoinWaitingRoom from '../components/UI/JoinWaitingRoom';
 
 function getMobileUserName(): string {
   try {
@@ -46,6 +48,7 @@ const RoomPage: React.FC = () => {
   }, [roomId]);
 
   const presence = usePartyPresence(roomId);
+  const joinState = useJoinState();
 
   // Seed the active review for this room:
   //   1. Use the local draft if it matches the roomId (the host who just
@@ -115,7 +118,7 @@ const RoomPage: React.FC = () => {
     remoteParticipantList: presence.remoteParticipantList,
     broadcastWebRTCSignal: presence.broadcastWebRTCSignal,
     registerWebRTCSignalHandler: presence.registerWebRTCSignalHandler,
-    active: true,
+    active: joinState === 'admitted',
     isBoardroomMode,
   });
 
@@ -128,7 +131,9 @@ const RoomPage: React.FC = () => {
     <WebRTCContext.Provider value={webrtc}>
     <RecordingProvider>
       <RemoteAudioSink />
-      {isMobile ? (
+      {joinState !== 'admitted' ? (
+        <JoinWaitingRoom roomId={roomId ?? ''} />
+      ) : isMobile ? (
         <MobileRoomView
           roomId={roomId ?? ''}
           userName={getMobileUserName()}
