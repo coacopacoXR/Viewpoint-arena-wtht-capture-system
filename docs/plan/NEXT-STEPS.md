@@ -76,27 +76,30 @@ in `~/viewpoint-arena` inside Ubuntu, so https://localhost/ opens it.
 Before anyone else follows the guide, the branch has to be pushed: the
 guide clones it from GitHub.
 
-## 7. Three choices that block the next session (2026-09-23)
+## 7. What is left of plan 12 (updated 2026-09-23, night)
 
 Written up in full in [`12-camera-room-ui-and-identity.md`](./12-camera-room-ui-and-identity.md).
-Nothing there has been started; these are the parts only you can answer.
+The camera work (A) and the room layout (B, your Option B) are **built,
+committed and running on your local install**. See EXECUTION-LOG for what each
+batch did.
 
-- **Identity.** You asked for "an account system where you can see what
-  reviews you have been a part of". A week ago the decision was no accounts,
-  and the knock gate, shared passwords and self-asserted names all follow from
-  that. Three ways to give you "my reviews" without undoing it, in rising
-  cost: a name you keep (portable browser identity, no sign-up), real accounts
-  on the deployment, or borrowing identity from SSO / the PLM / Teams. The
-  third fits your own "complement, don't replace" test best and costs most.
-  Nothing gets built until you pick.
-- **The room layout.** Removing the transport and OP.STATUS, moving the call
-  controls down there, shrinking the deictic panel, giving the side panel its
-  own side, and fixing how the manager view is reached are all the same few
-  pixels. Worth a sketch you look at before it is built, rather than three
-  re-layouts.
-- **The snap-back feel.** Nudging the camera while following would give you a
-  temporary free camera that eases back after about two seconds. Two seconds
-  is a guess; it needs to be tried in use.
+- **Identity (C): still yours to pick.** You asked for "an account system
+  where you can see what reviews you have been a part of". The options, from
+  cheapest:
+  1. A name you keep: your browser identity made permanent and portable, with
+     no sign-up.
+  2. Real accounts on the deployment.
+  3. Borrowing identity from SSO, the PLM or Teams. This fits your
+     "complement, don't replace" test best and costs the most.
+
+  Nothing is started until you pick.
+- **Try the snap-back.** Follow someone and drag your view: it eases back
+  after 2 seconds. If that feels too short or too long, the number is
+  `FOLLOW_RESUME_DELAY_MS` in `lib/followTiming.ts`. The boardroom uses the
+  same number now (it was 3 s).
+- **Look at the new layout** at https://localhost/ and say what to change.
+- **Push when you are happy.** The 8 commits from this session are not
+  pushed yet.
 
 ---
 

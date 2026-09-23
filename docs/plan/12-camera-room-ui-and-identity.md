@@ -1,8 +1,21 @@
 # Plan — the camera, the room's furniture, and who you are
 
-Written 2026-09-23 from the user's notes after testing the build. **Nothing
-here has been started.** It is the queue for the next session, in the user's
-own terms, with the reasoning kept rather than compressed into tickets.
+Written 2026-09-23 from the user's notes after testing the build, in the
+user's own terms, with the reasoning kept rather than compressed into tickets.
+
+**Status (2026-09-23, night):**
+- **A1–A4: done.** `d81579d` did A1 and A2; `3a735f7` did A3 and A4.
+- **B: done** as Option B (`a43a5bf`).
+- **C: not started**, waiting on the user's choice.
+- **D:**
+  - The Vercel config gap is closed (`6187662`).
+  - The spend ceiling is documented in the README rather than built. The
+    server code has no database to count spending across instances.
+  - CI runs on Node 24 actions (`e3514d7`).
+  - Lint warnings are down to 36 (`03adc3c`).
+  - Still open: TURN, diarization, T0.1, programmable agents.
+
+See EXECUTION-LOG for the details.
 
 Three separate things got bundled together in one message, and they are
 different sizes: a **camera and following model** that needs design, a list of
