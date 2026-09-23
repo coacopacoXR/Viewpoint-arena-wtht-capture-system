@@ -296,6 +296,10 @@ After `down -v`, `./install.sh` starts again from a clean slate.
     set, `/admin` is closed rather than open. Changing either password means
     re-running `./install.sh`; there is no button for it, because rotating a
     secret means rewriting `.env` and restarting the API container.
+  - **Activity.** The admin screen also lists who admitted whom, who was
+    refused, and who changed a link's join policy — grants only, nothing
+    about what was said or shown in a meeting. It is a record of what the app
+    did, not a tamper-proof ledger, and the names in it are self-asserted.
 - **A review can be hidden from the lobby.** On the curate page, *Link only*
   keeps a review out of Saved Reviews while its link keeps working — useful
   when a deployment is shared by several teams.
