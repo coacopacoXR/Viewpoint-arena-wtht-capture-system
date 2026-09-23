@@ -19,7 +19,7 @@ import {
 import { useStore } from '../store';
 import type { ModelType, Requirement } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
-import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
+import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, listUsedLabelValues, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import { getIdentity } from '../lib/identity';
 import { useFlushingDebounce } from '../lib/useFlushingDebounce';
@@ -1264,17 +1264,29 @@ const RequirementsTab: React.FC<{ requirements: Requirement[] }> = ({ requiremen
 
 // ─── Labels tab ────────────────────────────────────────────────────────────
 
-const LabelsTab: React.FC = () => {
+export const LabelsTab: React.FC = () => {
   const labels = useReviewSetupStore((s) => s.draft?.labels ?? {});
   const setLabel = useReviewSetupStore((s) => s.setLabel);
   const clearLabel = useReviewSetupStore((s) => s.clearLabel);
   const fields = useLabelFieldsStore((s) => s.fields);
   const loadFields = useLabelFieldsStore((s) => s.load);
   const loaded = useLabelFieldsStore((s) => s.loaded);
+  const [usedValues, setUsedValues] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     if (!loaded) loadFields();
   }, [loaded, loadFields]);
+
+  // What other reviews have already been tagged with, for the suggestions in
+  // the free-text inputs. Once per mount: the point is to stop three
+  // spellings of one phase becoming three groups, not to be live.
+  useEffect(() => {
+    let cancelled = false;
+    void listUsedLabelValues().then((values) => {
+      if (!cancelled) setUsedValues(values);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="p-5 flex flex-col gap-3">
@@ -1339,6 +1351,13 @@ const LabelsTab: React.FC = () => {
                 list={`label-suggestions-${field.id}`}
                 className="w-full bg-white/5 text-xs rounded px-2 py-1.5 border border-white/10 outline-none focus:border-emerald-400/50 placeholder:text-gray-600"
               />
+            )}
+            {!hasValues && usedValues[field.id] && usedValues[field.id].length > 0 && (
+              <datalist id={`label-suggestions-${field.id}`}>
+                {usedValues[field.id].map((v) => (
+                  <option key={v} value={v} />
+                ))}
+              </datalist>
             )}
           </div>
         );

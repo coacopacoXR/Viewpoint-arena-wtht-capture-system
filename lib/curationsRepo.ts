@@ -256,6 +256,52 @@ export async function getCurationSummary(id: string): Promise<CurationSummary | 
   return rowToSummary(data as unknown as CurationListRow);
 }
 
+// Collect every distinct label value already used for each field across all
+// reviews on this install. Powers the datalist suggestions in the free-text
+// inputs of LabelsTab — one query for every field rather than one per field.
+//
+// `labels` is a jsonb column: { [fieldId]: stringValue }. We cap at 200 rows
+// (newest first) to keep the query bounded. An install whose database
+// predates the `labels` column gets an empty map — no suggestions, but no
+// error either (same 42703 pattern as every other read above).
+export async function listUsedLabelValues(): Promise<Record<string, string[]>> {
+  const first = await supabase
+    .from('review_curations')
+    .select('labels')
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  const { data, error } = first.error?.code === UNDEFINED_COLUMN
+    ? await supabase
+        .from('review_curations')
+        .select('id')
+        .order('created_at', { ascending: false })
+        .limit(200)
+    : first;
+
+  if (error) {
+    console.error('[curationsRepo] listUsedLabelValues failed:', error);
+    return {};
+  }
+
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const result: Record<string, Set<string>> = {};
+  for (const row of rows) {
+    const labels = row['labels'] as Record<string, string> | null | undefined;
+    if (!labels || typeof labels !== 'object') continue;
+    for (const [fieldId, value] of Object.entries(labels)) {
+      if (typeof value !== 'string' || !value) continue;
+      if (!result[fieldId]) result[fieldId] = new Set();
+      result[fieldId].add(value);
+    }
+  }
+  const out: Record<string, string[]> = {};
+  for (const [fieldId, values] of Object.entries(result)) {
+    out[fieldId] = [...values].sort();
+  }
+  return out;
+}
+
 // ─── Live presence ───────────────────────────────────────────────────────────
 // Built on Supabase Presence: each contributor opens a channel keyed by the
 // curation id, tracks their identity, and receives the full peer list as it

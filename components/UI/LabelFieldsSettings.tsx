@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { GripVertical } from 'lucide-react';
 import { useLabelFieldsStore } from '../../lib/labelFieldsStore';
 import type { LabelField } from '../../lib/supabase';
 
@@ -9,12 +10,19 @@ const LabelFieldsSettings: React.FC<{
   const addField = useLabelFieldsStore((s) => s.addField);
   const renameField = useLabelFieldsStore((s) => s.renameField);
   const updateFieldValues = useLabelFieldsStore((s) => s.updateFieldValues);
-  const _reorderFields = useLabelFieldsStore((s) => s.reorderFields);
+  const reorderFields = useLabelFieldsStore((s) => s.reorderFields);
   const removeField = useLabelFieldsStore((s) => s.removeField);
 
   const [newName, setNewName] = useState('');
   const [editingValuesId, setEditingValuesId] = useState<string | null>(null);
   const [valuesDraft, setValuesDraft] = useState('');
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  // A row is only draggable while the grip is held. With `draggable` on the
+  // row itself, dragging to select text inside the field-name input starts
+  // dragging the row instead — and typing in that input is the main thing
+  // this panel is for.
+  const [grabbedIndex, setGrabbedIndex] = useState<number | null>(null);
 
   const startEditValues = (field: LabelField) => {
     setEditingValuesId(field.id);
@@ -31,6 +39,34 @@ const LabelFieldsSettings: React.FC<{
     if (!newName.trim()) return;
     await addField(newName.trim());
     setNewName('');
+  };
+
+  const handleDragStart = (idx: number) => setDragIndex(idx);
+
+  const handleDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    setOverIndex(idx);
+  };
+
+  const handleDrop = (e: React.DragEvent, targetIdx: number) => {
+    // Without this the browser treats the drop as a navigation in some cases.
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === targetIdx) return;
+    const newOrder = [...fields];
+    const [moved] = newOrder.splice(dragIndex, 1);
+    newOrder.splice(targetIdx, 0, moved);
+    // Optimistic in the store; a failed write leaves the list as the person
+    // sees it and the next load corrects it, which beats snapping back
+    // mid-drag.
+    void Promise.resolve(reorderFields(newOrder.map((f) => f.id))).catch((err) => {
+      console.error('[labelFields] reorder failed', err);
+    });
+  };
+
+  const handleDragEnd = () => {
+    setDragIndex(null);
+    setOverIndex(null);
+    setGrabbedIndex(null);
   };
 
   return (
@@ -51,8 +87,28 @@ const LabelFieldsSettings: React.FC<{
             <p className="text-xs text-gray-400 italic text-center py-4">No label fields yet. Add one below.</p>
           )}
           {fields.map((field, idx) => (
-            <div key={field.id} className="rounded-lg border border-gray-200 p-3 space-y-2">
+            <div
+              key={field.id}
+              data-testid="label-field-row"
+              draggable={grabbedIndex === idx}
+              onDragStart={() => handleDragStart(idx)}
+              onDragOver={(e) => handleDragOver(e, idx)}
+              onDrop={(e) => handleDrop(e, idx)}
+              onDragEnd={handleDragEnd}
+              className={`rounded-lg border p-3 space-y-2 ${
+                dragIndex !== null && overIndex === idx && dragIndex !== idx
+                  ? 'border-emerald-400 border-t-2'
+                  : 'border-gray-200'
+              } ${dragIndex === idx ? 'opacity-40' : ''}`}
+            >
               <div className="flex items-center gap-2">
+                <GripVertical
+                  size={14}
+                  aria-label="Drag to reorder"
+                  onMouseDown={() => setGrabbedIndex(idx)}
+                  onMouseUp={() => setGrabbedIndex(null)}
+                  className="text-gray-400 hover:text-gray-600 cursor-grab active:cursor-grabbing shrink-0"
+                />
                 <span className="text-[10px] font-mono text-gray-400 w-4">{idx + 1}</span>
                 <input
                   value={field.name}

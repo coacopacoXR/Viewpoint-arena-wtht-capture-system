@@ -585,6 +585,21 @@ runs caught, batch by batch, is the point of this entry:
   verified live: open → 400 from validation; password and no cookie → 401 and
   nothing billed; password with the cookie → through.
 
+- **Label fields: drag to reorder, and suggest what has been used (batch AL)**.
+  The order of the fields decides the order of the tracker's grouping
+  controls and could only be set by creation order; `reorderFields` existed,
+  was wired to the database, and nothing called it. Now a grip drags a row.
+  Caught in review: Qwen made the whole row `draggable`, which means dragging
+  to select text inside the field-name input picks the row up instead — in
+  the one panel whose purpose is typing those names. Only the grip arms the
+  drag now, with a test that fails if a row is draggable before it is held.
+  The second half: a free-text label input offers the values other reviews
+  already used, via a plain `<datalist>`, so "Phase 2", "phase 2" and "Phase
+  Two" stop becoming three groups for one thing. Suggestions only — a new
+  value is still just typed. Verified live: dragging by the grip reorders and
+  the order survives a reload, typing in the name input still types, and a
+  value used on one review is offered on another.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.
