@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import PartySocket from 'partysocket';
-import type { ParticipantPresence } from '../party/room.server';
-import type { InsightCard, LiveChatMessage, XRParticipantData } from '../types';
+import type { ParticipantPresence, WebRTCSignalData } from '../party/room.server';
+import type { InsightCard, LiveChatMessage, XRParticipantData, SpatialComment } from '../types';
 import { remoteXRParticipants } from './xrPresenceRef';
 import { remoteLaserTargets, remoteLaserColors, remoteLaserMeshNames, remoteLaserPartNames, remoteLaserLastUpdate } from './laserTargetRef';
 import { useActiveReviewStore } from './activeReviewStore';
@@ -37,12 +37,12 @@ type RoomMessage =
   | { type: 'PRESENTER_REQUEST_DENIED'; payload: { fromUserId: string } }
   | { type: 'TAKEOVER_ATTEMPT'; payload: { userId: string } }
   | { type: 'PRESENTER_CHANGED'; payload: { userId: string } }
-  | { type: 'COMMENT_ADD'; payload: { comment: any } }
-  | { type: 'COMMENT_UPDATE'; payload: { id: string; updates: Record<string, any> } }
+  | { type: 'COMMENT_ADD'; payload: { comment: SpatialComment } }
+  | { type: 'COMMENT_UPDATE'; payload: { id: string; updates: Partial<SpatialComment> } }
   | { type: 'COMMENT_DELETE'; payload: { id: string } }
   | { type: 'COMMENT_RESOLVE'; payload: { id: string } }
-  | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } }
-  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } }
+  | { type: 'COMMENT_ROSTER'; payload: { comments: SpatialComment[] } }
+  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: WebRTCSignalData } }
   | { type: 'LIVE_CHAT'; payload: LiveChatMessage }
   | { type: 'XR_PRESENCE'; payload: XRParticipantData }
   | { type: 'TRANSCRIPT_LINE'; payload: import('../types').ChatMessage }
@@ -58,7 +58,7 @@ type RoomMessage =
   | { type: 'JOIN_POLICY'; payload: { policy: 'open' | 'ask' } };
 
 // Module-level ref so it persists across re-renders and is accessible from the message handler
-const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; data: any }) => void) | null } = { current: null };
+const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; data: WebRTCSignalData }) => void) | null } = { current: null };
 
 // Module-level socket ref so broadcastTranscriptLine (called from useLiveTranscript,
 // outside the hook) can send without going through the hook's return value.
@@ -171,7 +171,7 @@ export function useJoinPolicy(): 'open' | 'ask' {
 const seenTranscriptIds = new Set<string>();
 
 const PARTYKIT_HOST: string =
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
 
 /**
  * 'wss' whenever the page itself is https, else undefined (partysocket decides).
@@ -240,14 +240,14 @@ export interface UsePartyPresenceReturn {
   broadcastPresenterRequest: (fromUserId: string, fromName: string) => void;
   broadcastPresenterRequestDenied: (fromUserId: string) => void;
   broadcastTakeoverAttempt: (userId: string) => void;
-  broadcastCommentAdd: (comment: any) => void;
-  broadcastCommentUpdate: (id: string, updates: Record<string, any>) => void;
+  broadcastCommentAdd: (comment: SpatialComment) => void;
+  broadcastCommentUpdate: (id: string, updates: Partial<SpatialComment>) => void;
   broadcastChatMessage: (msg: LiveChatMessage) => void;
   broadcastXRPresence: (data: XRParticipantData) => void;
   broadcastCommentDelete: (id: string) => void;
   broadcastCommentResolve: (id: string) => void;
-  broadcastWebRTCSignal: (to: string, data: any) => void;
-  registerWebRTCSignalHandler: (handler: (payload: { from: string; to: string; data: any }) => void) => () => void;
+  broadcastWebRTCSignal: (to: string, data: WebRTCSignalData) => void;
+  registerWebRTCSignalHandler: (handler: (payload: { from: string; to: string; data: WebRTCSignalData }) => void) => () => void;
 }
 
 export function usePartyPresence(roomId: string | undefined): UsePartyPresenceReturn {
@@ -572,7 +572,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         // Most common cause: a stale partykit dev server emitting an older
         // payload shape than the client expects (e.g. BOARDROOM_STATE before
         // the takeover fields were added).
-        console.error('[partypresence] error handling message', (msg as any)?.type, err);
+        console.error('[partypresence] error handling message', msg?.type, err);
       }
     });
 
@@ -740,7 +740,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'TAKEOVER_ATTEMPT', payload: { userId } }));
   }
 
-  function broadcastCommentAdd(comment: any) {
+  function broadcastCommentAdd(comment: SpatialComment) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ type: 'COMMENT_ADD', payload: { comment } }));
@@ -758,7 +758,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'XR_PRESENCE', payload: data }));
   }
 
-  function broadcastCommentUpdate(id: string, updates: Record<string, any>) {
+  function broadcastCommentUpdate(id: string, updates: Partial<SpatialComment>) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ type: 'COMMENT_UPDATE', payload: { id, updates } }));
@@ -776,7 +776,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     socket.send(JSON.stringify({ type: 'COMMENT_RESOLVE', payload: { id } }));
   }
 
-  function broadcastWebRTCSignal(to: string, data: any) {
+  function broadcastWebRTCSignal(to: string, data: WebRTCSignalData) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({
@@ -788,7 +788,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   // Stable reference — must not change across renders so the useWebRTC effect only runs once.
   // If this were a plain function it would be recreated every render, causing the effect to
   // repeatedly cleanup (null) then re-register, creating a window where signals get dropped.
-  const registerWebRTCSignalHandler = useCallback((handler: (payload: { from: string; to: string; data: any }) => void): () => void => {
+  const registerWebRTCSignalHandler = useCallback((handler: (payload: { from: string; to: string; data: WebRTCSignalData }) => void): () => void => {
     webRTCSignalHandlerRef.current = handler;
     return () => { webRTCSignalHandlerRef.current = null; };
   }, []);

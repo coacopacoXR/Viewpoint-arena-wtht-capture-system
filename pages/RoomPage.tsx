@@ -10,6 +10,7 @@ import { PresenceContext } from '../lib/PresenceContext';
 import { useWebRTC } from '../lib/useWebRTC';
 import { WebRTCContext } from '../lib/WebRTCContext';
 import { useReviewSetupStore } from '../lib/reviewSetupStore';
+import type { ReviewDraft } from '../lib/reviewSetupStore';
 import { useActiveReviewStore } from '../lib/activeReviewStore';
 import { loadCuration, saveCuration } from '../lib/curationsRepo';
 import { useIsMobile } from '../lib/useIsMobile';
@@ -41,7 +42,7 @@ const RoomPage: React.FC = () => {
   // Guard: if arriving directly (not from lobby), redirect to lobby to set identity
   useEffect(() => {
     const enteredRoom = sessionStorage.getItem('vp_enteredRoom');
-    const fromLobby = (location.state as any)?.fromLobby;
+    const fromLobby = (location.state as { fromLobby?: boolean } | null)?.fromLobby;
     if (!fromLobby && enteredRoom !== roomId) {
       navigate('/', { state: { joinRoomId: roomId }, replace: true });
     }
@@ -60,7 +61,7 @@ const RoomPage: React.FC = () => {
     if (!roomId) return;
     let cancelled = false;
 
-    const broadcastWhenReady = (draft: any) => {
+    const broadcastWhenReady = (draft: ReviewDraft) => {
       if (presence.broadcastReviewConfig(draft)) return;
       const id = setInterval(() => {
         if (presence.broadcastReviewConfig(draft)) clearInterval(id);
@@ -93,17 +94,18 @@ const RoomPage: React.FC = () => {
     if (!roomId) return;
     const isHost = sessionHostId === presence.localUserId || sessionHostId === null;
     if (!isHost) return;
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
     const unsub = useActiveReviewStore.subscribe((state, prev) => {
       if (!state.config || state.config === prev.config) return;
       if (state.config.reviewId !== roomId) return;
       // debounce per-host via a moving timer keyed off the config object
-      if ((unsub as any)._pending) clearTimeout((unsub as any)._pending);
-      (unsub as any)._pending = setTimeout(() => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
         saveCuration(state.config!);
       }, 1000);
     });
     return () => {
-      if ((unsub as any)._pending) clearTimeout((unsub as any)._pending);
+      if (debounceTimer) clearTimeout(debounceTimer);
       unsub();
     };
   }, [roomId, sessionHostId, presence.localUserId]);

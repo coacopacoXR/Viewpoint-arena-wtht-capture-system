@@ -1642,10 +1642,10 @@ const ShareButton: React.FC<{ reviewId: string; peerCount: number }> = ({ review
     } catch { /* clipboard unavailable */ }
   };
 
-  const canNativeShare = typeof navigator !== 'undefined' && typeof (navigator as any).share === 'function';
+  const canNativeShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
   const nativeShare = async (kind: 'setup' | 'room', url: string) => {
     try {
-      await (navigator as any).share({
+      await navigator.share({
         title: draftTitle,
         text: kind === 'room' ? `Join the design review: ${draftTitle}` : `Help curate: ${draftTitle}`,
         url,

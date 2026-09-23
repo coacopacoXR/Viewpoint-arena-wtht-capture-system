@@ -6,7 +6,7 @@ import {
     Scale, BrainCircuit
 } from 'lucide-react';
 import { clsx } from 'clsx';
-import { InsightCard } from '../../types';
+import { InsightCard, InsightDetails } from '../../types';
 import AssigneeComboBox from './AssigneeComboBox';
 
 const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, agentColor?: string }> = ({ card, onClose }) => {
@@ -16,16 +16,16 @@ const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, age
     const { details, affectedRequirementIds, kbRecommendations } = card;
 
     // Helper to update fields in the store
-    const handleUpdate = (field: keyof InsightCard, value: any) => {
-        updateInsight(card.id, { [field]: value });
+    const handleUpdate = <K extends keyof InsightCard>(field: K, value: InsightCard[K]) => {
+        updateInsight(card.id, { [field]: value } as Partial<InsightCard>);
     };
 
-    const handleDetailUpdate = (field: string, value: any) => {
+    const handleDetailUpdate = (field: string, value: unknown) => {
         updateInsight(card.id, {
             details: {
                 ...card.details,
-                [field]: value
-            }
+                [field]: value,
+            } as unknown as InsightDetails,
         });
     };
     

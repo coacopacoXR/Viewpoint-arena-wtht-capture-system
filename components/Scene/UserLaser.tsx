@@ -305,14 +305,14 @@ const UserLaser: React.FC = () => {
                 dwellRaycaster.current.setFromCamera(dwellVec.current, camera);
                 const hits = dwellRaycaster.current.intersectObjects(scene.children, true);
                 for (const hit of hits) {
-                    const obj: any = hit.object;
+                    const obj: THREE.Object3D = hit.object;
                     if (
                         obj.userData?.skipRaycast ||
                         obj.name?.startsWith?.('Agent') ||
                         obj.type === 'Line' ||
                         obj.type === 'Points'
                     ) continue;
-                    let curr: any = obj;
+                    let curr: THREE.Object3D | null = obj;
                     let skip = false;
                     while (curr) {
                         if (curr.userData?.skipRaycast) { skip = true; break; }
@@ -366,7 +366,7 @@ const UserLaser: React.FC = () => {
 
         for (let i = 0; i < intersects.length; i++) {
             const hit = intersects[i];
-            const obj: any = hit.object;
+            const obj: THREE.Object3D = hit.object;
             // Skip non-content (helpers, agent avatars, remote avatars, remote laser dots/beams)
             if (
                 obj.userData?.skipRaycast ||
@@ -376,7 +376,7 @@ const UserLaser: React.FC = () => {
             ) continue;
 
             // Walk up looking for a tagged model — also bail if any ancestor is skipRaycast
-            let curr: any = obj;
+            let curr: THREE.Object3D | null = obj;
             let skip = false;
             while (curr) {
                 if (curr.userData?.skipRaycast) { skip = true; break; }

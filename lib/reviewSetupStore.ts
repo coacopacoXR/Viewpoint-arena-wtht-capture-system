@@ -565,15 +565,18 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
       version: 1,
       // v0 → v1: agenda items moved from { refType, refId } to { viewpointIds, pinIds }.
       // Old single-ref items become slides with that one item attached.
-      migrate: (persisted: any, fromVersion: number) => {
-        if (!persisted?.draft) return persisted;
-        let draft = persisted.draft;
+      migrate: (persisted: unknown, fromVersion: number) => {
+        if (!persisted || typeof persisted !== 'object') return persisted;
+        const p = persisted as Record<string, unknown>;
+        if (!p.draft || typeof p.draft !== 'object') return persisted;
+        let draft = p.draft as Record<string, unknown>;
         if (fromVersion < 1) {
-          const agenda = (draft.agenda ?? []).map((raw: any) => {
-            if (Array.isArray(raw?.viewpointIds) && Array.isArray(raw?.pinIds)) return raw;
-            const viewpointIds = raw?.refType === 'viewpoint' && raw?.refId ? [raw.refId] : [];
-            const pinIds = raw?.refType === 'pin' && raw?.refId ? [raw.refId] : [];
-            const { refType: _rt, refId: _ri, ...rest } = raw ?? {};
+          const agenda = ((draft.agenda as unknown[]) ?? []).map((raw) => {
+            const r = (raw ?? {}) as Record<string, unknown>;
+            if (Array.isArray(r?.viewpointIds) && Array.isArray(r?.pinIds)) return r;
+            const viewpointIds = r?.refType === 'viewpoint' && r?.refId ? [r.refId] : [];
+            const pinIds = r?.refType === 'pin' && r?.refId ? [r.refId] : [];
+            const { refType: _rt, refId: _ri, ...rest } = r;
             return { ...rest, viewpointIds, pinIds };
           });
           draft = { ...draft, agenda };
@@ -590,7 +593,7 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         if (typeof draft.listed !== 'boolean') {
           draft = { ...draft, listed: true };
         }
-        return { ...persisted, draft };
+        return { ...p, draft };
       },
     },
   ),

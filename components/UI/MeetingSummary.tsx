@@ -12,7 +12,8 @@ import {
     Link2, Clock, Route, TreeDeciduous, X
 } from 'lucide-react';
 import { clsx } from 'clsx';
-import { InsightType, InsightCard, ChatMessage } from '../../types';
+import { InsightType, InsightCard, ChatMessage, AgentState } from '../../types';
+import type { LucideIcon } from 'lucide-react';
 import InsightDetailModal from './InsightDetailModal';
 
 // ============================================================================
@@ -59,7 +60,7 @@ interface AnalysisPattern {
     type: string;
     description: string;
     confidence: number;
-    icon: any;
+    icon: LucideIcon;
     color: string;
 }
 
@@ -129,7 +130,7 @@ const getRoleIcon = (role: ConversationRole) => {
 
 type TriggerCategory = 'DISAGREEMENT' | 'COST' | 'ERGONOMICS' | 'COMPLIANCE' | 'QUALITY' | 'TECHNICAL' | 'SAFETY' | 'GENERAL';
 
-const getTriggerInfo = (text: string): { type: TriggerCategory, icon: any, label: string, color: string } => {
+const getTriggerInfo = (text: string): { type: TriggerCategory, icon: LucideIcon, label: string, color: string } => {
     const t = text.toLowerCase();
     if (t.includes('disagree') || t.includes('not sure') || t.includes('opinion') || t.includes('push back'))
         return { type: 'DISAGREEMENT', icon: HelpCircle, label: 'Disagreement', color: 'text-amber-600 bg-amber-50 border-amber-200' };
@@ -156,7 +157,7 @@ const getTriggerInfo = (text: string): { type: TriggerCategory, icon: any, label
 const buildReasoningTree = (
     messages: ChatMessage[],
     _cards: InsightCard[],
-    _agents: any[]
+    _agents: AgentState[]
 ): ReasoningNode[] => {
     const nodes: ReasoningNode[] = [];
     let currentParentId: string | null = null;
@@ -344,7 +345,7 @@ const buildCausalChain = (
     component: string,
     messages: ChatMessage[],
     cards: InsightCard[],
-    agents: any[]
+    agents: AgentState[]
 ): CausalChain => {
     const nodes = buildReasoningTree(messages, cards, agents);
     const patterns = detectPatterns(messages, cards);
@@ -788,7 +789,7 @@ const MeetingSummary: React.FC = () => {
                                         <button
                                             key={key}
                                             onClick={() => {
-                                                setActiveTab(key as any);
+                                                setActiveTab(key as typeof activeTab);
                                                 setShowBoardExplainer(false);
                                             }}
                                             className={clsx(
@@ -1586,9 +1587,9 @@ const MeetingSummary: React.FC = () => {
 
                                                 {/* Legend */}
                                                 <div className="flex gap-3 justify-end mt-2">
-                                                    {['OBSERVATION', 'TRIGGER', 'RATIONALE', 'SYNTHESIS', 'DECISION'].map(role => (
+                                                    {(['OBSERVATION', 'TRIGGER', 'RATIONALE', 'SYNTHESIS', 'DECISION'] as ConversationRole[]).map(role => (
                                                         <div key={role} className="flex items-center gap-1">
-                                                            <div className={clsx("w-2 h-2 rounded-full", getRoleColor(role as any).split(' ')[0])}></div>
+                                                            <div className={clsx("w-2 h-2 rounded-full", getRoleColor(role).split(' ')[0])}></div>
                                                             <span className="text-[8px] text-gray-500 font-bold">{role}</span>
                                                         </div>
                                                     ))}
@@ -1691,8 +1692,8 @@ const MeetingSummary: React.FC = () => {
 
 // Sub-component for Draggable Card
 const SummaryCard: React.FC<{
-    card: any,
-    agents: any[],
+    card: InsightCard,
+    agents: AgentState[],
     setHover: (id: string | null) => void,
     onClick: () => void,
     color: string

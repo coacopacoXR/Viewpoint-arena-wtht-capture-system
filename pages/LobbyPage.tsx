@@ -36,7 +36,7 @@ async function fetchStats(): Promise<SessionStats> {
 const LobbyPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const joinRoomId: string | undefined = (location.state as any)?.joinRoomId;
+  const joinRoomId: string | undefined = (location.state as { joinRoomId?: string } | null)?.joinRoomId;
 
   const [identity, setIdentity] = useIdentity();
   const [name, setName] = useState(joinRoomId ? '' : (identity?.name ?? ''));

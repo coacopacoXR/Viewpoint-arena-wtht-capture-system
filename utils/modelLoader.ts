@@ -3,7 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import { SceneNode } from '../types';
+import { SceneNode, ObjectState } from '../types';
 
 export interface ModelImportResult {
     root: THREE.Group;
@@ -259,7 +259,7 @@ export async function parseModelFile(file: File): Promise<ModelImportResult> {
     };
 }
 
-export function generateObjectStates(node: SceneNode, states: Record<string, any> = {}): Record<string, any> {
+export function generateObjectStates(node: SceneNode, states: Record<string, ObjectState> = {}): Record<string, ObjectState> {
     states[node.id] = {
         id: node.id,
         visible: true,

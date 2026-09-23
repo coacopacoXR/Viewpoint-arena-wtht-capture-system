@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { RemoteParticipantInfo } from './usePartyPresence';
+import type { WebRTCSignalData } from '../party/room.server';
 
 // STUN + public TURN for production NAT traversal.
 // STUN alone fails when either peer is behind symmetric NAT (common on 4G/corporate).
@@ -58,8 +59,8 @@ export interface UseWebRTCReturn {
 interface Params {
   localUserId: string;
   remoteParticipantList: RemoteParticipantInfo[];
-  broadcastWebRTCSignal: (to: string, data: any) => void;
-  registerWebRTCSignalHandler: (handler: (payload: { from: string; to: string; data: any }) => void) => () => void;
+  broadcastWebRTCSignal: (to: string, data: WebRTCSignalData) => void;
+  registerWebRTCSignalHandler: (handler: (payload: { from: string; to: string; data: WebRTCSignalData }) => void) => () => void;
   active: boolean;
   isBoardroomMode: boolean;
 }
@@ -186,7 +187,7 @@ export function useWebRTC({
     }
   }
 
-  const handleSignal = useCallback(async (payload: { from: string; to: string; data: any }) => {
+  const handleSignal = useCallback(async (payload: { from: string; to: string; data: WebRTCSignalData }) => {
     if (payload.to !== localUserIdRef.current) return;
     const { from, data } = payload;
 

@@ -1,4 +1,11 @@
 import type * as Party from 'partykit/server';
+import type { InsightCard, SpatialComment, LiveChatMessage, XRParticipantData } from '../types';
+import type { ReviewDraft } from '../lib/reviewSetupStore';
+
+export type WebRTCSignalData =
+  | { type: 'offer'; sdp: RTCSessionDescriptionInit }
+  | { type: 'answer'; sdp: RTCSessionDescriptionInit }
+  | { type: 'ice'; candidate?: RTCIceCandidateInit };
 
 export interface ParticipantPresence {
   userId: string;
@@ -19,7 +26,7 @@ type RoomMessage =
   | { type: 'LEAVE'; payload: { userId: string } }
   | { type: 'ROSTER'; payload: ParticipantPresence[] }
   | { type: 'PRESENTER_CHANGE'; payload: { agentId: string | null } }
-  | { type: 'INSIGHT_CARD'; payload: any }
+  | { type: 'INSIGHT_CARD'; payload: InsightCard }
   | { type: 'LEADER_CHANGE'; payload: { userId: string | null } }
   | { type: 'BOARDROOM_COUNTDOWN'; payload: Record<string, never> }
   | { type: 'BOARDROOM_STATE'; payload: { active: boolean; leaderId: string | null; takeover: { enabled: boolean; approvedUserIds: string[] } } }
@@ -28,7 +35,7 @@ type RoomMessage =
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
   | { type: 'MODEL_CHANGE'; payload: { modelType: 'synth' | 'bicycle' | 'imported'; fileBase64?: string; fileName?: string } }
-  | { type: 'REVIEW_CONFIG'; payload: { config: any } }
+  | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
   | { type: 'MEETING_END'; payload: Record<string, never> }
@@ -37,14 +44,14 @@ type RoomMessage =
   | { type: 'PRESENTER_REQUEST_DENIED'; payload: { fromUserId: string } }
   | { type: 'TAKEOVER_ATTEMPT'; payload: { userId: string } }
   | { type: 'PRESENTER_CHANGED'; payload: { userId: string } }
-  | { type: 'COMMENT_ADD'; payload: { comment: any } }
-  | { type: 'COMMENT_UPDATE'; payload: { id: string; updates: Record<string, any> } }
+  | { type: 'COMMENT_ADD'; payload: { comment: SpatialComment } }
+  | { type: 'COMMENT_UPDATE'; payload: { id: string; updates: Partial<SpatialComment> } }
   | { type: 'COMMENT_DELETE'; payload: { id: string } }
   | { type: 'COMMENT_RESOLVE'; payload: { id: string } }
-  | { type: 'COMMENT_ROSTER'; payload: { comments: any[] } }
-  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: any } }
-  | { type: 'LIVE_CHAT'; payload: any }
-  | { type: 'XR_PRESENCE'; payload: any }
+  | { type: 'COMMENT_ROSTER'; payload: { comments: SpatialComment[] } }
+  | { type: 'WEBRTC_SIGNAL'; payload: { from: string; to: string; data: unknown } }
+  | { type: 'LIVE_CHAT'; payload: LiveChatMessage }
+  | { type: 'XR_PRESENCE'; payload: XRParticipantData }
   | { type: 'TRANSCRIPT_LINE'; payload: { id: string; agentId: string; text: string; timestamp: number; speakerName?: string; speakerId?: string; offsetMs?: number } }
   | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } }
   | { type: 'POINTING_SEGMENT'; payload: { userId: string; userName: string; partId: string; partName: string; source: 'laser' | 'finger' | 'hover'; fromMs: number; toMs: number } }
@@ -79,9 +86,9 @@ export default class RoomServer implements Party.Server {
   // Persisted model state for late joiners
   currentModel: { modelType: string; fileBase64?: string; fileName?: string } | null = null;
   // Persisted curated review config (viewpoints, pins, agenda…)
-  reviewConfig: any | null = null;
+  reviewConfig: ReviewDraft | null = null;
   // Persisted spatial comments for late joiners
-  comments: any[] = [];
+  comments: SpatialComment[] = [];
   // Whether the room is currently in boardroom mode — sent to late joiners
   isBoardroomMode = false;
   // Persisted recording state for late joiners (section B: per-speaker mics).
@@ -602,18 +609,18 @@ export default class RoomServer implements Party.Server {
 
     } else if (msg.type === 'COMMENT_UPDATE') {
       const { id, updates } = msg.payload;
-      const idx = this.comments.findIndex((c: any) => c.id === id);
+      const idx = this.comments.findIndex((c) => c.id === id);
       if (idx !== -1) {
         this.comments[idx] = { ...this.comments[idx], ...updates };
       }
       this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'COMMENT_DELETE') {
-      this.comments = this.comments.filter((c: any) => c.id !== msg.payload.id);
+      this.comments = this.comments.filter((c) => c.id !== msg.payload.id);
       this.relay(JSON.stringify(msg), [sender.id]);
 
     } else if (msg.type === 'COMMENT_RESOLVE') {
-      const idx = this.comments.findIndex((c: any) => c.id === msg.payload.id);
+      const idx = this.comments.findIndex((c) => c.id === msg.payload.id);
       if (idx !== -1) {
         this.comments[idx] = { ...this.comments[idx], resolved: true };
       }

@@ -118,7 +118,7 @@ export async function syncItemsToSharePoint(
 }
 
 export function getSharePointConfig(): SharePointConfig | null {
-  const env = (import.meta as any).env ?? {};
+  const env = import.meta.env;
   const clientId = env.VITE_MSAL_CLIENT_ID as string;
   const tenantId = env.VITE_MSAL_TENANT_ID as string;
   const siteId = env.VITE_SP_SITE_ID as string;

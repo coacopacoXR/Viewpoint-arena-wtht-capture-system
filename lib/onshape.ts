@@ -7,7 +7,6 @@ export interface OnshapeUser {
   email?: string;
   image?: string;
   id?: string;
-  [k: string]: any;
 }
 
 export interface OnshapeDocument {
@@ -30,7 +29,7 @@ export interface OnshapeElement {
 async function api<T>(path: string): Promise<T | { status: number; error: string }> {
   const resp = await fetch(path, { credentials: 'include' });
   if (!resp.ok) {
-    let body: any = null;
+    let body: { error?: string } | null = null;
     try { body = await resp.json(); } catch { /* ignore */ }
     return { status: resp.status, error: body?.error || resp.statusText };
   }
