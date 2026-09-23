@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SlideContext, TranscriptChunk } from './types';
+import { hashPassword, signToken } from '../../../api/_lib/accessControl.ts';
 
 const FAKE_OPENAI_KEY = 'sk-FAKEFAKEFAKEFAKEFAKEFAKE00';
 const FAKE_ANTHROPIC_KEY = 'sk-ant-FAKEFAKEFAKEFAKEFAKE00';
@@ -892,5 +893,91 @@ describe('api/capture/extract — upstream and configuration failures', () => {
 
     expect(res._statusCode).toBe(503);
     expectNoLeaks(res);
+  });
+});
+
+describe('api/capture/extract — the front-door password', () => {
+  // This endpoint bills the deployment's own OpenAI or Anthropic key, so when
+  // a front-door password is set it must not answer a caller who has not
+  // entered it. Before this, the password guarded the screens and left the
+  // spending endpoints open to anyone who could reach the origin.
+  const STORED = hashPassword('right-password');
+
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = FAKE_OPENAI_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.ACCESS_PASSWORD_HASH;
+    delete process.env.OPENAI_API_KEY;
+    vi.restoreAllMocks();
+  });
+
+  it('refuses a POST with no cookie when a password is configured', async () => {
+    process.env.ACCESS_PASSWORD_HASH = STORED;
+    const { calls } = stubUpstream(() => new Response('{}', { status: 200 }));
+    const res = createMockRes();
+
+    await callHandler(
+      { method: 'POST', headers: {}, cookies: {}, body: { provider: 'openai', transcript } },
+      res,
+    );
+
+    expect(res._statusCode).toBe(401);
+    expect(calls).toHaveLength(0); // nothing was billed
+  });
+
+  it('refuses a forged cookie', async () => {
+    process.env.ACCESS_PASSWORD_HASH = STORED;
+    const { calls } = stubUpstream(() => new Response('{}', { status: 200 }));
+    const res = createMockRes();
+
+    await callHandler(
+      {
+        method: 'POST',
+        headers: {},
+        cookies: { vp_access: 'deadbeef' },
+        body: { provider: 'openai', transcript },
+      },
+      res,
+    );
+
+    expect(res._statusCode).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('lets an unlocked caller through', async () => {
+    process.env.ACCESS_PASSWORD_HASH = STORED;
+    stubUpstream(() => new Response(JSON.stringify({
+      choices: [{ message: { content: VALID_MODEL_JSON } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const res = createMockRes();
+
+    await callHandler(
+      {
+        method: 'POST',
+        headers: {},
+        cookies: { vp_access: signToken(STORED, 'vp_access') },
+        body: { provider: 'openai', transcript, context },
+      },
+      res,
+    );
+
+    expect(res._statusCode).toBe(200);
+  });
+
+  it('changes nothing when no password is configured', async () => {
+    process.env.ACCESS_PASSWORD_HASH = '';
+    stubUpstream(() => new Response(JSON.stringify({
+      choices: [{ message: { content: VALID_MODEL_JSON } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const res = createMockRes();
+
+    await callHandler(
+      { method: 'POST', headers: {}, body: { provider: 'openai', transcript, context } },
+      res,
+    );
+
+    expect(res._statusCode).toBe(200);
   });
 });

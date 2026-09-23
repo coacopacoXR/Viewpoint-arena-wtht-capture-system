@@ -8,6 +8,7 @@
 // the generic "forward to capture-service" handler.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { requestIsUnlocked } from '../_lib/accessControl.ts';
 import {
   CAPTURE_AUTH_HEADER,
   CAPTURE_SHARED_SECRET_ENV,
@@ -102,6 +103,17 @@ export async function captureProxyHandler(
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+
+  // Held to the front-door password when one is set: this forwards to
+  // capture-service with a secret the caller never has to know, so without
+  // the check anyone who could reach the origin could spend the deployment's
+  // transcription and LLM time. In the self-hosted stack nginx enforces the
+  // same thing before the request ever reaches this runtime
+  // (deploy/nginx/app.conf, /_access_check).
+  if (!requestIsUnlocked(req as unknown as { cookies?: Record<string, string> })) {
+    res.status(401).json({ error: 'locked' });
     return;
   }
 

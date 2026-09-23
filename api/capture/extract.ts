@@ -19,6 +19,7 @@
 // detail that an operator needs goes to the server log instead.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { requestIsUnlocked } from '../_lib/accessControl.ts';
 import {
   EXTRACTION_SYSTEM_PROMPT,
   buildExtractionUserPrompt,
@@ -291,6 +292,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST, HEAD');
     res.status(405).json({ error: 'method_not_allowed' });
+    return;
+  }
+
+  // A POST here bills the deployment's own OpenAI or Anthropic key, so it is
+  // held to the front-door password when one is set. The HEAD probe above is
+  // deliberately left open: it only reports whether a key exists, and server-
+  // side health checks call it without a browser cookie.
+  if (!requestIsUnlocked(req as unknown as { cookies?: Record<string, string> })) {
+    res.status(401).json({ error: 'locked' });
     return;
   }
 

@@ -572,6 +572,19 @@ runs caught, batch by batch, is the point of this entry:
   per-speaker live transcript still passes afterwards, which is the hot path
   the subrequest was added to.
 
+- **The same check now covers the cloud path and the Vercel path.** A POST to
+  `/api/capture/extract` bills the deployment's own OpenAI or Anthropic key
+  and went through the `api` container rather than nginx, so the nginx rule
+  did not touch it; `captureProxyHandler` (the Vercel half of local +
+  transcribe) had the same gap. Both now call one shared
+  `requestIsUnlocked(req)`, which is also what `/api/access-check` answers
+  with, so there is a single definition of "past the front door". The HEAD
+  probe on extract is deliberately left open: it reports only whether a key
+  exists, and server-side health checks call it with no browser cookie.
+  Mutation-tested (replacing the guard with `if (false)` fails two tests) and
+  verified live: open → 400 from validation; password and no cookie → 401 and
+  nothing billed; password with the cookie → through.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.
@@ -585,11 +598,11 @@ runs caught, batch by batch, is the point of this entry:
 - Requirements: no sample set, no generated codes, free-text category.
 
 ### Follow-ups
-- **`/api/capture/extract` can still spend a cloud API key** for any visitor
-  who can reach the app. The self-hosted capture endpoints are now behind the
-  front-door password (above), but that only helps a deployment that set one,
-  and the cloud-provider path runs through the `api` container rather than
-  nginx, so it needs the same check applied there.
+- **Rate limiting on the capture endpoints is still missing.** They are now
+  behind the front-door password on every path, but a deployment that chose to
+  stay open (the default) can still be asked to transcribe on a loop by anyone
+  who can reach it, and an unlocked user can do the same. The password is a
+  door, not a budget.
 - **Vercel limits vs capture:** Functions accept 100 MB bodies, capture-service
   allows 200 MB, and the proxy waits up to 15 minutes. A long meeting on
   Vercel will hit the platform limit first. Self-hosted nginx has no such cap.

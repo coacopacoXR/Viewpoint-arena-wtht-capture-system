@@ -18,10 +18,7 @@
 // chose to stay open stays open, exactly as before.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { parseStoredHash, verifyToken } from './_lib/accessControl.ts';
-
-const COOKIE_NAME = 'vp_access';
-const LABEL = 'vp_access';
+import { requestIsUnlocked } from './_lib/accessControl.ts';
 
 export async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -32,15 +29,7 @@ export async function handler(req: VercelRequest, res: VercelResponse) {
 
   res.setHeader('Cache-Control', 'no-store');
 
-  const hash = process.env.ACCESS_PASSWORD_HASH ?? '';
-  if (parseStoredHash(hash) === null) {
-    // No front-door password on this deployment — nothing to check.
-    res.status(204).end();
-    return;
-  }
-
-  const cookie = (req as unknown as { cookies?: Record<string, string> }).cookies?.[COOKIE_NAME];
-  if (cookie && verifyToken(cookie, hash, LABEL)) {
+  if (requestIsUnlocked(req as unknown as { cookies?: Record<string, string> })) {
     res.status(204).end();
     return;
   }

@@ -179,3 +179,25 @@ export const WRONG_PASSWORD_DELAY_MS = 400;
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * Whether this request may proceed past the front door.
+ *
+ * True when the deployment has no front-door password (an install that chose
+ * to stay open stays open) or when the request carries a valid `vp_access`
+ * cookie.
+ *
+ * This is what the endpoints that SPEND something — a GPU, a cloud API key —
+ * are held to. The password used to guard only the UI: the capture routes
+ * attach their own upstream credential for every caller, so anyone who could
+ * reach the origin could make the deployment transcribe audio or bill a
+ * provider without ever seeing a screen.
+ */
+export function requestIsUnlocked(
+  req: { cookies?: Record<string, string> },
+): boolean {
+  const hash = process.env.ACCESS_PASSWORD_HASH ?? '';
+  if (parseStoredHash(hash) === null) return true;
+  const cookie = req.cookies?.['vp_access'];
+  return !!cookie && verifyToken(cookie, hash, 'vp_access');
+}
