@@ -404,6 +404,60 @@ this branch from GitHub, so it must be pushed before anyone follows it).
 - **T0.1 (asset swap)**: decided 2026-09-17, cube at public release.
 - T4.7 (live streaming), T4.8 (n8n, optional), rest of Phase 6.
 
+## Session 2026-09-22/23 (continued): features on top of the working install
+
+The user tested the Docker install and drove a long list of changes. Each one
+was drafted by Qwen from a written spec in `.qwen-tasks/`, then run live in
+the Docker install (usually two browsers) before committing. What the live
+runs caught, batch by batch, is the point of this entry:
+
+- **Live transcript (T4.7 first slice)** `4ef95b8`. 8 s slices to Whisper via
+  a new /api/capture/transcribe. Live: the host could not see the transcript
+  while recording (manager workspace hides the panel) -> compact box.
+- **Record button in the transcript panel** `8f6bbe4`: one RecordingProvider
+  for the room, so two views cannot mean two recorders.
+- **Sharing** `c2da7af`: publicUrl in the config, localhost warning, and the
+  installer offering the LAN address. Live: WSL's `ip route` gives the
+  distro's 172.x address, powershell.exe ate the answer to the next question
+  (</dev/null), and the installer kept a certificate for the old hostname.
+- **Agents off by default** `aa4bd38`; the tracker was recording four demo
+  agents as attendees of every meeting.
+- **Requirements on the review** `88b1702`. Live: review_curations has a
+  column per field — a new field without one is silently dropped on save, so
+  the sample set "did nothing".
+- **People** `cd045d5`, then **removed entirely** `257768a` on user feedback.
+  Live: `?? []` inside zustand selectors looped React (#185) and took down
+  the lobby.
+- **Per-speaker transcript** `fc71ad9`: every client transcribes its own mic;
+  the room server stamps the speaker. Live: cards never left the machine that
+  recorded them, and recording while muted quietly opened a second mic.
+- **Arena audio** `80c6f49`: the call runs for the whole room, mic/speaker
+  controls, same-room mode, muted on arrival.
+- **Label fields** `8337375`: the user defines the fields; seeding removed in
+  `257768a` after "the labels should be set by the user, not pre filled".
+- **Commit a pin as a comment** `4f0b6a8`. Live: setActiveModelType cleared
+  comments, chat and cards unconditionally, and the room re-applies the model
+  on every REVIEW_CONFIG sync — so every participant lost meeting content
+  whenever the review changed. Pre-existing; found by this feature failing.
+- **Pointing timeline** `d74e4dc` and **grounded extraction** `b997d05`:
+  segments of who pointed at what, a chip on the transcript line, and the
+  component tree + segments + speaker-labelled hint in the prompt, with the
+  parsers dropping any componentReference that is not in the supplied list.
+  Verified by posting a recording straight to capture-service with a two-part
+  tree: the risk card came back on 'left_cushion', the others with none.
+
+### Decisions the user made in this stretch
+- Organising structure (tracker grouping) is **user-defined fields**, edited
+  in the app, seeded with nothing.
+- **No per-review people list**; people management belongs to an admin
+  screen later.
+- **No user accounts at all.** Access = optional front-door password +
+  admin passphrase + unguessable links + knock-to-join + per-review
+  visibility (`docs/plan/11-accounts-and-admin.md`). Both secrets default to
+  empty, so an existing install behaves exactly as before.
+- Programmable agents: roadmap, nothing decided.
+- Requirements: no sample set, no generated codes, free-text category.
+
 ### Follow-ups
 - **`/api/capture/local` is open to anyone who can reach the app.** The
   shared secret stops direct access to capture-service, but the proxy adds it
