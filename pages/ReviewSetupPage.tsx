@@ -73,6 +73,10 @@ const ReviewSetupPage: React.FC = () => {
   const [pinMode, setPinMode] = useState(false);
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>(null);
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
+  // Capture View hands back null until the canvas has a camera, a renderer
+  // and a scene. That is a fraction of a second, but clicking in it did
+  // nothing at all and said nothing either, which reads as a broken button.
+  const [captureNotice, setCaptureNotice] = useState('');
   const canvasRef = useRef<ReviewSetupCanvasHandle>(null);
 
   // Hydration + save state. `hydrated` gates the auto-save effect so we don't
@@ -320,7 +324,11 @@ const ReviewSetupPage: React.FC = () => {
           <button
             onClick={() => {
               const vp = canvasRef.current?.captureViewpoint();
-              if (!vp) return;
+              if (!vp) {
+                setCaptureNotice('The 3D view is still loading — try again in a moment.');
+                window.setTimeout(() => setCaptureNotice(''), 2500);
+                return;
+              }
               useReviewSetupStore.getState().addViewpoint({
                 label: `Viewpoint ${draft.viewpoints.length + 1}`,
                 position: vp.position,
@@ -333,6 +341,14 @@ const ReviewSetupPage: React.FC = () => {
           >
             <Camera size={14} /> Capture View
           </button>
+          {captureNotice && (
+            <div
+              className="absolute bottom-16 left-4 px-3 py-2 rounded-md bg-black/85 text-white text-[11px] shadow-lg pointer-events-none"
+              role="status"
+            >
+              {captureNotice}
+            </div>
+          )}
           <button
             onClick={() => { setPinMode((v) => !v); setSelectedPinId(null); }}
             className={clsx(

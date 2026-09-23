@@ -526,6 +526,35 @@ runs caught, batch by batch, is the point of this entry:
   cluster. Below 1360px the cluster sits above the dock, 11px clear each side;
   measured at four window sizes rather than eyeballed.
 
+- **The admin screen (batch AK)**, plan 11 §N — `/admin`, behind the admin
+  passphrase from batch AH. Three sections: every review on the install
+  (toggle listed/link-only, delete behind an inline two-click confirm, not a
+  `window.confirm` that blocks the page), the label-fields editor lifted out
+  of `pages/TrackerPage.tsx` into a shared component, and a read-only Access
+  section. Two deliberate refusals: no password rotation (it means rewriting
+  `.env` and restarting the api container, and a button that pretends to do
+  that is worse than none — the screen says so), and no audit log yet (it
+  needs its own table and a write path from the room server).
+  - **`required: false` means CLOSED here, the opposite of the front door.**
+    No admin passphrase configured is not "everyone is an admin" for a screen
+    that deletes other people's reviews; `/admin` says the passphrase is not
+    set and offers nothing else. The gate also fails LOCKED when the endpoint
+    is unreachable, where the front door fails open.
+  - **Caught in review: naming a column is enough to fail.** Batch AJ's 42703
+    retry only dropped the `listed` FILTER, but PostgREST rejects the whole
+    request for an unknown column in the SELECT list too — and this batch had
+    added `listed` to all three select lists. On an install that had not
+    re-applied the schema, the lobby, the admin list AND the "preview the
+    review you were linked to" path would all have come back empty. Each read
+    now falls back to its own pre-`listed` column list. My own spec was wrong
+    here: it told Qwen no retry was needed in `listAllCurations`.
+  - While in there, the three copies of the row→summary mapping became one
+    typed `rowToSummary`, which took the lint warnings from 101 to 99.
+  Verified live: with no passphrase `/admin` refuses; with one it asks,
+  refuses a wrong passphrase, opens the three sections, shows each review's
+  visibility, needs two clicks to delete, flips visibility, and locks again —
+  and the tracker's label-fields settings still open after the extraction.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.
@@ -554,9 +583,6 @@ runs caught, batch by batch, is the point of this entry:
   config file and a Vercel deployment.
 - **TURN relay path unverified** (see the 2026-09-22 session). Direct calls
   are verified.
-- **CAPTURE VIEW silently does nothing** until the setup canvas has
-  initialised (`captureViewpoint()` returns null). A person rarely clicks that
-  fast; a disabled state or a toast would be better.
 - **A shell with .env exported overrides it**: compose interpolation prefers
   the environment, so `set -a; . ./.env` before a re-run left capture-service
   and coturn on the old secrets. Test-harness trap, not a user path.

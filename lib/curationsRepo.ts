@@ -21,6 +21,7 @@ export interface CurationSummary {
   viewpoint_count: number;
   pin_count: number;
   slide_count: number;
+  listed: boolean;
   updated_at: string;
   created_at: string;
 }
@@ -101,49 +102,115 @@ export async function saveCuration(draft: ReviewDraft): Promise<{ ok: boolean; e
   return { ok: true };
 }
 
-// PostgREST's code for "column does not exist" — an install whose database
-// predates a column and has not re-applied docs/supabase-schema.sql yet.
-const UNDEFINED_COLUMN = '42703';
+// The shape the three read paths share. Written out rather than inferred,
+// because each one asks for a slightly different column list (and a second,
+// pre-`listed` list on an older database), so supabase-js infers a different
+// row type per call. `listed` is optional for exactly that reason.
+interface CurationListRow {
+  id: string;
+  title: string;
+  description: string;
+  viewpoints?: unknown[] | null;
+  pins?: unknown[] | null;
+  agenda?: unknown[] | null;
+  listed?: boolean | null;
+  created_at: string;
+  updated_at: string;
+}
 
-export async function listRecentCurations(limit = 8): Promise<CurationSummary[]> {
-  const columns =
-    'id,title,description,viewpoints,pins,agenda,requirements,team,labels,created_at,updated_at';
-
-  // Only listed reviews appear here; a link-only one is still reachable by its
-  // link through loadCuration / getCurationSummary.
-  let { data, error } = await supabase
-    .from('review_curations')
-    .select(columns)
-    .eq('listed', true)
-    .order('updated_at', { ascending: false })
-    .limit(limit);
-
-  // An older database has no `listed` column, and filtering on a column that
-  // does not exist fails the whole query — which would empty the lobby for
-  // someone who has not re-run ./install.sh since this shipped. Every review in
-  // such a database is listed by definition, so ask again without the filter.
-  if (error?.code === UNDEFINED_COLUMN) {
-    ({ data, error } = await supabase
-      .from('review_curations')
-      .select(columns)
-      .order('updated_at', { ascending: false })
-      .limit(limit));
-  }
-
-  if (error) {
-    console.error('[curationsRepo] listRecentCurations failed:', error);
-    return [];
-  }
-  return (data ?? []).map((r: any) => ({
+function rowToSummary(r: CurationListRow): CurationSummary {
+  return {
     id: r.id,
     title: r.title,
     description: r.description,
     viewpoint_count: Array.isArray(r.viewpoints) ? r.viewpoints.length : 0,
     pin_count: Array.isArray(r.pins) ? r.pins.length : 0,
     slide_count: Array.isArray(r.agenda) ? r.agenda.length : 0,
+    // A database without the column hides nothing.
+    listed: r.listed !== false,
     updated_at: r.updated_at,
     created_at: r.created_at,
-  }));
+  };
+}
+
+// PostgREST's code for "column does not exist" — an install whose database
+// predates a column and has not re-applied docs/supabase-schema.sql yet.
+//
+// `listed` shipped 2026-09-23, so every read that mentions it needs a way
+// back. Mentioning it at all is enough to fail: PostgREST rejects the whole
+// request for an unknown column in the SELECT list, not only in a filter. A
+// read that gave up here would empty the lobby of every saved review over a
+// flag that database has never heard of, so each one asks again with the
+// pre-`listed` column list and treats the rows as listed, which they are.
+const UNDEFINED_COLUMN = '42703';
+
+// Each pair differs only by `listed`. They are spelled out rather than derived
+// from one another because supabase-js reads the row shape out of the literal
+// string, and a computed one types the result as an error.
+const LIST_COLUMNS =
+  'id,title,description,viewpoints,pins,agenda,requirements,team,labels,listed,created_at,updated_at';
+const LIST_COLUMNS_LEGACY =
+  'id,title,description,viewpoints,pins,agenda,requirements,team,labels,created_at,updated_at';
+
+const ADMIN_COLUMNS =
+  'id,title,description,viewpoints,pins,agenda,listed,created_at,updated_at';
+const ADMIN_COLUMNS_LEGACY =
+  'id,title,description,viewpoints,pins,agenda,created_at,updated_at';
+
+const SUMMARY_COLUMNS =
+  'id,title,description,viewpoints,pins,agenda,requirements,team,listed,created_at,updated_at';
+const SUMMARY_COLUMNS_LEGACY =
+  'id,title,description,viewpoints,pins,agenda,requirements,team,created_at,updated_at';
+
+export async function listRecentCurations(limit = 8): Promise<CurationSummary[]> {
+  // Only listed reviews appear here; a link-only one is still reachable by its
+  // link through loadCuration / getCurationSummary.
+  const first = await supabase
+    .from('review_curations')
+    .select(LIST_COLUMNS)
+    .eq('listed', true)
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+
+  // No `listed` column: drop both the filter and the column, and take every
+  // row — in such a database every review is listed by definition.
+  const { data, error } = first.error?.code === UNDEFINED_COLUMN
+    ? await supabase
+        .from('review_curations')
+        .select(LIST_COLUMNS_LEGACY)
+        .order('updated_at', { ascending: false })
+        .limit(limit)
+    : first;
+
+  if (error) {
+    console.error('[curationsRepo] listRecentCurations failed:', error);
+    return [];
+  }
+  return ((data ?? []) as unknown as CurationListRow[]).map(rowToSummary);
+}
+
+// Every review on this install, including link-only ones — used by the admin
+// screen.
+export async function listAllCurations(limit = 100): Promise<CurationSummary[]> {
+  const first = await supabase
+    .from('review_curations')
+    .select(ADMIN_COLUMNS)
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+
+  const { data, error } = first.error?.code === UNDEFINED_COLUMN
+    ? await supabase
+        .from('review_curations')
+        .select(ADMIN_COLUMNS_LEGACY)
+        .order('updated_at', { ascending: false })
+        .limit(limit)
+    : first;
+
+  if (error) {
+    console.error('[curationsRepo] listAllCurations failed:', error);
+    return [];
+  }
+  return ((data ?? []) as unknown as CurationListRow[]).map(rowToSummary);
 }
 
 export async function deleteCuration(id: string): Promise<boolean> {
@@ -155,26 +222,38 @@ export async function deleteCuration(id: string): Promise<boolean> {
   return true;
 }
 
+// Toggle a review's lobby visibility without touching any other column.
+export async function setCurationListed(id: string, listed: boolean): Promise<boolean> {
+  const { error } = await supabase
+    .from('review_curations')
+    .update({ listed })
+    .eq('id', id);
+  if (error) {
+    console.error('[curationsRepo] setCurationListed failed:', error);
+    return false;
+  }
+  return true;
+}
+
 // Fetch a single curation summary by id — used when a contributor lands on
 // the lobby via a room link and we want to preview what they're joining.
 export async function getCurationSummary(id: string): Promise<CurationSummary | null> {
-  const { data, error } = await supabase
+  const first = await supabase
     .from('review_curations')
-    .select('id,title,description,viewpoints,pins,agenda,requirements,team,created_at,updated_at')
+    .select(SUMMARY_COLUMNS)
     .eq('id', id)
     .maybeSingle();
+
+  const { data, error } = first.error?.code === UNDEFINED_COLUMN
+    ? await supabase
+        .from('review_curations')
+        .select(SUMMARY_COLUMNS_LEGACY)
+        .eq('id', id)
+        .maybeSingle()
+    : first;
+
   if (error || !data) return null;
-  const r: any = data;
-  return {
-    id: r.id,
-    title: r.title,
-    description: r.description,
-    viewpoint_count: Array.isArray(r.viewpoints) ? r.viewpoints.length : 0,
-    pin_count: Array.isArray(r.pins) ? r.pins.length : 0,
-    slide_count: Array.isArray(r.agenda) ? r.agenda.length : 0,
-    updated_at: r.updated_at,
-    created_at: r.created_at,
-  };
+  return rowToSummary(data as unknown as CurationListRow);
 }
 
 // ─── Live presence ───────────────────────────────────────────────────────────

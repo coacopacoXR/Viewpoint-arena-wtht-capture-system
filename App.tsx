@@ -6,6 +6,7 @@ import TrackerPage from './pages/TrackerPage';
 import ReviewSetupPage from './pages/ReviewSetupPage';
 import LaunchPage from './pages/LaunchPage';
 import AccessGatePage from './pages/AccessGatePage';
+import AdminPage from './pages/AdminPage';
 import { ConfigProvider } from './lib/config/ConfigContext';
 import { AccessGate } from './lib/access/AccessGate';
 
@@ -21,6 +22,10 @@ const App: React.FC = () => {
           <Route path="/room/:roomId" element={<RoomPage />} />
           <Route path="/review/:reviewId/setup" element={<ReviewSetupPage />} />
           <Route path="/tracker" element={<TrackerPage />} />
+          {/* Admin screen — behind its own passphrase gate (useAdminGate),
+              but also inside the front-door AccessGate so the deployment
+              password protects it too. */}
+          <Route path="/admin" element={<AdminPage />} />
           {/* Deep link a PLM system opens directly (T5.3). Both vercel.json and
               deploy/nginx/app.conf already fall back to index.html for unknown
               non-/api paths, so this needs no server-side route. */}
