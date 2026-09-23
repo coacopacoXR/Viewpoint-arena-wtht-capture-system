@@ -275,10 +275,27 @@ After `down -v`, `./install.sh` starts again from a clean slate.
   Troubleshooting).
 - **Onshape, Teamcenter and Microsoft Teams** connections need your own
   accounts and keys; the installer asks for them if you pick those options.
-- **Sign-in.** Anyone who can open the app can open any room whose link they
-  have, and see saved reviews. Keep it on a trusted network. The optional
-  front-door password (`./install.sh`, or `ACCESS_PASSWORD_HASH` in `.env`)
-  adds a shared password in front of the whole app — but it is one password
-  for everyone, not per-person accounts. Anyone with the password gets in,
-  and the app cannot tell one person from another. A deployment that needs
-  real identity should put the app behind its own SSO proxy.
+- **Sign-in.** There are no accounts. Access is three separate things, and it
+  is worth knowing which one does what:
+  - **The front-door password** (asked by `./install.sh`, stored as a hash in
+    `ACCESS_PASSWORD_HASH`). Optional and empty by default, which leaves the
+    app open exactly as before. It is one password for everyone, not
+    per-person accounts: anyone with it gets in, and the app cannot tell one
+    person from another. Names in a meeting are self-asserted. A deployment
+    that needs real identity should sit behind its own SSO proxy.
+  - **The room door.** By default someone opening a room link waits until the
+    host admits them ("Maria wants to join — Admit / Decline"). The host can
+    switch a link to *Anyone with the link* from the invite popup. Until
+    someone is admitted the server sends them nothing about the room — not
+    the model, not the comments, not the transcript. A room with nobody left
+    in it admits the next person to knock, so an empty room never locks
+    itself, and reloading the page does not put you back in the queue.
+  - **The admin passphrase** (also `./install.sh`, `ADMIN_PASSPHRASE_HASH`).
+    Optional. When set, `/admin` manages every review on the install — show
+    or hide it in the lobby, delete it — and the label fields. When it is not
+    set, `/admin` is closed rather than open. Changing either password means
+    re-running `./install.sh`; there is no button for it, because rotating a
+    secret means rewriting `.env` and restarting the API container.
+- **A review can be hidden from the lobby.** On the curate page, *Link only*
+  keeps a review out of Saved Reviews while its link keeps working — useful
+  when a deployment is shared by several teams.
