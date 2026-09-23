@@ -42,4 +42,9 @@ EXPOSE 1999
 # exit with "unknown option" before listening, so the container could never
 # start. It already binds 0.0.0.0 by default (verified: LISTENING 0.0.0.0:1999).
 # --no-hotkeys: there is no TTY in a container for its keyboard shortcuts.
-CMD ["npx", "--no-install", "partykit", "dev", "--port", "1999", "--no-hotkeys"]
+#
+# Through an entrypoint rather than a bare CMD because room code runs inside
+# workerd, which does not inherit this container's environment: anything the
+# room server needs has to be passed as `--var`. See the script's own comment.
+RUN chmod +x /app/deploy/partykit-entrypoint.sh
+CMD ["/app/deploy/partykit-entrypoint.sh"]

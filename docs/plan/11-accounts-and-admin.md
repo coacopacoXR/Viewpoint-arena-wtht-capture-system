@@ -83,6 +83,7 @@ account):
 | AI | M2 (knock-to-join + per-link policy) | medium | **done 2026-09-23** |
 | AI.2 | M5 (per-review visibility in the lobby) | small | **done 2026-09-23** |
 | AJ | N (admin screen behind the passphrase) | medium | **done 2026-09-23** |
+| AM | N, audit log (grants only) | small | **done 2026-09-23** |
 
 L is a UI batch and ships next. M and N are the difference between a demo and
 a multi-team tool: they touch the installer, the compose stack, every data

@@ -217,6 +217,41 @@ create policy "public delete label fields" on review_label_fields for delete usi
 -- created. Shipping Product/Variant/Phase made our guess look like a rule.
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Audit events (added 2026-09-23). A minimal log of grants: who admitted whom,
+-- who declined whom, and who changed the join policy. Written by the room
+-- server (party/room.server.ts), read by the admin screen (lib/auditRepo.ts).
+--
+-- This is NOT a tamper-proof ledger. Names are self-asserted — the log records
+-- what the server saw happen, described in those terms. A design review's
+-- contents are commercially sensitive; silent grants are not acceptable, and
+-- this is the minimum record that makes them visible.
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists audit_events (
+  id bigserial primary key,
+  at timestamptz not null default now(),
+  action text not null,
+  room_id text not null,
+  actor_name text not null default '',
+  actor_id text not null default '',
+  subject_name text not null default '',
+  subject_id text not null default '',
+  detail text not null default ''
+);
+
+create index if not exists audit_events_at_idx on audit_events (at desc);
+
+alter table audit_events enable row level security;
+
+-- RLS policies matching the rest of this schema: there is no identity to key
+-- on (no accounts, names are self-asserted), so the policies are open. The
+-- database is reachable only through the app's origin, and the front-door
+-- password is what guards that origin.
+drop policy if exists "public read audit events" on audit_events;
+drop policy if exists "public insert audit events" on audit_events;
+create policy "public read audit events"   on audit_events for select using (true);
+create policy "public insert audit events" on audit_events for insert with check (true);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Grants for the self-hosted PostgREST stack.
 --
 -- On a bundled install the deploy/db/roles.sql init script creates the anon

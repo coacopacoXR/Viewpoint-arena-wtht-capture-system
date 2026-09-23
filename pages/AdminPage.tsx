@@ -26,6 +26,7 @@ import {
   setCurationListed,
   type CurationSummary,
 } from '../lib/curationsRepo';
+import { listAuditEvents, type AuditEvent, type AuditListResult } from '../lib/auditRepo';
 import AdminUnlockPage from './AdminUnlockPage.tsx';
 import LabelFieldsSettings from '../components/UI/LabelFieldsSettings';
 
@@ -107,6 +108,7 @@ const AdminContent: React.FC = () => {
         <ReviewsSection />
         <LabelFieldsSection onOpen={() => setLabelSettingsOpen(true)} />
         <AccessSection onLock={lock} />
+        <ActivitySection />
       </div>
 
       {labelSettingsOpen && (
@@ -160,14 +162,17 @@ const ReviewsSection: React.FC = () => {
   return (
     <section>
       <h2 className="text-sm font-bold font-mono text-gray-400 uppercase tracking-widest mb-4">
-        Reviews
+        Reviews{loaded && curations.length > 0 ? ` · ${curations.length}` : ''}
       </h2>
       {!loaded ? (
         <p className="text-gray-600 text-xs">Loading…</p>
       ) : curations.length === 0 ? (
         <p className="text-gray-600 text-xs">No reviews yet.</p>
       ) : (
-        <div className="space-y-2">
+        // Capped and scrolled: an install with dozens of reviews pushed Label
+        // fields, Access and Activity so far below the fold that they read as
+        // missing (46 rows on the first live run).
+        <div className="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
           {curations.map((c) => (
             <div
               key={c.id}
@@ -267,5 +272,75 @@ const AccessSection: React.FC<{ onLock: () => void }> = ({ onLock }) => (
     </div>
   </section>
 );
+
+// ─── Activity section ────────────────────────────────────────────────────────
+
+function formatAuditEvent(e: AuditEvent): string {
+  const actor = e.actor_name || 'Someone';
+  const subject = e.subject_name || 'someone';
+  const room = e.room_id.slice(0, 8);
+  const when = formatAuditTimestamp(e.at);
+  switch (e.action) {
+    case 'admitted':
+      return `${actor} admitted ${subject} · room ${room} · ${when}`;
+    case 'declined':
+      return `${actor} declined ${subject} · room ${room} · ${when}`;
+    case 'join_policy':
+      return `${actor} set join policy to ${e.detail} · room ${room} · ${when}`;
+    default:
+      return `${actor} ${e.action} · room ${room} · ${when}`;
+  }
+}
+
+function formatAuditTimestamp(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const isToday =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (isToday) {
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) + ' today';
+  }
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+const ActivitySection: React.FC = () => {
+  const [result, setResult] = React.useState<AuditListResult | null>(null);
+
+  useEffect(() => {
+    void listAuditEvents().then(setResult);
+  }, []);
+
+  return (
+    <section>
+      <h2 className="text-sm font-bold font-mono text-gray-400 uppercase tracking-widest mb-4">
+        Activity
+      </h2>
+      <p className="text-gray-500 text-[11px] leading-relaxed mb-3">
+        This records grants made through the app; it is not a tamper-proof
+        ledger, and names are self-asserted.
+      </p>
+      {!result ? (
+        <p className="text-gray-600 text-xs">Loading…</p>
+      ) : result.status === 'not_configured' ? (
+        <p className="text-gray-600 text-xs">
+          The room server has no database configured — audit logging is
+          disabled.
+        </p>
+      ) : result.events.length === 0 ? (
+        <p className="text-gray-600 text-xs">Nothing has happened yet.</p>
+      ) : (
+        <div className="space-y-1">
+          {result.events.map((e) => (
+            <p key={e.id} className="text-gray-400 text-xs">
+              {formatAuditEvent(e)}
+            </p>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
 
 export default AdminPage;

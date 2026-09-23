@@ -600,6 +600,36 @@ runs caught, batch by batch, is the point of this entry:
   the order survives a reload, typing in the name input still types, and a
   value used on one review is offered on another.
 
+- **The audit log (batch AM)**, closing plan 11 §N. Three events, all grants:
+  who admitted whom, who declined whom, who changed a link's join policy.
+  Nothing about the meeting itself — this is a record of grants, not
+  surveillance. The room server writes them, because it is the thing that
+  actually decides admissions; the admin screen's new Activity section reads
+  them back as sentences ("Paco admitted Maria · room 7E685187"), and says
+  plainly that it is not a tamper-proof ledger and that names are
+  self-asserted.
+  - **A fire-and-forget write is a silent failure by design**, so it was
+    verified against the database rather than the test suite — which is how
+    both of its bugs surfaced. First: the POST went to
+    `${REST_URL}/rest/v1/audit_events`, but PostgREST serves its tables at the
+    ROOT; `/rest/v1/` is only the prefix nginx-proxy rewrites away for the
+    browser. 404, swallowed. The test had encoded the same wrong URL.
+  - **Second, and the more interesting one: room code does not run in the
+    partykit container's Node process.** It runs inside workerd, which does
+    not inherit the container environment, so `process.env.ANON_KEY` was empty
+    however carefully `docker-compose.yml` was wired — the container had both
+    variables and the room server still logged "ANON_KEY not set". PartyKit's
+    way in is `partykit dev --var KEY=value`, so the container now starts
+    through `deploy/partykit-entrypoint.sh`, which passes only the variables
+    that are set, and the server reads `room.env` with `process.env` as a
+    fallback. The Dockerfile guardrail test follows the flags into the script.
+  - The admin screen's review list is capped and scrolled: with 46 reviews on
+    this install, Label fields, Access and Activity were so far below the fold
+    they read as missing.
+  Verified live: admitting, declining and switching a link to "anyone with the
+  link" each land a row, and the Activity section shows all three. The audit
+  rows and the test passphrase were removed afterwards.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.

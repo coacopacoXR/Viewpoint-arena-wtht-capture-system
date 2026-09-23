@@ -275,6 +275,15 @@ services:
       - '${PARTYKIT_BIND:-127.0.0.1}:${PARTYKIT_PORT:-1999}:1999'
     volumes:
       - partykit-state:/app/.partykit
+    environment:
+      # Audit log: the room server POSTs grant events (admit/decline/policy
+      # change) to PostgREST. REST_URL defaults to http://rest:3000, which is
+      # reachable because partykit and rest are both on the `edge` network.
+      # ANON_KEY is the same value the other services use to talk to PostgREST.
+      # A PartyKit CLOUD deployment has neither variable and therefore records
+      # nothing — the admin screen says so.
+      REST_URL: ${REST_URL:-http://rest:3000}
+      ANON_KEY: ${ANON_KEY:-}
     networks:
       - edge
     healthcheck:

@@ -92,6 +92,9 @@ export default class RoomServer implements Party.Server {
   // room state, so a reconnect gets it once and a chatty client does not
   // get the whole bundle on every PRESENCE.
   stateSent = new Set<string>();
+  // Whether we have already logged that audit is not configured (ANON_KEY
+  // empty). Logged once per server instance, not per admission.
+  private auditNotConfiguredLogged = false;
 
   constructor(readonly room: Party.Room) {}
 
@@ -216,6 +219,64 @@ export default class RoomServer implements Party.Server {
     }
   }
 
+  /**
+   * Record a grant event (admission, decline, policy change) to the audit
+   * table via PostgREST. Fire-and-forget: a failed write must never delay or
+   * block an admission. When ANON_KEY is empty, skip silently (one log line
+   * per server instance, not per event).
+   */
+  private audit(
+    action: string,
+    fields: {
+      actorName?: string;
+      actorId?: string;
+      subjectName?: string;
+      subjectId?: string;
+      detail?: string;
+    },
+  ): void {
+    // `room.env`, not `process.env`: room code runs inside workerd, which does
+    // not inherit the container's environment. PartyKit puts `--var` values
+    // here (deploy/partykit-entrypoint.sh passes them). process.env stays as a
+    // fallback for tests and for any runtime that does populate it.
+    const env = (this.room as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+    const anonKey = env.ANON_KEY ?? process.env.ANON_KEY;
+    if (!anonKey) {
+      if (!this.auditNotConfiguredLogged) {
+        this.auditNotConfiguredLogged = true;
+        console.log('[audit] ANON_KEY not set — audit log disabled for this room server');
+      }
+      return;
+    }
+    // PostgREST serves its tables at the ROOT. `/rest/v1/` is the prefix
+    // nginx-proxy rewrites away for the browser, and posting to it from
+    // inside the compose network is a 404 — which a fire-and-forget write
+    // would have swallowed for ever (checked against the running container).
+    const restUrl = (env.REST_URL || process.env.REST_URL || 'http://rest:3000').replace(/\/+$/, '');
+    try {
+      void fetch(`${restUrl}/audit_events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${anonKey}`,
+          'apikey': anonKey,
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          action,
+          room_id: this.room.id,
+          actor_name: fields.actorName ?? '',
+          actor_id: fields.actorId ?? '',
+          subject_name: fields.subjectName ?? '',
+          subject_id: fields.subjectId ?? '',
+          detail: fields.detail ?? '',
+        }),
+      }).catch(() => {});
+    } catch {
+      // Synchronous throw from fetch (network down, stub in tests): swallow.
+    }
+  }
+
   onConnect(conn: Party.Connection) {
     this.connections.set(conn.id, conn);
     // Before the connection has identified itself via PRESENCE we can only
@@ -335,11 +396,22 @@ export default class RoomServer implements Party.Server {
       if (senderId !== this.computeHost() || !this.admitted.has(senderId)) return;
 
       const { userId } = msg.payload;
-      if (!this.pending.has(userId)) return;
+      const pendingEntry = this.pending.get(userId);
+      if (!pendingEntry) return;
+      const subjectName = pendingEntry.name;
       this.pending.delete(userId);
       this.admitted.add(userId);
 
       this.deliverAdmission(userId);
+
+      // Audit: host admitted someone.
+      const hostPresence = this.participants.get(senderId);
+      this.audit('admitted', {
+        actorName: hostPresence?.name ?? '',
+        actorId: senderId,
+        subjectName,
+        subjectId: userId,
+      });
 
       // Broadcast a synthetic PRESENCE so the room sees the new participant.
       // We don't have the full presence payload here, but the newly admitted
@@ -352,8 +424,19 @@ export default class RoomServer implements Party.Server {
       if (senderId !== this.computeHost() || !this.admitted.has(senderId)) return;
 
       const { userId } = msg.payload;
-      if (!this.pending.has(userId)) return;
+      const pendingEntry = this.pending.get(userId);
+      if (!pendingEntry) return;
+      const subjectName = pendingEntry.name;
       this.pending.delete(userId);
+
+      // Audit: host declined someone.
+      const hostPresence = this.participants.get(senderId);
+      this.audit('declined', {
+        actorName: hostPresence?.name ?? '',
+        actorId: senderId,
+        subjectName,
+        subjectId: userId,
+      });
 
       this.sendToUser(userId, { type: 'JOIN_DECLINED', payload: {} });
       this.broadcastJoinRequests();
@@ -364,6 +447,14 @@ export default class RoomServer implements Party.Server {
       if (senderId !== this.computeHost() || !this.admitted.has(senderId)) return;
 
       this.joinPolicy = msg.payload.policy;
+
+      // Audit: host changed the join policy.
+      const hostPresence = this.participants.get(senderId);
+      this.audit('join_policy', {
+        actorName: hostPresence?.name ?? '',
+        actorId: senderId,
+        detail: this.joinPolicy,
+      });
 
       // Switching to 'open' drains the queue — admit everyone pending.
       if (this.joinPolicy === 'open') {

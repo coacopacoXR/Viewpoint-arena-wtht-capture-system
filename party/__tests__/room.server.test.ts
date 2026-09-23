@@ -1,7 +1,7 @@
 // Tests for room.server.ts — knock-to-join gate, RECORDING_STATE relay,
 // TRANSCRIPT_LINE speakerId stamping, and POINTING_SEGMENT relay.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type * as Party from 'partykit/server';
 import RoomServer from '../room.server';
 
@@ -706,5 +706,137 @@ describe('room.server — POINTING_SEGMENT relay + userId stamping', () => {
 
     const broadcast = server.room.broadcast;
     expect(broadcast.mock.calls[0][1]).toEqual([conn.id]);
+  });
+});
+
+// ─── Audit log ──────────────────────────────────────────────────────────────
+
+describe('room.server — audit log', () => {
+  let server: ReturnType<typeof createServer>;
+  let hostConn: FakeConnection;
+  let guestConn: FakeConnection;
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const origAnonKey = process.env.ANON_KEY;
+  const origRestUrl = process.env.REST_URL;
+
+  beforeEach(() => {
+    server = createServer();
+    hostConn = fakeConn('conn-host');
+    guestConn = fakeConn('conn-guest');
+    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env.ANON_KEY = origAnonKey;
+    process.env.REST_URL = origRestUrl;
+  });
+
+  it('ADMIT posts one audit row with correct action, actor and subject', () => {
+    process.env.ANON_KEY = 'test-anon-key';
+    process.env.REST_URL = 'http://rest:3000';
+    admitUser(server, hostConn, 'host-1', 'Alice');
+    server.onConnect(guestConn as unknown as Party.Connection);
+    sendPresence(server, guestConn, 'guest-1', 'Bob');
+    fetchMock.mockClear();
+
+    server.onMessage(
+      JSON.stringify({ type: 'ADMIT', payload: { userId: 'guest-1' } }),
+      hostConn as unknown as Party.Connection,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0];
+    // The ROOT path: PostgREST serves its tables there, and `/rest/v1/` is
+    // only the prefix nginx-proxy rewrites away for the browser. Posting to
+    // the prefixed path from inside the compose network is a 404, which a
+    // fire-and-forget write swallows for ever.
+    expect(url).toBe('http://rest:3000/audit_events');
+    expect(opts.method).toBe('POST');
+    expect(opts.headers['Authorization']).toBe('Bearer test-anon-key');
+    expect(opts.headers['apikey']).toBe('test-anon-key');
+    expect(opts.headers['Prefer']).toBe('return=minimal');
+    const body = JSON.parse(opts.body);
+    expect(body.action).toBe('admitted');
+    expect(body.room_id).toBe('test-room');
+    expect(body.actor_name).toBe('Alice');
+    expect(body.actor_id).toBe('host-1');
+    expect(body.subject_name).toBe('Bob');
+    expect(body.subject_id).toBe('guest-1');
+  });
+
+  it('DECLINE posts one audit row with correct action, actor and subject', () => {
+    process.env.ANON_KEY = 'test-anon-key';
+    process.env.REST_URL = 'http://rest:3000';
+    admitUser(server, hostConn, 'host-1', 'Alice');
+    server.onConnect(guestConn as unknown as Party.Connection);
+    sendPresence(server, guestConn, 'guest-1', 'Bob');
+    fetchMock.mockClear();
+
+    server.onMessage(
+      JSON.stringify({ type: 'DECLINE', payload: { userId: 'guest-1' } }),
+      hostConn as unknown as Party.Connection,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.action).toBe('declined');
+    expect(body.actor_name).toBe('Alice');
+    expect(body.actor_id).toBe('host-1');
+    expect(body.subject_name).toBe('Bob');
+    expect(body.subject_id).toBe('guest-1');
+  });
+
+  it('SET_JOIN_POLICY records the new policy in detail', () => {
+    process.env.ANON_KEY = 'test-anon-key';
+    process.env.REST_URL = 'http://rest:3000';
+    admitUser(server, hostConn, 'host-1', 'Alice');
+    fetchMock.mockClear();
+
+    server.onMessage(
+      JSON.stringify({ type: 'SET_JOIN_POLICY', payload: { policy: 'open' } }),
+      hostConn as unknown as Party.Connection,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.action).toBe('join_policy');
+    expect(body.actor_name).toBe('Alice');
+    expect(body.actor_id).toBe('host-1');
+    expect(body.detail).toBe('open');
+  });
+
+  it('with ANON_KEY unset: no fetch at all, and the admission still happens', () => {
+    delete process.env.ANON_KEY;
+    admitUser(server, hostConn, 'host-1', 'Alice');
+    server.onConnect(guestConn as unknown as Party.Connection);
+    sendPresence(server, guestConn, 'guest-1', 'Bob');
+    fetchMock.mockClear();
+
+    server.onMessage(
+      JSON.stringify({ type: 'ADMIT', payload: { userId: 'guest-1' } }),
+      hostConn as unknown as Party.Connection,
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(server.admitted.has('guest-1')).toBe(true);
+  });
+
+  it('a throwing fetch does not stop the admission', () => {
+    process.env.ANON_KEY = 'test-anon-key';
+    fetchMock.mockImplementation(() => { throw new Error('network down'); });
+    admitUser(server, hostConn, 'host-1', 'Alice');
+    server.onConnect(guestConn as unknown as Party.Connection);
+    sendPresence(server, guestConn, 'guest-1', 'Bob');
+
+    server.onMessage(
+      JSON.stringify({ type: 'ADMIT', payload: { userId: 'guest-1' } }),
+      hostConn as unknown as Party.Connection,
+    );
+
+    expect(server.admitted.has('guest-1')).toBe(true);
+    const guestTypes = sentTypes(guestConn);
+    expect(guestTypes).toContain('JOIN_ADMITTED');
   });
 });

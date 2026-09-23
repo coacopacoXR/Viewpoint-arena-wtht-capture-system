@@ -38,6 +38,12 @@ vi.mock('../../lib/labelFieldsRepo', () => ({
   deleteLabelField: vi.fn(),
 }));
 
+// Mock the audit repo so the Activity section does not hit the shared
+// supabase mock (which is set up for curations queries, not audit_events).
+vi.mock('../../lib/auditRepo', () => ({
+  listAuditEvents: vi.fn().mockResolvedValue({ status: 'ok', events: [] }),
+}));
+
 import AdminPage from '../AdminPage';
 import { resetAdminGateForTests } from '../../lib/access/useAdminGate';
 
