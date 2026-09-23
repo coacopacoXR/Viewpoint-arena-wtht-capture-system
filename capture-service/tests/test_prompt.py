@@ -145,3 +145,106 @@ def test_the_prompt_does_not_leak_into_the_system_message() -> None:
     # identical for every meeting this service ever processes.
     assert "{" in EXTRACTION_SYSTEM_PROMPT  # the JSON example, and only that
     assert "http" not in EXTRACTION_SYSTEM_PROMPT.lower()
+
+
+# ─── Grounded sections ─────────────────────────────────────────────────────
+
+
+def test_the_user_prompt_renders_the_component_list_when_supplied() -> None:
+    components = [
+        {"id": "left_cup", "name": "Left Ear Cup", "path": "Headphones / Left Ear Cup"},
+    ]
+    prompt = build_extraction_user_prompt(
+        [make_chunk("The cushion is thin.")],
+        SlideContext(agenda_idx=0, slide_title="Review"),
+        today="2026-09-23",
+        components=components,
+    )
+    assert "Components in this model:" in prompt
+    assert "left_cup · Headphones / Left Ear Cup" in prompt
+
+
+def test_the_user_prompt_renders_pointing_segments_with_seconds() -> None:
+    segments = [
+        {
+            "userId": "u1",
+            "userName": "Alice",
+            "partId": "left_cushion",
+            "partName": "Left Ear Cushion",
+            "fromMs": 5000,
+            "toMs": 12000,
+        }
+    ]
+    prompt = build_extraction_user_prompt(
+        [make_chunk("This one here.")],
+        SlideContext(agenda_idx=0, slide_title="Review"),
+        today="2026-09-23",
+        pointing_segments=segments,
+    )
+    assert "What people were pointing at:" in prompt
+    assert "Alice → Left Ear Cushion (5s–12s)" in prompt
+
+
+def test_the_user_prompt_renders_the_transcript_hint() -> None:
+    hint = [{"speaker": "Alice", "text": "This cushion is thin.", "offsetMs": 8000}]
+    prompt = build_extraction_user_prompt(
+        [make_chunk("This cushion is thin.")],
+        SlideContext(agenda_idx=0, slide_title="Review"),
+        today="2026-09-23",
+        transcript_hint=hint,
+    )
+    assert "Speaker transcript (attribution hint" in prompt
+    assert "[Alice, t=8s] This cushion is thin." in prompt
+
+
+def test_the_three_sections_render_in_order() -> None:
+    components = [{"id": "x", "name": "X", "path": "X"}]
+    segments = [
+        {
+            "userId": "u1",
+            "userName": "A",
+            "partId": "x",
+            "partName": "X",
+            "fromMs": 0,
+            "toMs": 1000,
+        }
+    ]
+    hint = [{"speaker": "A", "text": "Hi", "offsetMs": 500}]
+    prompt = build_extraction_user_prompt(
+        [make_chunk("Hi")],
+        SlideContext(agenda_idx=0, slide_title="Review"),
+        today="2026-09-23",
+        components=components,
+        pointing_segments=segments,
+        transcript_hint=hint,
+    )
+    comp_idx = prompt.index("Components in this model:")
+    point_idx = prompt.index("What people were pointing at:")
+    hint_idx = prompt.index("Speaker transcript")
+    transcript_idx = prompt.index("Transcript window:")
+    assert comp_idx < point_idx < hint_idx < transcript_idx
+
+
+def test_the_grounded_sections_are_absent_when_inputs_are_absent() -> None:
+    prompt = build_extraction_user_prompt(
+        [make_chunk("Hello.")],
+        SlideContext(agenda_idx=0, slide_title="Kickoff"),
+        today="2026-09-23",
+    )
+    assert "Components in this model:" not in prompt
+    assert "What people were pointing at:" not in prompt
+    assert "Speaker transcript" not in prompt
+
+
+def test_empty_arrays_do_not_render_sections() -> None:
+    prompt = build_extraction_user_prompt(
+        [make_chunk("Hello.")],
+        SlideContext(agenda_idx=0, slide_title="Kickoff"),
+        today="2026-09-23",
+        components=[],
+        pointing_segments=[],
+        transcript_hint=[],
+    )
+    assert "Components in this model:" not in prompt
+    assert "What people were pointing at:" not in prompt
+    assert "Speaker transcript" not in prompt

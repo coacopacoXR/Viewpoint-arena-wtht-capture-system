@@ -26,7 +26,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useWebRTCContext } from './WebRTCContext';
 import { usePresence } from './PresenceContext';
-import { useStore } from '../store';
+import { useStore, getCurrentSceneTree } from '../store';
 import { useActiveReviewStore } from './activeReviewStore';
 import { useConnectorConfig } from './config/ConfigContext';
 import { useMeetingRecorder } from './useMeetingRecorder';
@@ -38,8 +38,11 @@ import {
   type RecordingStatePayload,
 } from './usePartyPresence';
 import { usePointingTimeline } from './usePointingTimeline';
+import { usePointingTimelineStore } from './pointingTimelineStore';
+import { flattenSceneTree } from './componentIndex';
 import { LocalCaptureProvider, meetingSlideContext } from './connectors/capture/local';
 import type { ChatMessage } from '../types';
+import type { GroundedCaptureContext } from './connectors/capture/types';
 
 export type SummaryOutcome = { added: number } | { message: string };
 
@@ -88,6 +91,8 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const agendaIdx = useActiveReviewStore((s) => s.agendaIdx);
   const captureProvider = useConnectorConfig().capture;
   const chatHistory = useStore((s) => s.chatHistory);
+  const activeModelType = useStore((s) => s.activeModelType);
+  const importedSceneTree = useStore((s) => s.importedSceneTree);
 
   // Sample the local user's pointing target at 2 Hz while recording.
   usePointingTimeline(localUserId);
@@ -170,9 +175,47 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setSummarising(true);
     setOutcome(null);
     try {
+      // Build the grounded context: component tree, pointing segments, and
+      // the speaker-labelled live transcript. All three are optional — when
+      // nothing is available the capture is exactly what it was before D.
+      const sceneTree = getCurrentSceneTree(activeModelType, importedSceneTree);
+      const { components } = flattenSceneTree(sceneTree);
+
+      const allSegments = usePointingTimelineStore.getState().segments;
+      const pointingSegments = allSegments.map((seg) => ({
+        userId: seg.userId,
+        userName: seg.userName,
+        partId: seg.partId,
+        partName: seg.partName,
+        fromMs: seg.fromMs,
+        toMs: seg.toMs,
+      }));
+
+      const recordingStart = recordingState?.startedAt ?? 0;
+      const transcriptHint = chatHistory
+        .filter(
+          (m) =>
+            recordingStart > 0 &&
+            m.id.startsWith(`live-${recordingStart}-`) &&
+            typeof m.offsetMs === 'number' &&
+            m.speakerId,
+        )
+        .map((m) => ({
+          speaker: m.speakerName ?? m.speakerId ?? 'Unknown',
+          text: m.text,
+          offsetMs: m.offsetMs!,
+        }));
+
+      const grounded: GroundedCaptureContext = {
+        componentTree: components,
+        pointingSegments,
+        transcriptHint,
+      };
+
       const cards = await provider.captureRecording(
         audio,
         meetingSlideContext(reviewConfig, agendaIdx),
+        { grounded },
       );
       for (const card of cards) {
         addInsightCard(card);
@@ -191,7 +234,7 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } finally {
       setSummarising(false);
     }
-  }, [provider, reviewConfig, agendaIdx, addInsightCard, broadcastInsightCard]);
+  }, [provider, reviewConfig, agendaIdx, addInsightCard, broadcastInsightCard, activeModelType, importedSceneTree, recordingState, chatHistory]);
 
   const handleStart = useCallback(async (): Promise<void> => {
     setOutcome(null);

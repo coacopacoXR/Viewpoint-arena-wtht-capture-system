@@ -159,6 +159,9 @@ def test_the_user_prompt_layout_matches_the_typescript_builder() -> None:
         "`Agenda item ${context.agendaIdx}: ${context.slideTitle}`",
         "`A speaker was hovering over: ${context.hoveredPartName}`",
         "`The laser pointer was on: ${context.laserTargetPartName}`",
+        "'Components in this model:'",
+        "'What people were pointing at:'",
+        "'Speaker transcript (attribution hint",
         "'Transcript window:'",
     ):
         assert fragment in source, f"{fragment} is no longer how the TS builder renders"

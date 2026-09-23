@@ -34,6 +34,7 @@ included — requires it. auth.py explains why there is no exemption list.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -151,6 +152,15 @@ def capture(
     laser_target_part_name: Annotated[
         str | None, Form(alias="laserTargetPartName")
     ] = None,
+    component_tree: Annotated[
+        str | None, Form(alias="componentTree")
+    ] = None,
+    pointing_segments_raw: Annotated[
+        str | None, Form(alias="pointingSegments")
+    ] = None,
+    transcript_hint_raw: Annotated[
+        str | None, Form(alias="transcriptHint")
+    ] = None,
 ) -> CaptureResponse:
     """Transcribe a full meeting recording, then extract InsightCards from it.
 
@@ -159,6 +169,10 @@ def capture(
     host was presenting, or the meeting title — because that is all the
     post-meeting MVP in docs/local-capture-plan.md has. Blank values fall back
     to the default title rather than labelling the prompt with an empty string.
+
+    The three grounded-capture fields (componentTree, pointingSegments,
+    transcriptHint) are JSON strings. Each is parsed defensively: bad JSON,
+    wrong shape or oversized input is logged and ignored, never a 500.
     """
     settings: Settings = request.app.state.settings
     transcriber: Transcriber = request.app.state.transcriber
@@ -184,14 +198,41 @@ def capture(
         laser_target_part_name=_blank_to_none(laser_target_part_name),
     )
 
+    # Grounded-capture inputs: parsed defensively so a bad payload degrades to
+    # the pre-section-D behaviour (no component list, no pointing, no hint)
+    # rather than failing the request.
+    components = _parse_component_tree(component_tree)
+    pointing_segments = _parse_pointing_segments(pointing_segments_raw)
+    transcript_hint = _parse_transcript_hint(transcript_hint_raw)
+    component_ids = {c["id"] for c in components} if components else None
+
+    # Counts only — never content. Without this there is no way to tell a
+    # grounded capture from an ungrounded one after the fact, and the
+    # difference decides whether componentReference can be trusted.
+    logger.info(
+        "capture: grounded with %d component(s), %d pointing segment(s), %d hint line(s)",
+        len(components or []),
+        len(pointing_segments or []),
+        len(transcript_hint or []),
+    )
+
     raw_reply = llm.complete(
-        EXTRACTION_SYSTEM_PROMPT, build_extraction_user_prompt(transcript, context)
+        EXTRACTION_SYSTEM_PROMPT,
+        build_extraction_user_prompt(
+            transcript,
+            context,
+            components=components,
+            pointing_segments=pointing_segments,
+            transcript_hint=transcript_hint,
+        ),
     )
 
     # Same default-agent rule as the TypeScript providers: a card that does not
     # name a speaker is attributed to the first one in the window.
     cards = parse_insight_cards(
-        raw_reply, default_agent_id=transcript[0].speaker_id or None
+        raw_reply,
+        default_agent_id=transcript[0].speaker_id or None,
+        component_ids=component_ids,
     )
     logger.info(
         "capture: %d chunk(s) transcribed, %d card(s) extracted",
@@ -234,6 +275,108 @@ def transcribe(
 
     logger.info("transcribe: %d chunk(s)", len(transcript))
     return TranscribeResponse(transcript=transcript)
+
+
+# ─── Grounded-capture input parsing ─────────────────────────────────────────
+#
+# The three new form fields arrive as JSON strings. Each parser is defensive:
+# bad JSON, wrong shape or oversized input returns None (logged), and the
+# capture proceeds as if the field was not sent. A malformed hint must never
+# turn a good recording into a 500.
+
+_MAX_COMPONENTS = 200
+_MAX_POINTING_SEGMENTS = 500
+_MAX_TRANSCRIPT_HINT_LINES = 400
+
+
+def _parse_component_tree(raw: str | None) -> list[dict[str, str]] | None:
+    """Parse the componentTree form field.
+
+    Expected shape: [{ "id": str, "name": str, "path": str }, ...].
+    Returns None on any problem; the capture proceeds without a component list.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("capture-service: componentTree was not valid JSON; ignoring")
+        return None
+    if not isinstance(parsed, list):
+        logger.warning("capture-service: componentTree was not an array; ignoring")
+        return None
+    result: list[dict[str, str]] = []
+    for entry in parsed[:_MAX_COMPONENTS]:
+        if not isinstance(entry, dict):
+            continue
+        cid = entry.get("id")
+        cname = entry.get("name")
+        cpath = entry.get("path")
+        if isinstance(cid, str) and isinstance(cname, str) and isinstance(cpath, str):
+            result.append({"id": cid, "name": cname, "path": cpath})
+    return result or None
+
+
+def _parse_pointing_segments(raw: str | None) -> list[dict[str, object]] | None:
+    """Parse the pointingSegments form field.
+
+    Expected shape: [{ "userId", "userName", "partId", "partName", "fromMs", "toMs" }, ...].
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("capture-service: pointingSegments was not valid JSON; ignoring")
+        return None
+    if not isinstance(parsed, list):
+        logger.warning("capture-service: pointingSegments was not an array; ignoring")
+        return None
+    result: list[dict[str, object]] = []
+    for entry in parsed[:_MAX_POINTING_SEGMENTS]:
+        if not isinstance(entry, dict):
+            continue
+        if (
+            isinstance(entry.get("userId"), str)
+            and isinstance(entry.get("userName"), str)
+            and isinstance(entry.get("partId"), str)
+            and isinstance(entry.get("partName"), str)
+            and isinstance(entry.get("fromMs"), (int, float))
+            and isinstance(entry.get("toMs"), (int, float))
+        ):
+            result.append(entry)
+    return result or None
+
+
+def _parse_transcript_hint(raw: str | None) -> list[dict[str, object]] | None:
+    """Parse the transcriptHint form field.
+
+    Expected shape: [{ "speaker": str, "text": str, "offsetMs": number }, ...].
+    The transcript hint is extra context for attribution, NOT a replacement for
+    Whisper's transcript. A client could lie about it, so nothing security-
+    relevant may depend on it.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("capture-service: transcriptHint was not valid JSON; ignoring")
+        return None
+    if not isinstance(parsed, list):
+        logger.warning("capture-service: transcriptHint was not an array; ignoring")
+        return None
+    result: list[dict[str, object]] = []
+    for entry in parsed[:_MAX_TRANSCRIPT_HINT_LINES]:
+        if not isinstance(entry, dict):
+            continue
+        if (
+            isinstance(entry.get("speaker"), str)
+            and isinstance(entry.get("text"), str)
+            and isinstance(entry.get("offsetMs"), (int, float))
+        ):
+            result.append(entry)
+    return result or None
 
 
 # ─── Upload handling ────────────────────────────────────────────────────────

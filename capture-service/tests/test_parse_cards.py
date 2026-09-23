@@ -34,9 +34,14 @@ def parse(
     default_agent_id: str | None = "speaker-1",
     now: Callable[[], int] | None = lambda: NOW,
     new_id: Callable[[int], str] | None = None,
+    component_ids: set[str] | None = None,
 ) -> list[InsightCard]:
     return parse_insight_cards(
-        raw, default_agent_id=default_agent_id, now=now, new_id=new_id
+        raw,
+        default_agent_id=default_agent_id,
+        now=now,
+        new_id=new_id,
+        component_ids=component_ids,
     )
 
 
@@ -606,3 +611,39 @@ def test_the_response_body_omits_the_index_for_a_whole_reply_failure() -> None:
         "error": "capture_parse_error",
         "reason": "prose",
     }
+
+
+# ─── componentReference validation (grounded capture) ──────────────────────
+
+
+def test_a_listed_component_reference_is_kept() -> None:
+    payload = card(
+        details={**VALID_CARD["details"], "componentReference": "left_cup"}
+    )
+    cards = parse(cards_payload(payload), component_ids={"left_cup", "right_cup"})
+    assert cards[0].details.component_reference == "left_cup"
+
+
+def test_an_unlisted_component_reference_is_dropped_but_the_card_survives() -> None:
+    payload = card(
+        details={**VALID_CARD["details"], "componentReference": "General Assembly"}
+    )
+    cards = parse(cards_payload(payload), component_ids={"left_cup", "right_cup"})
+    assert cards[0].details.component_reference is None
+    assert cards[0].title == VALID_CARD["title"]
+
+
+def test_no_component_ids_means_no_filtering() -> None:
+    payload = card(
+        details={**VALID_CARD["details"], "componentReference": "anything goes"}
+    )
+    cards = parse(cards_payload(payload))
+    assert cards[0].details.component_reference == "anything goes"
+
+
+def test_component_ids_none_also_means_no_filtering() -> None:
+    payload = card(
+        details={**VALID_CARD["details"], "componentReference": "anything goes"}
+    )
+    cards = parse(cards_payload(payload), component_ids=None)
+    assert cards[0].details.component_reference == "anything goes"

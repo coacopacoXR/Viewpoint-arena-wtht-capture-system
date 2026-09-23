@@ -451,6 +451,55 @@ describe('buildCaptureForm', () => {
     expect(form.get('hoveredPartName')).toBe('Bracket Alpha');
     expect(form.get('laserTargetPartName')).toBe('Rib Pattern 2');
   });
+
+  it('sends the three grounded fields when supplied', () => {
+    const form = buildCaptureForm(audioBlob(), CONTEXT, {
+      componentTree: [{ id: 'left_cup', name: 'Left Cup', path: 'HP / Left Cup' }],
+      pointingSegments: [
+        {
+          userId: 'u1',
+          userName: 'Alice',
+          partId: 'left_cup',
+          partName: 'Left Cup',
+          fromMs: 1000,
+          toMs: 5000,
+        },
+      ],
+      transcriptHint: [{ speaker: 'Alice', text: 'This cup', offsetMs: 3000 }],
+    });
+
+    expect(form.has('componentTree')).toBe(true);
+    expect(form.has('pointingSegments')).toBe(true);
+    expect(form.has('transcriptHint')).toBe(true);
+
+    const tree = JSON.parse(form.get('componentTree') as string);
+    expect(tree).toEqual([{ id: 'left_cup', name: 'Left Cup', path: 'HP / Left Cup' }]);
+
+    const segs = JSON.parse(form.get('pointingSegments') as string);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].userName).toBe('Alice');
+
+    const hint = JSON.parse(form.get('transcriptHint') as string);
+    expect(hint[0].speaker).toBe('Alice');
+  });
+
+  it('omits the three grounded fields when not supplied', () => {
+    const form = buildCaptureForm(audioBlob(), CONTEXT);
+    expect(form.has('componentTree')).toBe(false);
+    expect(form.has('pointingSegments')).toBe(false);
+    expect(form.has('transcriptHint')).toBe(false);
+  });
+
+  it('omits a grounded field when its array is empty', () => {
+    const form = buildCaptureForm(audioBlob(), CONTEXT, {
+      componentTree: [],
+      pointingSegments: [],
+      transcriptHint: [],
+    });
+    expect(form.has('componentTree')).toBe(false);
+    expect(form.has('pointingSegments')).toBe(false);
+    expect(form.has('transcriptHint')).toBe(false);
+  });
 });
 
 describe('meetingSlideContext', () => {

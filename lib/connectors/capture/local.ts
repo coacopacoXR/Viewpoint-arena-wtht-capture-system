@@ -21,7 +21,7 @@
 // browser with a key".
 
 import type { InsightCard } from '../../../types';
-import type { RecordingCaptureProvider, SlideContext } from './types';
+import type { GroundedCaptureContext, RecordingCaptureProvider, SlideContext } from './types';
 import { validateExtractionPayload } from './parseInsightCards';
 
 /**
@@ -84,10 +84,18 @@ export function recordingFilename(mimeType: string): string {
  * would put it in the extraction prompt, and sending an empty string would make
  * the service treat it as absent anyway (`_blank_to_none`).
  *
+ * The three grounded-capture fields (`componentTree`, `pointingSegments`,
+ * `transcriptHint`) are JSON-serialised into the form as strings. They are
+ * only appended when supplied and non-empty.
+ *
  * No Content-Type is set by the caller: the browser owns the multipart boundary
  * and picks it when FormData is the body.
  */
-export function buildCaptureForm(audio: Blob, context: SlideContext): FormData {
+export function buildCaptureForm(
+  audio: Blob,
+  context: SlideContext,
+  grounded?: GroundedCaptureContext,
+): FormData {
   const form = new FormData();
   form.append('audio', audio, recordingFilename(audio.type));
   form.append('agendaIdx', String(context.agendaIdx));
@@ -97,6 +105,15 @@ export function buildCaptureForm(audio: Blob, context: SlideContext): FormData {
   }
   if (context.laserTargetPartName !== undefined) {
     form.append('laserTargetPartName', context.laserTargetPartName);
+  }
+  if (grounded?.componentTree && grounded.componentTree.length > 0) {
+    form.append('componentTree', JSON.stringify(grounded.componentTree));
+  }
+  if (grounded?.pointingSegments && grounded.pointingSegments.length > 0) {
+    form.append('pointingSegments', JSON.stringify(grounded.pointingSegments));
+  }
+  if (grounded?.transcriptHint && grounded.transcriptHint.length > 0) {
+    form.append('transcriptHint', JSON.stringify(grounded.transcriptHint));
   }
   return form;
 }
@@ -150,7 +167,7 @@ export class LocalCaptureProvider implements RecordingCaptureProvider {
   async captureRecording(
     audio: Blob,
     context: SlideContext,
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; grounded?: GroundedCaptureContext } = {},
   ): Promise<InsightCard[]> {
     const endpoint = this._options.endpoint ?? LOCAL_CAPTURE_ENDPOINT;
     const doFetch = this._options.fetchFn ?? globalThis.fetch.bind(globalThis);
@@ -159,7 +176,7 @@ export class LocalCaptureProvider implements RecordingCaptureProvider {
     try {
       response = await doFetch(endpoint, {
         method: 'POST',
-        body: buildCaptureForm(audio, context),
+        body: buildCaptureForm(audio, context, options.grounded),
         signal: options.signal,
       });
     } catch {

@@ -140,6 +140,7 @@ def parse_insight_cards(
     default_agent_id: str | None = None,
     now: Callable[[], int] | None = None,
     new_id: Callable[[int], str] | None = None,
+    component_ids: set[str] | None = None,
 ) -> list[InsightCard]:
     """Parse raw model output into InsightCard[].
 
@@ -148,6 +149,10 @@ def parse_insight_cards(
     @param now Injectable clock returning epoch milliseconds, for deterministic
            tests.
     @param new_id Injectable id mint, for deterministic tests.
+    @param component_ids When supplied (a grounded capture), a
+           componentReference that is not in this set is dropped from the card
+           rather than passing an unvalidated part name to the tracker. When
+           None, no filtering is applied (pre-section-D behaviour).
 
     @raises CaptureExtractionError for every shape of bad output. Never raises
             anything else, and never returns a partial list.
@@ -190,7 +195,11 @@ def parse_insight_cards(
         raise _classify_unparseable(text) from None
 
     return validate_extraction_payload(
-        parsed, default_agent_id=default_agent_id, now=now, new_id=new_id
+        parsed,
+        default_agent_id=default_agent_id,
+        now=now,
+        new_id=new_id,
+        component_ids=component_ids,
     )
 
 
@@ -244,6 +253,7 @@ def validate_extraction_payload(
     default_agent_id: str | None = None,
     now: Callable[[], int] | None = None,
     new_id: Callable[[int], str] | None = None,
+    component_ids: set[str] | None = None,
 ) -> list[InsightCard]:
     """Validate the `{ "cards": [...] }` envelope and every card in it.
 
@@ -283,6 +293,7 @@ def validate_extraction_payload(
             default_agent_id=default_agent_id,
             now_ms=now_ms,
             mint_id=mint_id,
+            component_ids=component_ids,
         )
         for index, raw in enumerate(cards)
     ]
@@ -295,6 +306,7 @@ def _validate_card(
     default_agent_id: str | None,
     now_ms: int,
     mint_id: Callable[[int], str],
+    component_ids: set[str] | None = None,
 ) -> InsightCard:
     where = f"cards[{index}]"
     if not isinstance(raw, dict):
@@ -306,7 +318,9 @@ def _validate_card(
     _reject_unknown_keys(raw, CARD_KEYS, where, index)
 
     card_type = _one_of(raw, "type", INSIGHT_TYPES, where, index)
-    details = _validate_details(_get(raw, "details"), index, f"{where}.details")
+    details = _validate_details(
+        _get(raw, "details"), index, f"{where}.details", component_ids=component_ids
+    )
 
     card_id = _optional_non_empty_string(raw, "id", where, index)
     agent_id = _optional_non_empty_string(raw, "agentId", where, index)
@@ -335,7 +349,13 @@ def _validate_card(
     return _build(InsightCard, card, where, index)
 
 
-def _validate_details(raw: object, card_index: int, where: str) -> InsightDetails:
+def _validate_details(
+    raw: object,
+    card_index: int,
+    where: str,
+    *,
+    component_ids: set[str] | None = None,
+) -> InsightDetails:
     if not isinstance(raw, dict):
         raise CaptureExtractionError(
             "invalid_card",
@@ -356,6 +376,12 @@ def _validate_details(raw: object, card_index: int, where: str) -> InsightDetail
     for key in STRING_DETAIL_KEYS:
         value = _optional_non_empty_string(raw, key, where, card_index)
         if value is not None:
+            # When a grounded component list was supplied, a componentReference
+            # that is not in it is dropped (the card survives, the field does
+            # not). Without a list, every non-empty string passes through.
+            if key == "componentReference" and component_ids is not None:
+                if value not in component_ids:
+                    continue
             details[key] = value
 
     design_stage = _optional_one_of(raw, "designStage", DESIGN_STAGES, where, card_index)

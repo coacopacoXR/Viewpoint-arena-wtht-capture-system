@@ -8,7 +8,13 @@
 //
 // Browser-safe: no env access, no secrets, no I/O.
 
-import type { SlideContext, TranscriptChunk } from './types';
+import type {
+  ComponentTreeEntry,
+  PointingSegmentWire,
+  SlideContext,
+  TranscriptChunk,
+  TranscriptHintLine,
+} from './types';
 
 /**
  * The JSON envelope every provider is asked for. `cards` mirrors
@@ -63,7 +69,10 @@ Rules:
 - Omit optional fields you have no evidence for. Do not fill them with guesses or empty strings.
 - Do not emit "id" or "timestamp"; the application assigns those.
 - Do not add any field that is not listed above.
-- "priority" is required on every card. Judge it from the speaker's own emphasis: Critical only for safety, yield-blocking or schedule-blocking concerns.`;
+- "priority" is required on every card. Judge it from the speaker's own emphasis: Critical only for safety, yield-blocking or schedule-blocking concerns.
+- When a "Components in this model" list is provided, \`componentReference\` MUST be an id from that list, or omitted entirely. Never invent a component id. Never use a part name that is not in the list.
+- When an utterance is deictic ("this", "that", "here") and a pointing segment from the same speaker overlaps its time window, prefer that part as the componentReference.
+- Otherwise resolve a spoken component name against the list; if you are unsure which id matches, omit componentReference rather than guess.`;
 
 /** Renders the transcript window with stable per-chunk labels (c0, c1, …). */
 export function formatTranscript(transcript: TranscriptChunk[]): string {
@@ -105,12 +114,18 @@ export function upcomingDays(isoDate: string, count: number): string {
 
 /**
  * Builds the user turn: spatial context first (so the model can attribute a
- * comment to the part that was on screen), then the labelled transcript.
+ * comment to the part that was on screen), then the component list, pointing
+ * segments and transcript hint when supplied, then the labelled transcript.
  */
 export function buildExtractionUserPrompt(
   transcript: TranscriptChunk[],
   context: SlideContext,
   today: string = new Date().toISOString().slice(0, 10),
+  grounded?: {
+    components?: ComponentTreeEntry[];
+    pointingSegments?: PointingSegmentWire[];
+    transcriptHint?: TranscriptHintLine[];
+  },
 ): string {
   // Today's date plus a two-week calendar lets the model turn "by Friday" into
   // a real date by LOOKUP rather than arithmetic. Live runs with qwen2.5:7b:
@@ -128,6 +143,31 @@ export function buildExtractionUserPrompt(
   if (context.laserTargetPartName) {
     lines.push(`The laser pointer was on: ${context.laserTargetPartName}`);
   }
+
+  if (grounded?.components && grounded.components.length > 0) {
+    lines.push('', 'Components in this model:');
+    for (const c of grounded.components) {
+      lines.push(`${c.id} · ${c.path}`);
+    }
+  }
+
+  if (grounded?.pointingSegments && grounded.pointingSegments.length > 0) {
+    lines.push('', 'What people were pointing at:');
+    for (const seg of grounded.pointingSegments) {
+      const fromSec = Math.round(seg.fromMs / 1000);
+      const toSec = Math.round(seg.toMs / 1000);
+      lines.push(`${seg.userName} → ${seg.partName} (${fromSec}s–${toSec}s)`);
+    }
+  }
+
+  if (grounded?.transcriptHint && grounded.transcriptHint.length > 0) {
+    lines.push('', 'Speaker transcript (attribution hint — Whisper transcript is the source for extraction):');
+    for (const line of grounded.transcriptHint) {
+      const sec = Math.round(line.offsetMs / 1000);
+      lines.push(`[${line.speaker}, t=${sec}s] ${line.text}`);
+    }
+  }
+
   lines.push('', 'Transcript window:', formatTranscript(transcript));
   return lines.join('\n');
 }

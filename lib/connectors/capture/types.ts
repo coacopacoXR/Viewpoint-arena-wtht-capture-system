@@ -35,6 +35,55 @@ export interface SlideContext {
 }
 
 /**
+ * One row of the flattened component list sent with the capture request.
+ * Wire shape of FlatComponent from lib/componentIndex.ts. The model uses `id`
+ * as the value for `componentReference` and reads `path` for disambiguation.
+ */
+export interface ComponentTreeEntry {
+  id: string;
+  name: string;
+  path: string;
+}
+
+/**
+ * Wire shape of a pointing segment sent with the capture request. Mirrors
+ * PointingSegment from lib/pointingTimelineStore.ts but trimmed to the fields
+ * the extraction prompt needs: who, what part, when.
+ */
+export interface PointingSegmentWire {
+  userId: string;
+  userName: string;
+  partId: string;
+  partName: string;
+  fromMs: number;
+  toMs: number;
+}
+
+/**
+ * One line of the speaker-labelled live transcript sent as a hint. The
+ * extraction still runs on Whisper's transcript; this is extra context for
+ * attribution, NOT a replacement. A client could lie about it, so nothing
+ * security-relevant may depend on it.
+ */
+export interface TranscriptHintLine {
+  speaker: string;
+  text: string;
+  offsetMs: number;
+}
+
+/**
+ * The extended context for a grounded capture: the original SlideContext plus
+ * the three optional fields section D of the grounded-capture plan adds.
+ * All three are JSON-serialised into the multipart form as strings; the
+ * capture-service parses them defensively (bad JSON → ignored).
+ */
+export interface GroundedCaptureContext {
+  componentTree?: ComponentTreeEntry[];
+  pointingSegments?: PointingSegmentWire[];
+  transcriptHint?: TranscriptHintLine[];
+}
+
+/**
  * Output of a single dialogue-generation call.
  *
  * Mirrors the shape returned by the original DialogueEngine logic so the
@@ -167,7 +216,7 @@ export interface CaptureProvider {
   captureRecording?(
     audio: Blob,
     context: SlideContext,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; grounded?: GroundedCaptureContext },
   ): Promise<InsightCard[]>;
 
   /**

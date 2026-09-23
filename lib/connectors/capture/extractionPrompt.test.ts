@@ -5,6 +5,7 @@ import {
   upcomingDays,
   weekdayOf,
 } from './extractionPrompt';
+import type { ComponentTreeEntry, PointingSegmentWire, TranscriptHintLine } from './types';
 
 const chunk = { speakerId: 'speaker-1', text: 'Ship it by Friday.', startMs: 0, endMs: 4000 };
 
@@ -46,5 +47,112 @@ describe('buildExtractionUserPrompt', () => {
   it('tells the model to resolve relative deadlines against that date', () => {
     // A live run without this turned "by Friday" into 2023-10-06.
     expect(EXTRACTION_SYSTEM_PROMPT).toContain("against today's date");
+  });
+});
+
+describe('buildExtractionUserPrompt — grounded sections', () => {
+  const components: ComponentTreeEntry[] = [
+    { id: 'headphones_assembly', name: 'Sennheiser Momentum 4', path: 'Sennheiser Momentum 4' },
+    { id: 'left_cup', name: 'Left Ear Cup', path: 'Sennheiser Momentum 4 / Left Ear Cup' },
+    { id: 'left_cushion', name: 'Left Ear Cushion', path: 'Sennheiser Momentum 4 / Left Ear Cup / Left Ear Cushion' },
+  ];
+
+  const pointingSegments: PointingSegmentWire[] = [
+    { userId: 'u1', userName: 'Alice', partId: 'left_cushion', partName: 'Left Ear Cushion', fromMs: 5000, toMs: 12000 },
+  ];
+
+  const transcriptHint: TranscriptHintLine[] = [
+    { speaker: 'Alice', text: 'This cushion here feels too thin.', offsetMs: 8000 },
+  ];
+
+  it('renders the component list when supplied', () => {
+    const prompt = buildExtractionUserPrompt(
+      [chunk],
+      { agendaIdx: 0, slideTitle: 'Review' },
+      '2026-09-23',
+      { components },
+    );
+    expect(prompt).toContain('Components in this model:');
+    expect(prompt).toContain('left_cup · Sennheiser Momentum 4 / Left Ear Cup');
+    expect(prompt).toContain('left_cushion · Sennheiser Momentum 4 / Left Ear Cup / Left Ear Cushion');
+  });
+
+  it('renders pointing segments with seconds', () => {
+    const prompt = buildExtractionUserPrompt(
+      [chunk],
+      { agendaIdx: 0, slideTitle: 'Review' },
+      '2026-09-23',
+      { pointingSegments },
+    );
+    expect(prompt).toContain('What people were pointing at:');
+    expect(prompt).toContain('Alice → Left Ear Cushion (5s–12s)');
+  });
+
+  it('renders the transcript hint with speaker and t=seconds', () => {
+    const prompt = buildExtractionUserPrompt(
+      [chunk],
+      { agendaIdx: 0, slideTitle: 'Review' },
+      '2026-09-23',
+      { transcriptHint },
+    );
+    expect(prompt).toContain('Speaker transcript (attribution hint');
+    expect(prompt).toContain('[Alice, t=8s] This cushion here feels too thin.');
+  });
+
+  it('renders all three sections in order when all are supplied', () => {
+    const prompt = buildExtractionUserPrompt(
+      [chunk],
+      { agendaIdx: 0, slideTitle: 'Review' },
+      '2026-09-23',
+      { components, pointingSegments, transcriptHint },
+    );
+    const compIdx = prompt.indexOf('Components in this model:');
+    const pointIdx = prompt.indexOf('What people were pointing at:');
+    const hintIdx = prompt.indexOf('Speaker transcript');
+    const transcriptIdx = prompt.indexOf('Transcript window:');
+    expect(compIdx).toBeGreaterThan(-1);
+    expect(pointIdx).toBeGreaterThan(compIdx);
+    expect(hintIdx).toBeGreaterThan(pointIdx);
+    expect(transcriptIdx).toBeGreaterThan(hintIdx);
+  });
+
+  it('omits all three sections when grounded is undefined', () => {
+    const prompt = buildExtractionUserPrompt(
+      [chunk],
+      { agendaIdx: 0, slideTitle: 'Review' },
+      '2026-09-23',
+    );
+    expect(prompt).not.toContain('Components in this model:');
+    expect(prompt).not.toContain('What people were pointing at:');
+    expect(prompt).not.toContain('Speaker transcript');
+  });
+
+  it('omits a section when its array is empty', () => {
+    const prompt = buildExtractionUserPrompt(
+      [chunk],
+      { agendaIdx: 0, slideTitle: 'Review' },
+      '2026-09-23',
+      { components: [], pointingSegments: [], transcriptHint: [] },
+    );
+    expect(prompt).not.toContain('Components in this model:');
+    expect(prompt).not.toContain('What people were pointing at:');
+    expect(prompt).not.toContain('Speaker transcript');
+  });
+});
+
+describe('EXTRACTION_SYSTEM_PROMPT — grounded rules', () => {
+  it('requires componentReference to be an id from the list', () => {
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('componentReference');
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('MUST be an id from');
+  });
+
+  it('tells the model to prefer pointing segments for deictic references', () => {
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('deictic');
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('pointing segment');
+  });
+
+  it('tells the model to omit rather than guess when unsure', () => {
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('if you are unsure');
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('omit componentReference');
   });
 });

@@ -739,3 +739,75 @@ def test_the_published_capture_response_schema_has_no_extra_properties(
         "kbRecommendations",
     }
     assert card["additionalProperties"] is False
+
+
+# ─── Grounded-capture form fields ──────────────────────────────────────────
+
+
+def test_bad_component_tree_json_is_ignored_and_capture_succeeds(
+    service: Service,
+) -> None:
+    response = service.post_capture(fields={"componentTree": "not json at all"})
+    assert response.status_code == 200
+    assert len(response.json()["cards"]) == 1
+
+
+def test_wrong_shape_component_tree_is_ignored(service: Service) -> None:
+    response = service.post_capture(fields={"componentTree": '{"not": "an array"}'})
+    assert response.status_code == 200
+
+
+def test_oversized_component_tree_is_capped(service: Service) -> None:
+    import json as _json
+
+    components = [{"id": f"c{i}", "name": f"C{i}", "path": f"C{i}"} for i in range(300)]
+    response = service.post_capture(
+        fields={"componentTree": _json.dumps(components)}
+    )
+    assert response.status_code == 200
+    # The capture succeeded; the LLM was called with at most 200 components in the prompt.
+    user_prompt = service.llm.last_user_prompt
+    assert "c199" in user_prompt
+    assert "c200" not in user_prompt
+
+
+def test_bad_pointing_segments_json_is_ignored(service: Service) -> None:
+    response = service.post_capture(fields={"pointingSegments": "{broken"})
+    assert response.status_code == 200
+
+
+def test_bad_transcript_hint_json_is_ignored(service: Service) -> None:
+    response = service.post_capture(fields={"transcriptHint": "[nope"})
+    assert response.status_code == 200
+
+
+def test_all_three_fields_sent_and_reflected_in_the_prompt(service: Service) -> None:
+    import json as _json
+
+    components = [{"id": "left_cup", "name": "Left Cup", "path": "HP / Left Cup"}]
+    segments = [
+        {
+            "userId": "u1",
+            "userName": "Alice",
+            "partId": "left_cup",
+            "partName": "Left Cup",
+            "fromMs": 1000,
+            "toMs": 5000,
+        }
+    ]
+    hint = [{"speaker": "Alice", "text": "This cup here", "offsetMs": 3000}]
+    response = service.post_capture(
+        fields={
+            "componentTree": _json.dumps(components),
+            "pointingSegments": _json.dumps(segments),
+            "transcriptHint": _json.dumps(hint),
+        }
+    )
+    assert response.status_code == 200
+    user_prompt = service.llm.last_user_prompt
+    assert "Components in this model:" in user_prompt
+    assert "left_cup · HP / Left Cup" in user_prompt
+    assert "What people were pointing at:" in user_prompt
+    assert "Alice → Left Cup (1s–5s)" in user_prompt
+    assert "Speaker transcript" in user_prompt
+    assert "[Alice, t=3s] This cup here" in user_prompt

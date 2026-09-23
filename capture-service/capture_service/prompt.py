@@ -76,7 +76,10 @@ Rules:
 - Omit optional fields you have no evidence for. Do not fill them with guesses or empty strings.
 - Do not emit "id" or "timestamp"; the application assigns those.
 - Do not add any field that is not listed above.
-- "priority" is required on every card. Judge it from the speaker's own emphasis: Critical only for safety, yield-blocking or schedule-blocking concerns."""
+- "priority" is required on every card. Judge it from the speaker's own emphasis: Critical only for safety, yield-blocking or schedule-blocking concerns.
+- When a "Components in this model" list is provided, \\`componentReference\\` MUST be an id from that list, or omitted entirely. Never invent a component id. Never use a part name that is not in the list.
+- When an utterance is deictic ("this", "that", "here") and a pointing segment from the same speaker overlaps its time window, prefer that part as the componentReference.
+- Otherwise resolve a spoken component name against the list; if you are unsure which id matches, omit componentReference rather than guess."""
 
 
 def format_ms(ms: float) -> str:
@@ -140,12 +143,23 @@ def build_extraction_user_prompt(
     transcript: list[TranscriptChunk],
     context: SlideContext,
     today: str | None = None,
+    *,
+    components: list[dict[str, str]] | None = None,
+    pointing_segments: list[dict[str, object]] | None = None,
+    transcript_hint: list[dict[str, object]] | None = None,
 ) -> str:
     """Build the user turn: today's date and spatial context, then the transcript.
 
     Context comes first so the model can attribute a comment to the part that
     was on screen, exactly as the TypeScript builder does. Today's date (UTC,
     same as the TS default) lets it resolve "by Friday" to a real date.
+
+    The three optional grounded sections (components, pointing segments,
+    transcript hint) are rendered between the spatial context and the
+    transcript window, matching the TypeScript builder order. The transcript
+    hint is extra context for attribution — Whisper's transcript is still the
+    source for extraction. A client could lie about the hint, so nothing
+    security-relevant may depend on it.
     """
     if today is None:
         today = datetime.now(timezone.utc).date().isoformat()
@@ -158,5 +172,29 @@ def build_extraction_user_prompt(
         lines.append(f"A speaker was hovering over: {context.hovered_part_name}")
     if context.laser_target_part_name:
         lines.append(f"The laser pointer was on: {context.laser_target_part_name}")
+
+    if components:
+        lines.append("")
+        lines.append("Components in this model:")
+        for c in components:
+            lines.append(f"{c['id']} · {c['path']}")
+
+    if pointing_segments:
+        lines.append("")
+        lines.append("What people were pointing at:")
+        for seg in pointing_segments:
+            from_sec = round(int(seg["fromMs"]) / 1000)
+            to_sec = round(int(seg["toMs"]) / 1000)
+            lines.append(f"{seg['userName']} → {seg['partName']} ({from_sec}s–{to_sec}s)")
+
+    if transcript_hint:
+        lines.append("")
+        lines.append(
+            "Speaker transcript (attribution hint — Whisper transcript is the source for extraction):"
+        )
+        for line in transcript_hint:
+            sec = round(int(line["offsetMs"]) / 1000)
+            lines.append(f"[{line['speaker']}, t={sec}s] {line['text']}")
+
     lines.extend(["", "Transcript window:", format_transcript(transcript)])
     return "\n".join(lines)
