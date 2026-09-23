@@ -67,6 +67,9 @@ const FocusLayout: React.FC<FocusLayoutProps> = ({
         {humanTiles}
         {/* Self tile (legacy fallback) */}
         {!humanTiles && userSelfTile}
+        {agents.length === 0 && !humanTiles && !userSelfTile && (
+          <div className="text-white/30 text-xs font-mono">No other participants yet.</div>
+        )}
       </div>
     </div>
   );

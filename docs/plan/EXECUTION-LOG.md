@@ -678,6 +678,21 @@ runs caught, batch by batch, is the point of this entry:
   room (no overflow), the host is asked by name, and admitting drops the phone
   into the mobile room view.
 
+- **"Agents off" now means off in the boardroom too (batch AN)** — the user
+  asked for it after seeing the four demo tiles there. `hideAgents` was
+  honoured by the 3D scene and the dialogue engine but not by the boardroom,
+  which read `state.agents` directly. The shell now derives one
+  `visibleAgents` and hands it to every layout; the layouts never check the
+  flag themselves. Three details that matter: the full list is still used for
+  looking an id up (an insight card keeps its colour while the tiles are
+  hidden), a pinned or speaking id pointing at a hidden agent is ignored for
+  rendering but NOT cleared from the store (so turning agents back on restores
+  exactly what was there), and the webcam grid's column count is clamped to 1
+  — an empty list gave `repeat(0, 1fr)` and a division by zero. Mutation-
+  tested (removing the filter fails two of the new tests) and verified live:
+  the boardroom shows only the real participant, and the AGENTS ON toggle
+  brings the tiles straight back.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.
@@ -691,11 +706,6 @@ runs caught, batch by batch, is the point of this entry:
 - Requirements: no sample set, no generated codes, free-text category.
 
 ### Follow-ups
-- **The boardroom still shows the four demo agent tiles** (SYS.OP, ENG.UNIT,
-  DES.LEAD, VR.USER) even though agents are off by default since `aa4bd38`.
-  `hideAgents` evidently does not reach the boardroom's participant strip.
-  Left alone deliberately: whether agents should appear there at all is a
-  product call, not a bug to be guessed at.
 
 - **Capture spending is bounded per IP, not per deployment.** Correcting what
   the previous entry claimed: `/api/capture/` IS rate-limited in the

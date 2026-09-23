@@ -11,6 +11,7 @@ import { clsx } from 'clsx';
 import { useStore } from '../../../store';
 import { useShallow } from 'zustand/react/shallow';
 import { InsightCard } from '../../../types';
+import type { AgentState } from '../../../types';
 import { usePresence } from '../../../lib/PresenceContext';
 import InsightExplainer from '../InsightExplainer';
 import MeetingManagerPopover from './MeetingManagerPopover';
@@ -68,6 +69,9 @@ const FloatingPanel: React.FC<{
   </div>
 );
 
+/** Stable empty list for when agents are hidden. */
+const NO_AGENTS: AgentState[] = [];
+
 const BoardroomShell: React.FC = () => {
   const { roomId } = useParams<{ roomId: string }>();
   const {
@@ -87,6 +91,7 @@ const BoardroomShell: React.FC = () => {
     presenterRequestStatus,
     setPresenterRequestStatus,
     sessionHostId,
+    hideAgents,
   } = useStore(useShallow(state => ({
     agents: state.agents,
     pois: state.pois,
@@ -108,6 +113,7 @@ const BoardroomShell: React.FC = () => {
     presenterRequestStatus: state.presenterRequestStatus,
     setPresenterRequestStatus: state.setPresenterRequestStatus,
     sessionHostId: state.sessionHostId,
+    hideAgents: state.hideAgents,
   })));
 
   const { localUserId, remoteParticipantList, broadcastArenaEntry, broadcastMeetingEnd, broadcastLeaderTakeover, broadcastPresenterRequest, broadcastPresenterRequestDenied } = usePresence();
@@ -166,6 +172,21 @@ const BoardroomShell: React.FC = () => {
 
   const [pinnedAgentId, setPinnedAgentId] = useState<string | null>(null);
   const handlePin = useCallback((agentId: string | null) => setPinnedAgentId(agentId), []);
+
+  // One source of truth for whether agent tiles appear in the boardroom.
+  // Layouts receive this as their `agents` prop; they never check hideAgents
+  // themselves. NO_AGENTS is a module constant rather than a fresh `[]`: a new
+  // array identity on every render defeats memoisation downstream, and this
+  // codebase has already been bitten once by a selector that built one.
+  const visibleAgents = hideAgents ? NO_AGENTS : agents;
+
+  // If the speaking/pinned agent is not in the visible set, treat it as unset
+  // for rendering. Don't write to the store — turning agents back on must
+  // restore the exact prior state.
+  const visibleSpeakingId = speakingAgentId && visibleAgents.some(a => a.id === speakingAgentId)
+    ? speakingAgentId : null;
+  const visiblePinnedId = pinnedAgentId && visibleAgents.some(a => a.id === pinnedAgentId)
+    ? pinnedAgentId : null;
 
   // Camera presenter = real person (host or appointed). No AI-driven camera in boardroom.
   const presenterLabel = leaderName;
@@ -247,12 +268,13 @@ const BoardroomShell: React.FC = () => {
   }
 
   const layoutProps = {
-    agents, speakingAgentId, pinnedAgentId, pois,
+    agents: visibleAgents, speakingAgentId: visibleSpeakingId, pinnedAgentId: visiblePinnedId, pois,
     onPin: handlePin, presenterLabel,
     interactionEnabled: boardroomInteractionEnabled,
     screenSharing,
     userSelfTile,
     humanTiles,
+    participantCount: visibleAgents.length + humanParticipants.length,
   };
 
   return (
@@ -291,12 +313,12 @@ const BoardroomShell: React.FC = () => {
           <div className="text-white/35 font-mono text-[9px]">{formatTime(time)}</div>
           {/* Speaking dots */}
           <div className="hidden sm:flex items-center gap-1">
-            {agents.map(a => (
+            {visibleAgents.map(a => (
               <div
                 key={a.id}
                 className={clsx(
                   'w-5 h-5 rounded-full flex items-center justify-center text-[8px] text-white font-bold border-2 transition-all duration-200',
-                  speakingAgentId === a.id ? 'border-green-400 scale-110' : 'border-white/10'
+                  visibleSpeakingId === a.id ? 'border-green-400 scale-110' : 'border-white/10'
                 )}
                 style={{ backgroundColor: a.color }}
                 title={a.name}

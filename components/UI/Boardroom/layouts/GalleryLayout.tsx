@@ -16,6 +16,7 @@ interface GalleryLayoutProps {
   onWebcamOnlyChange?: (value: boolean) => void;
   userSelfTile?: React.ReactNode;
   humanTiles?: React.ReactNode;
+  participantCount?: number;
 }
 
 const MIN_PANEL = 260;
@@ -26,6 +27,7 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
   agents, speakingAgentId, pinnedAgentId, pois, onPin,
   presenterLabel, interactionEnabled, screenSharing,
   onPanelWidthChange, onWebcamOnlyChange, userSelfTile, humanTiles,
+  participantCount,
 }) => {
   const [panelWidth, setPanelWidth] = useState(320);
   const [isWebcamOnly, setIsWebcamOnly] = useState(false);
@@ -97,8 +99,9 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
   const cellWidth = Math.max(80, Math.floor((panelWidth - PANEL_PADDING * 2 - CELL_GAP * (cols - 1)) / cols));
   const cellHeight = Math.floor(cellWidth * 9 / 16);
 
-  // Webcam-only grid geometry
-  const wcCols = agents.length <= 2 ? agents.length : 2;
+  // Webcam-only grid geometry — clamp to at least 1 column so an empty agent
+  // list doesn't produce repeat(0, 1fr) and a division by zero in wcCellWidth.
+  const wcCols = Math.max(1, agents.length <= 2 ? agents.length : 2);
   const wcCellWidth = containerWidth > 0
     ? Math.floor((containerWidth - PANEL_PADDING * 2 - CELL_GAP * (wcCols - 1)) / wcCols)
     : 480;
@@ -116,7 +119,9 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
           <div className="flex items-center gap-2 text-white/50 text-[10px] font-mono uppercase tracking-wider">
             <LayoutGrid size={12} />
             Webcam View
-            <span className="text-[8px] text-white/20">— {agents.length} participants</span>
+            {(participantCount ?? agents.length) > 0 && (
+              <span className="text-[8px] text-white/20">— {participantCount ?? agents.length} participants</span>
+            )}
           </div>
           <button
             onClick={exitWebcamOnly}
@@ -163,6 +168,11 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
                 <div className="absolute inset-0">{userSelfTile}</div>
               </div>
             )}
+            {agents.length === 0 && !humanTiles && (
+              <div className="col-span-full flex items-center justify-center text-white/30 text-xs font-mono">
+                No other participants yet.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -178,7 +188,9 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
         style={{ width: panelWidth }}
       >
         <div className="text-[9px] text-white/25 font-mono uppercase tracking-widest mb-2 shrink-0">
-          Participants ({agents.length})
+          {participantCount !== undefined
+            ? `Participants (${participantCount})`
+            : `Participants (${agents.length})`}
         </div>
 
         {/* 16:9 tile grid */}
@@ -212,6 +224,11 @@ const GalleryLayout: React.FC<GalleryLayoutProps> = ({
           ) : userSelfTile && (
             <div className="relative" style={{ height: cellHeight }}>
               <div className="absolute inset-0">{userSelfTile}</div>
+            </div>
+          )}
+          {agents.length === 0 && !humanTiles && (
+            <div className="col-span-full flex items-center justify-center text-white/30 text-xs font-mono py-4">
+              No other participants yet.
             </div>
           )}
         </div>
