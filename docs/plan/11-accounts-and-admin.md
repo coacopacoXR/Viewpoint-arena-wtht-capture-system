@@ -1,4 +1,4 @@
-# Plan — navigation, accounts and an admin panel
+# Plan — navigation, access control and an admin screen
 
 Written 2026-09-23. Two problems of very different size, raised together:
 the curate page's tab bar is cramped, and there should be an admin panel that
@@ -24,77 +24,53 @@ Same treatment for the room's right-hand panel if it grows past four tabs.
 
 ---
 
-## M. Accounts — the prerequisite nobody can skip
+## M. Access without accounts (user decided 2026-09-23)
 
-**User decided 2026-09-23: build it — full sign-in, then the admin panel.**
+The earlier plan added per-person logins. The user rejected that: this is
+software people deploy for themselves, and accounts are machinery that makes
+sharing worse — the opposite of what a review tool needs. **There are no user
+accounts.** Access is managed with secrets and links:
 
-Today there is **no sign-in**. You type a display name in the lobby and that
-is your whole identity; every room, review and tracker item is readable and
-writable by anyone who can reach the app, and the database's row-level
-policies are literally `using (true)`. Nothing can be "given access to"
-because there is nobody to give it to.
+1. **Front-door password (optional).** One shared password for the whole
+   install, set by `./install.sh` (empty = open, which is today's behaviour).
+   Stops anyone on the office network from wandering in. Stored as a hash in
+   `.env`; the app asks once per browser and keeps a signed cookie.
+2. **Unguessable review links stay the access control for a review.** They
+   are UUIDs already. Anyone with the link is in — that is the property the
+   user wants to keep.
+3. **Knock to join.** Someone opening a room link who has not been admitted
+   before waits; the host sees "Maria wants to join — Admit / Decline".
+   Per-link policy chosen when sharing: *Anyone with the link*, *Ask the
+   host* (default), or, once a front-door password exists, *Password only*.
+4. **Admin passphrase**, not an admin user: a second secret from the
+   installer that unlocks install-wide settings — label fields, deleting
+   other people's reviews, seeing every meeting in the tracker.
+5. **Per-review visibility**: listed in the lobby for everyone who is in, or
+   link-only (hidden from the lobby list).
 
-So an admin panel needs, in order:
+What this deliberately does NOT give: proof of who someone is. Names stay
+self-asserted, so the app cannot attribute an action beyond "whoever held
+this link called themselves Maria". For a self-deployed team tool that is the
+right trade; a deployment that needs real identity should put the app behind
+its own SSO proxy, which this design does not prevent.
 
-1. **Identity.** The bundled stack already ships Postgres + PostgREST +
-   Realtime; Supabase's auth service (GoTrue) is the missing fourth piece and
-   drops into the same compose file, behind the same nginx, with the same JWT
-   secret PostgREST already trusts. Email + password to start (no SMTP
-   needed if admins create accounts and hand out the first password), with
-   the door open to company SSO later.
-2. **Accounts that mean something to the app.** A `profiles` table keyed by
-   the auth user id: display name, colour, role (`admin` | `member`). The
-   lobby stops asking for a name and shows who you are signed in as; presence
-   and transcript lines carry the user id, which also closes the spoofing
-   hole where a participant can post lines as somebody else.
-3. **Real row-level security.** Replace the open policies: a review is
-   readable by its members; the tracker shows the sessions you have access
-   to; only admins can change label fields or other people's access. This is
-   the step that actually enforces anything — the UI hiding a button is not
-   access control.
-4. **Migration for existing installs.** Reviews created before accounts have
-   no owner. On first sign-in of the first admin, claim them all for that
-   admin, and say so plainly rather than silently hiding data.
-
-## M-bis. Guests: a link must stay enough (user, 2026-09-23)
-
-**Accounts must not make sharing rigid.** Sending someone a link and having
-them join has to keep working — the app's whole point is that a supplier or a
-colleague joins a review in one click. So accounts are for *members*, and a
-room additionally accepts *guests*:
-
-- **Knock to join (default).** Someone with the link who is not signed in
-  types a name and lands in a waiting state; the host sees "Maria wants to
-  join — Admit / Decline". Admitting mints a **guest token**: signed with the
-  same JWT secret, scoped to that one room, expiring with the meeting. It
-  carries no access to other reviews, the tracker, or anything else, and the
-  row-level policies check that claim rather than trusting the client.
-- **Per-link policy**, chosen when sharing: *Anyone with the link* (no
-  knock — for a demo or an open review), *Ask the host* (the default), or
-  *Members only* (the locked-down case). The share panel says which one is
-  in force, in words.
-- **A guest is a real participant**: their name appears in presence, their
-  transcript lines are attributed to them, they can be assigned an action.
-  What they cannot do is wander into other reviews.
-- **Leaving the meeting ends the access.** No lingering guest sessions; a
-  returning guest knocks again (or the host copies a fresh link).
-
-This is what keeps the "solid architecture, not rigid" balance: identity
-where it protects data, a link where it removes friction.
+Row-level policies stay open (`using (true)`) because there is no identity to
+key them on; the database is reachable only through the app's origin, and the
+front-door password is what guards that origin. Say so plainly in
+`docs/INSTALL.md` rather than implying more safety than exists.
 
 ## N. The admin panel
 
-Once M exists, one screen (admin only):
+Once M exists, one screen, unlocked by the admin passphrase (not an admin
+account):
 
-- **People**: list, invite (create account + temporary password), set role,
-  deactivate. Deactivating never deletes their past contributions.
-- **Groups**: named groups of people ("Mechanical team") and named groups of
-  reviews — the latter being the label fields from plan 10-F reused as the
-  grouping, so "everything tagged Product = Momentum 4" is a thing access can
-  be granted to, rather than inventing a second hierarchy.
-- **Access**: per review and per review-group, grant read or edit to a person
-  or a people-group. Defaults: the creator is owner; nothing is public by
-  default; an admin can always see everything (and the panel says so).
+- **Reviews**: every review on this install, who last touched it, delete or
+  hide from the lobby. (There is no people list: people are names, not
+  accounts.)
+- **Label fields**: the same screen the tracker already has, reachable here
+  too, since it is install-wide configuration.
+- **Access**: the front-door password and the admin passphrase (rotate
+  either), and each review's visibility and link policy.
 - **Audit, minimal**: who granted what to whom, and when. A design review's
   contents are commercially sensitive; silent grants are not acceptable.
 
@@ -103,10 +79,9 @@ Once M exists, one screen (admin only):
 | Batch | Work | Size |
 |---|---|---|
 | AG | L (icon rail on the curate page) | small |
-| AH | M1 (GoTrue in the stack, sign-in, profiles) | large |
-| AI | M2 (row-level security over reviews/tracker) | large, and the riskiest |
-| AJ | N (admin panel: people, groups, access, audit) | large |
-| AK | M-bis (guest links: knock-to-join, per-link policy, scoped guest tokens) | medium, built WITH M3 so guests are never locked out |
+| AH | M1 (front-door password + admin passphrase, installer + app gate) | medium |
+| AI | M2 (knock-to-join, per-link policy, per-review visibility) | medium |
+| AJ | N (admin screen behind the passphrase) | medium |
 
 L is a UI batch and ships next. M and N are the difference between a demo and
 a multi-team tool: they touch the installer, the compose stack, every data
@@ -116,12 +91,8 @@ commit-as-comments), one batch at a time, each verified live — and until they
 land, the honest description of the app stays "anyone with the link and
 network access can join and edit", which is what `docs/INSTALL.md` says.
 
-Order to build M in, so the app never spends a batch half-locked:
-M1 the auth service + sign-in + profiles (everything still readable by
-everyone, so nothing breaks); M2 ownership and membership recorded on every
-review/session; M3 the policies flipped from `using (true)` to real ones, with
-the migration that claims existing rows; N the panel. M3 is the batch that can
-lock people out of their own data, so it gets a rehearsal on a copy of the
-database and a documented way back.
+Both secrets default to EMPTY, which is exactly today's behaviour, so no
+existing install locks itself overnight. Turning either on is a deliberate
+act (`./install.sh` or the admin screen).
 
 Open questions for the user are in the chat, not here.
