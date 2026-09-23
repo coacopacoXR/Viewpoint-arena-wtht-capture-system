@@ -239,17 +239,16 @@ describe('api/capture/local — behaviour', () => {
     expect(calls[0].url).toBe('http://capture-service:8080/capture');
   });
 
-  it('loads the config from the deployment root by absolute file URL', async () => {
+  it('lets loadConfig choose the source (VIEWPOINT_CONFIG, else the root file)', async () => {
     stubUpstream(() => upstreamReply({ cards: [] }));
     const res = createMockRes();
 
     await callHandler(createMockReq('POST'), res);
 
-    // A relative specifier would resolve against lib/config/, the wrong
-    // directory (see defaultConfigPath in lib/config/loadConfig.ts).
-    const passed = String(loadConfig.mock.calls[0][0]);
-    expect(passed.startsWith('file://')).toBe(true);
-    expect(passed.endsWith('viewpoint.config.ts')).toBe(true);
+    // No argument on purpose: an explicit path would bypass VIEWPOINT_CONFIG.
+    // The absolute no-argument default is pinned in
+    // lib/config/__tests__/loadConfigPath.test.ts.
+    expect(loadConfig).toHaveBeenCalledWith();
   });
 
   it('forwards the multipart body byte-for-byte with its original Content-Type', async () => {

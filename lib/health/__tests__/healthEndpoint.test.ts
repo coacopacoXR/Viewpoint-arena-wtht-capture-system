@@ -210,16 +210,14 @@ describe('GET /api/health', () => {
     expect(captured.headers['cache-control']).toBe('no-store');
   });
 
-  it('loads the config from the deployment root by absolute file URL', async () => {
+  it('lets loadConfig choose the source (VIEWPOINT_CONFIG, else the root file)', async () => {
     await call('GET');
 
-    // A relative specifier would resolve against lib/config/, not where the
-    // file lives, and /api/health would report config_not_available on every
-    // correctly configured deployment.
-    const passed = String(loadConfig.mock.calls[0][0]);
-    expect(passed).toMatch(/^file:\/\//);
-    expect(passed).toContain('viewpoint.config.ts');
-    expect(passed).not.toContain('lib/config/viewpoint.config.ts');
+    // No argument on purpose: an explicit path would bypass VIEWPOINT_CONFIG,
+    // which is the only way a Vercel deploy gets a config at all. That the
+    // no-argument default is the ABSOLUTE root path (not lib/config/) is
+    // pinned in lib/config/__tests__/loadConfigPath.test.ts.
+    expect(loadConfig).toHaveBeenCalledWith();
   });
 
   it('accepts HEAD and rejects anything else', async () => {
