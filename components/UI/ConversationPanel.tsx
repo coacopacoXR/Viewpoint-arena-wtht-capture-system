@@ -14,6 +14,8 @@ import InsightDetailModal from './InsightDetailModal';
 import InsightExplainer from './InsightExplainer';
 import RecordingControls from './RecordingControls';
 import RecordingIndicator from './RecordingIndicator';
+import { usePointingTimelineStore } from '../../lib/pointingTimelineStore';
+import { selectSegmentsForLine } from '../../lib/selectSegmentsForLine';
 
 // --- MAIN PANEL ---
 
@@ -75,6 +77,7 @@ const ConversationPanel: React.FC = () => {
   } = useStore();
 
   const { remoteParticipantList, localUserId } = usePresence();
+  const pointingSegments = usePointingTimelineStore((s) => s.segments);
 
   const [selectedCard, setSelectedCard] = useState<InsightCard | null>(null);
   const [activeTab, setActiveTab] = useState<'LIVE' | 'DOCS'>('LIVE');
@@ -467,6 +470,7 @@ const ConversationPanel: React.FC = () => {
                                 const isSource = hoveredSourceIds.includes(msg.id);
                                 const isDimmed = hoveredSourceIds.length > 0 && !isSource;
                                 const hasInsight = insightCards.some(c => c.sourceMessageIds?.includes(msg.id));
+                                const pointingSeg = selectSegmentsForLine(pointingSegments, msg);
 
                                 return (
                                     <div 
@@ -489,11 +493,16 @@ const ConversationPanel: React.FC = () => {
                                                 {msg.text}
                                             </div>
                                             {/* Metadata Row */}
-                                            {(isSource || hasInsight) && (
+                                            {(isSource || hasInsight || pointingSeg) && (
                                                 <div className="flex items-center gap-2 mt-1">
                                                     {hasInsight && (
                                                         <span className="text-[8px] text-blue-400 bg-blue-500/10 px-1 rounded border border-blue-500/30 flex items-center gap-1">
                                                             <Activity size={8} /> Insight Captured
+                                                        </span>
+                                                    )}
+                                                    {pointingSeg && (
+                                                        <span className="text-[8px] text-amber-400 bg-amber-500/10 px-1 rounded border border-amber-500/30 flex items-center gap-0.5 whitespace-nowrap" title={`Pointed at while speaking`}>
+                                                            👉 {pointingSeg.partName}
                                                         </span>
                                                     )}
                                                 </div>

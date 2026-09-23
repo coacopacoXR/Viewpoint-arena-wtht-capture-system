@@ -9,6 +9,8 @@ import type { ReviewDraft } from './reviewSetupStore';
 import { useStore } from '../store';
 import { ViewMode } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
+import { usePointingTimelineStore } from './pointingTimelineStore';
+import type { PointingSegment } from './pointingTimelineStore';
 
 export type { ParticipantPresence };
 
@@ -44,7 +46,8 @@ type RoomMessage =
   | { type: 'LIVE_CHAT'; payload: LiveChatMessage }
   | { type: 'XR_PRESENCE'; payload: XRParticipantData }
   | { type: 'TRANSCRIPT_LINE'; payload: import('../types').ChatMessage }
-  | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } };
+  | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } }
+  | { type: 'POINTING_SEGMENT'; payload: import('./pointingTimelineStore').PointingSegment };
 
 // Module-level ref so it persists across re-renders and is accessible from the message handler
 const webRTCSignalHandlerRef: { current: ((payload: { from: string; to: string; data: any }) => void) | null } = { current: null };
@@ -404,6 +407,9 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       } else if (msg.type === 'RECORDING_STATE') {
         recordingStateRef.current = msg.payload;
         notifyRecordingStateSubscribers();
+      } else if (msg.type === 'POINTING_SEGMENT') {
+        const { addSegment } = usePointingTimelineStore.getState();
+        addSegment(msg.payload);
       } else if (msg.type === 'XR_PRESENCE') {
         const { userId } = msg.payload;
         if (userId !== userRef.current.userId) {
@@ -681,4 +687,15 @@ export function broadcastRecordingState(state: RecordingStatePayload): void {
   const socket = partySocketRef.current;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: 'RECORDING_STATE', payload: state }));
+}
+
+/**
+ * Broadcast a finished pointing segment to the room. Called by
+ * usePointingTimeline when a segment closes. Module-level for the same
+ * reason as broadcastTranscriptLine.
+ */
+export function broadcastPointingSegment(seg: PointingSegment): void {
+  const socket = partySocketRef.current;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'POINTING_SEGMENT', payload: seg }));
 }

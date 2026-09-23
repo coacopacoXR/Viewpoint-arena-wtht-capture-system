@@ -41,7 +41,8 @@ type RoomMessage =
   | { type: 'LIVE_CHAT'; payload: any }
   | { type: 'XR_PRESENCE'; payload: any }
   | { type: 'TRANSCRIPT_LINE'; payload: { id: string; agentId: string; text: string; timestamp: number; speakerName?: string; speakerId?: string; offsetMs?: number } }
-  | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } };
+  | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } }
+  | { type: 'POINTING_SEGMENT'; payload: { userId: string; userName: string; partId: string; partName: string; source: 'laser' | 'finger' | 'hover'; fromMs: number; toMs: number } };
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
 
@@ -269,6 +270,15 @@ export default class RoomServer implements Party.Server {
       const userId = this.connToUser.get(sender.id);
       if (userId) {
         msg.payload.speakerId = userId;
+      }
+      this.room.broadcast(JSON.stringify(msg), [sender.id]);
+
+    } else if (msg.type === 'POINTING_SEGMENT') {
+      // Same trust model as TRANSCRIPT_LINE: the server stamps userId from
+      // the connection so one client cannot forge segments as another.
+      const userId = this.connToUser.get(sender.id);
+      if (userId) {
+        msg.payload.userId = userId;
       }
       this.room.broadcast(JSON.stringify(msg), [sender.id]);
 

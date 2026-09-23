@@ -7,6 +7,7 @@ import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
 import { setLaserEntry, clearLaserEntry } from '../../lib/laserTargetRef';
 import { fingerPointerRef } from '../../lib/fingerPointerRef';
+import { pointingSourceRef } from '../../lib/pointingSourceRef';
 
 // Find the active model in the scene (any object tagged with userData.modelId)
 // and project its center to NDC. Returns true on success.
@@ -74,6 +75,7 @@ const UserLaser: React.FC = () => {
                 lastHitId.current = null;
                 lastPartName.current = null;
                 clearLaserEntry(localUserId);
+                pointingSourceRef.current = null;
                 if (partLabelRef.current) {
                     partLabelRef.current.style.display = 'none';
                     partLabelRef.current.textContent = '';
@@ -461,6 +463,7 @@ const UserLaser: React.FC = () => {
         // shared maps so model components light up the part we're pointing at
         // without waiting for a network roundtrip.
         setLaserEntry(localUserId, foundId, foundMeshName, foundPartName, userColor);
+        pointingSourceRef.current = fingerHeld.current ? 'finger' : dwellHeld.current ? 'hover' : 'laser';
 
         // Network broadcast at ~10fps
         const now = Date.now();

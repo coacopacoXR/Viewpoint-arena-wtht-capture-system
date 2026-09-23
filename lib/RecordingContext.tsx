@@ -37,6 +37,7 @@ import {
   broadcastRecordingState,
   type RecordingStatePayload,
 } from './usePartyPresence';
+import { usePointingTimeline } from './usePointingTimeline';
 import { LocalCaptureProvider, meetingSlideContext } from './connectors/capture/local';
 import type { ChatMessage } from '../types';
 
@@ -87,6 +88,9 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const agendaIdx = useActiveReviewStore((s) => s.agendaIdx);
   const captureProvider = useConnectorConfig().capture;
   const chatHistory = useStore((s) => s.chatHistory);
+
+  // Sample the local user's pointing target at 2 Hz while recording.
+  usePointingTimeline(localUserId);
 
   const isHost = sessionHostId === localUserId || sessionHostId === null;
   const canRecord = isHost && captureProvider === 'local';

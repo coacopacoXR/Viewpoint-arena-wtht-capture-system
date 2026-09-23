@@ -183,3 +183,60 @@ describe('room.server — TRANSCRIPT_LINE speakerId stamping', () => {
     expect(broadcast.mock.calls[0][1]).toEqual([conn.id]);
   });
 });
+
+describe('room.server — POINTING_SEGMENT relay + userId stamping', () => {
+  let server: ReturnType<typeof createServer>;
+  let conn: FakeConnection;
+
+  beforeEach(() => {
+    server = createServer();
+    conn = fakeConn('conn-1');
+    sendPresence(server, conn, 'user-42', 'Alice');
+    server.room.broadcast.mockClear();
+  });
+
+  it('overwrites userId with the connection userId', () => {
+    server.onMessage(
+      JSON.stringify({
+        type: 'POINTING_SEGMENT',
+        payload: {
+          userId: 'FORGED-ID',
+          userName: 'Alice',
+          partId: 'part-1',
+          partName: 'Left Ear Cup',
+          source: 'laser',
+          fromMs: 0,
+          toMs: 1000,
+        },
+      }),
+      conn as unknown as Party.Connection,
+    );
+
+    const broadcast = server.room.broadcast;
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    const msg = JSON.parse(broadcast.mock.calls[0][0] as string);
+    expect(msg.type).toBe('POINTING_SEGMENT');
+    expect(msg.payload.userId).toBe('user-42');
+  });
+
+  it('relays to everyone except the sender', () => {
+    server.onMessage(
+      JSON.stringify({
+        type: 'POINTING_SEGMENT',
+        payload: {
+          userId: 'user-42',
+          userName: 'Alice',
+          partId: 'part-1',
+          partName: 'Left Ear Cup',
+          source: 'laser',
+          fromMs: 0,
+          toMs: 1000,
+        },
+      }),
+      conn as unknown as Party.Connection,
+    );
+
+    const broadcast = server.room.broadcast;
+    expect(broadcast.mock.calls[0][1]).toEqual([conn.id]);
+  });
+});
