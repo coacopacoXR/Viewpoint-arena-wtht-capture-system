@@ -705,6 +705,18 @@ runs caught, batch by batch, is the point of this entry:
 - Programmable agents: roadmap, nothing decided.
 - Requirements: no sample set, no generated codes, free-text category.
 
+### The queue for the next session
+
+The user tested this build and wrote up what they want changed: the camera
+and the follow model, a layout pass over the room's furniture, and a return
+to the question of identity. It is all in
+[`12-camera-room-ui-and-identity.md`](./12-camera-room-ui-and-identity.md),
+including the three decisions that block it, and **none of it has been
+started** — that was the instruction.
+
+Worth knowing before reading it: the identity item reverses the "no accounts"
+decision recorded above, and that is discussed rather than glossed over.
+
 ### Follow-ups
 
 - **Capture spending is bounded per IP, not per deployment.** Correcting what
