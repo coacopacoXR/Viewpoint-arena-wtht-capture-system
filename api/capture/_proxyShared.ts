@@ -18,10 +18,10 @@ const SAFE_UPSTREAM_CODE = /^[a-z_]{1,64}$/;
 
 export async function resolveServiceUrl(): Promise<string | null> {
   try {
-    const { defaultConfigPath, loadConfig } = await import(
+    const { loadConfig } = await import(
       '../../lib/config/loadConfig.ts'
     );
-    const loaded = await loadConfig(defaultConfigPath());
+    const loaded = await loadConfig();
     const capture = loaded.capture;
     if (capture.provider !== 'local') return null;
     return capture.serviceUrl;

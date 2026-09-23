@@ -13,7 +13,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "check:env": "node scripts/check-public-env.mjs"
+    "check:env": "node scripts/check-public-env.mjs",
+    "config:json": "node scripts/config-to-json.mjs"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.9.0",

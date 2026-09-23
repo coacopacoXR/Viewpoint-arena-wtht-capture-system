@@ -92,6 +92,7 @@ three requests into a meeting.
 | `CAPTURE_MAX_UPLOAD_BYTES` | `209715200` (200 MiB) | Hard ceiling on one uploaded recording — about four hours of Opus/WebM, under two hours of 16-bit mono WAV. Enforced while streaming the body, so an oversized upload costs no inference. |
 | `CAPTURE_HOST` | `127.0.0.1` | Bind address for `python -m capture_service`. |
 | `CAPTURE_PORT` | `8080` | Bind port for `python -m capture_service`. |
+| `CAPTURE_ALLOWED_ORIGINS` | *(empty)* | Comma-separated list of exact browser origins allowed via CORS (e.g. `https://review.example.com,https://localhost`). Empty (the default) adds **no CORS middleware** — today's behaviour, unchanged. A wildcard `*` is refused: the service logs an error and starts without CORS rather than allowing every origin alongside the shared-secret header. Origins with a path or trailing slash are skipped. |
 
 Hardware sizing (from `docs/local-capture-plan.md` §"Ollama"): 7B models want
 8 GB+ RAM and are CPU-viable but slow; 13–14B want 16 GB+ and a GPU; a 32B

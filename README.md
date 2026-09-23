@@ -89,6 +89,29 @@ The browser never imports the config file directly. It fetches the
 non-secret subset at runtime from `GET /api/public-config`, so a single
 built artifact works against any deployment's config.
 
+**Hosts without a config file (Vercel, other serverless hosts).** The config
+file is git-ignored, so a deploy from git does not have it. Put the same
+settings in the `VIEWPOINT_CONFIG` environment variable instead, as JSON:
+
+```bash
+npm run config:json      # prints your viewpoint.config.ts as one line of JSON
+```
+
+Paste the output into `VIEWPOINT_CONFIG` in the host's environment settings,
+next to the secrets it names. It holds no secrets itself (the config only
+names the variables that do), and it goes through the same validation as the
+file. When both exist, the variable wins and the server logs that once.
+`GET /api/health` reports which one was used (`configSource`).
+
+**Capping what cloud AI capture can spend.** With the OpenAI or Anthropic
+capture options, every extraction is a paid API call. The app bounds each
+single call (transcript size and answer length), and the self-hosted proxy
+limits each address to 30 capture requests a minute, but nothing in the app
+caps the total. Set that ceiling where it cannot be bypassed: a monthly budget
+on the API key's project (OpenAI) or a spend limit on its workspace
+(Anthropic). On Vercel, where the self-hosted proxy is absent, add a rate
+limit rule for `/api/capture/` in the project's Firewall settings as well.
+
 ---
 
 ## Tech Stack

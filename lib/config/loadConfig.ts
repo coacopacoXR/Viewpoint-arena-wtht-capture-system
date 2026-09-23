@@ -1,5 +1,6 @@
 import { configSchema, type ViewpointConfig } from './schema.ts';
 import { ZodError } from 'zod';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -78,19 +79,58 @@ export function defaultConfigPath(): string {
   return pathToFileURL(resolve(process.cwd(), 'viewpoint.config.ts')).href;
 }
 
+let envOverrideWarned = false;
+
+export function resolveConfigSource(): 'env:VIEWPOINT_CONFIG' | 'file:viewpoint.config.ts' {
+  const raw = process.env.VIEWPOINT_CONFIG;
+  if (raw && raw.trim()) return 'env:VIEWPOINT_CONFIG';
+  return 'file:viewpoint.config.ts';
+}
+
 export async function loadConfig(
-  configPath: string = defaultConfigPath(),
+  configPath?: string,
 ): Promise<ViewpointConfig> {
+  const envJson = process.env.VIEWPOINT_CONFIG;
+
+  if (configPath === undefined && envJson && envJson.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(envJson);
+    } catch {
+      // Deliberately not the parser's message: V8 quotes the start of the
+      // input in it ("Unexpected token 'S', "{"plm": SECRET"..."), and the
+      // value must not reach logs or error responses.
+      throw new Error(
+        'Invalid VIEWPOINT_CONFIG: not valid JSON. Regenerate it with `npm run config:json`.',
+      );
+    }
+    const config = validateConfig(parsed);
+    checkEnvVars(config);
+
+    if (!envOverrideWarned) {
+      const defaultPath = resolve(process.cwd(), 'viewpoint.config.ts');
+      if (existsSync(defaultPath)) {
+        console.warn(
+          'VIEWPOINT_CONFIG is set and viewpoint.config.ts exists; using the environment variable',
+        );
+        envOverrideWarned = true;
+      }
+    }
+
+    return config;
+  }
+
+  const resolvedPath = configPath ?? defaultConfigPath();
   let module: { default?: unknown };
   try {
-    module = await import(configPath);
+    module = await import(resolvedPath);
   } catch (err) {
     throw new Error(
-      `Failed to load config from ${configPath}: ${(err as Error).message}`,
+      `Failed to load config from ${resolvedPath}: ${(err as Error).message}`,
     );
   }
   if (!module.default) {
-    throw new Error(`Config at ${configPath} must have a default export`);
+    throw new Error(`Config at ${resolvedPath} must have a default export`);
   }
   const config = validateConfig(module.default);
   checkEnvVars(config);

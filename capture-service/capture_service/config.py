@@ -46,12 +46,15 @@ Variables (all optional; the defaults are the documented local-install values):
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import urlsplit
 
 from .errors import ConfigError
+
+logger = logging.getLogger("capture_service")
 
 ENV_PREFIX = "CAPTURE_"
 
@@ -122,6 +125,7 @@ ENV_VAR_NAMES: tuple[str, ...] = (
     "CAPTURE_HOST",
     "CAPTURE_PORT",
     "CAPTURE_SHARED_SECRET",
+    "CAPTURE_ALLOWED_ORIGINS",
 )
 
 DEFAULTS: Mapping[str, str] = {
@@ -138,6 +142,9 @@ DEFAULTS: Mapping[str, str] = {
     # No default secret. Ever. A shipped default would be the first thing an
     # attacker tries, and the service would start happily with it.
     "CAPTURE_SHARED_SECRET": "",
+    # No default origins. Empty means no CORS middleware, which is the correct
+    # default for a service with no published port.
+    "CAPTURE_ALLOWED_ORIGINS": "",
 }
 
 
@@ -160,6 +167,9 @@ class Settings:
     # existing Settings(...) construction — including the one in
     # tests/test_config.py that pins the documented defaults — keeps working.
     shared_secret: str | None = None
+    # None means "no CORS middleware". A non-empty list means CORSMiddleware
+    # is added with exactly those origins. Parsed by _allowed_origins below.
+    allowed_origins: list[str] | None = None
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -188,6 +198,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         host=_text(raw, "CAPTURE_HOST"),
         port=_port(raw, "CAPTURE_PORT"),
         shared_secret=_shared_secret(raw, "CAPTURE_SHARED_SECRET"),
+        allowed_origins=_allowed_origins(raw, "CAPTURE_ALLOWED_ORIGINS"),
     )
 
 
@@ -321,3 +332,48 @@ def _shared_secret(raw: Mapping[str, str], name: str) -> str | None:
             f"entirely, unset the variable instead of weakening it."
         )
     return value
+
+
+def _allowed_origins(raw: Mapping[str, str], name: str) -> list[str] | None:
+    """Parse the CORS origin allowlist.
+
+    Returns None when the variable is unset or empty (no CORS middleware), or a
+    list of validated origins. A wildcard ``*`` aborts the entire list — a
+    wildcard next to the shared-secret header is the mistake this guard exists
+    for, so the service refuses to add CORS at all rather than allow every
+    origin. Individual entries with a path component or trailing slash are
+    logged and skipped; the remaining valid entries still work.
+    """
+    value = _value(raw, name)
+    if not value:
+        return None
+    entries = [e.strip() for e in value.split(",")]
+    if "*" in entries:
+        logger.error(
+            "CAPTURE_ALLOWED_ORIGINS contains '*'; refusing to add CORS "
+            "rather than allow every origin alongside the shared-secret header"
+        )
+        return None
+    origins: list[str] = []
+    for entry in entries:
+        if not entry:
+            continue
+        parsed = urlsplit(entry)
+        if not parsed.scheme or not parsed.netloc:
+            logger.warning(
+                "CAPTURE_ALLOWED_ORIGINS: skipping invalid origin %r", entry
+            )
+            continue
+        if parsed.path not in ("", "/"):
+            logger.warning(
+                "CAPTURE_ALLOWED_ORIGINS: skipping %r (has a path component)",
+                entry,
+            )
+            continue
+        if entry.endswith("/"):
+            logger.warning(
+                "CAPTURE_ALLOWED_ORIGINS: skipping %r (trailing slash)", entry
+            )
+            continue
+        origins.append(entry)
+    return origins or None

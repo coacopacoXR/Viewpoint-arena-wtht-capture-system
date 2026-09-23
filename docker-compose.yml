@@ -328,6 +328,9 @@ services:
       CAPTURE_MAX_UPLOAD_BYTES: ${CAPTURE_MAX_UPLOAD_BYTES:-209715200}
       CAPTURE_HOST: 0.0.0.0
       CAPTURE_PORT: '8080'
+      # Comma-separated browser origins for CORS (e.g. https://review.example.com).
+      # Empty (the default) adds no CORS middleware. A wildcard * is refused.
+      # CAPTURE_ALLOWED_ORIGINS:
     volumes:
       # The Whisper model download (~150 MB for base.en) survives a rebuild, and
       # is what an air-gapped install pre-seeds on a connected machine.

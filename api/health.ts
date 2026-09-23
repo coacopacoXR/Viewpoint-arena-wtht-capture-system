@@ -24,11 +24,8 @@
 // because "which one is down" is the entire value of the response.
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { defaultConfigPath, loadConfig } from '../lib/config/loadConfig.ts';
+import { loadConfig, resolveConfigSource } from '../lib/config/loadConfig.ts';
 import { aggregateHealth } from '../lib/health/aggregate.ts';
-
-// Explicit rather than defaulted so the path is visible at the call site.
-const CONFIG_PATH = defaultConfigPath();
 
 export async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -44,7 +41,7 @@ export async function handler(req: VercelRequest, res: VercelResponse) {
 
   let config;
   try {
-    config = await loadConfig(CONFIG_PATH);
+    config = await loadConfig();
   } catch (err) {
     // The message names the missing env var and connector, which is exactly
     // what an operator needs and exactly what this endpoint must not publish —
@@ -66,7 +63,10 @@ export async function handler(req: VercelRequest, res: VercelResponse) {
   // 503 when anything is degraded. Standard for a probe, and it is what lets
   // install.sh tell "ready" from "up but not ready" without parsing the body —
   // though it parses the body anyway, to say WHICH connector is not ready.
-  res.status(report.ok ? 200 : 503).json(report);
+  res.status(report.ok ? 200 : 503).json({
+    ...report,
+    configSource: resolveConfigSource(),
+  });
 }
 
 export default handler;

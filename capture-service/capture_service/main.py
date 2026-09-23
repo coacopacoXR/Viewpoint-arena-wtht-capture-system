@@ -46,10 +46,11 @@ from typing import Annotated, AsyncIterator
 from fastapi import APIRouter, FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from . import __version__
-from .auth import require_shared_secret
+from .auth import AUTH_HEADER, AUTHORIZATION_HEADER, require_shared_secret
 from .config import Settings, load_settings
 from .errors import CaptureServiceError, EmptyTranscript, EmptyUpload, UploadTooLarge
 from .ollama import LlmClient, OllamaClient
@@ -523,6 +524,26 @@ def create_app(
     if resolved_settings.shared_secret is not None:
         app.middleware("http")(
             require_shared_secret(resolved_settings.shared_secret)
+        )
+
+    # CORS is opt-in by absence, exactly like authentication: unset or empty
+    # CAPTURE_ALLOWED_ORIGINS adds no middleware, so the service keeps sending
+    # no Access-Control-Allow-Origin and browsers block cross-origin calls.
+    # Set the variable and the service allows exactly those origins — never *
+    # (config._allowed_origins refuses it).
+    #
+    # Registered AFTER the auth middleware on purpose. Starlette wraps each new
+    # middleware around the ones before it, so the last one added runs first.
+    # CORS has to be outermost: a browser preflight (OPTIONS) never carries the
+    # token, and would otherwise get auth's 401 and fail; and a real 401 needs
+    # the CORS headers for the browser to let the page read it.
+    if resolved_settings.allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=resolved_settings.allowed_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type", AUTH_HEADER, AUTHORIZATION_HEADER],
         )
 
     app.include_router(router)

@@ -51,6 +51,11 @@ ENV_EFFECT: dict[str, tuple[str, str, object]] = {
         "shared_secret",
         "a" * 32,
     ),
+    "CAPTURE_ALLOWED_ORIGINS": (
+        "https://review.example.com,https://localhost",
+        "allowed_origins",
+        ["https://review.example.com", "https://localhost"],
+    ),
 }
 
 
@@ -67,6 +72,8 @@ def test_defaults_are_the_documented_local_install_values() -> None:
         max_upload_bytes=200 * 1024 * 1024,
         host="127.0.0.1",
         port=8080,
+        shared_secret=None,
+        allowed_origins=None,
     )
 
 
