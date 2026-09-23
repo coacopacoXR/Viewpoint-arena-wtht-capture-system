@@ -13,9 +13,7 @@ import Bicycle from './Bicycle';
 import Headphones from './Headphones';
 import ImportedModel from './ImportedModel';
 import Agent from './Agent';
-import HeatmapOverlay from './HeatmapOverlay';
 import { useStore } from '../../store';
-import { ViewMode } from '../../types';
 
 interface WorldProps {
   hideAgents?: boolean;
@@ -28,7 +26,6 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
   // Use selectors to improve performance and prevent re-renders
   const isPlaying = useStore(state => state.isPlaying);
   const setTime = useStore(state => state.setTime);
-  const viewMode = useStore(state => state.viewMode);
   const setUserInteractionPoint = useStore(state => state.setUserInteractionPoint);
   const agents = useStore(state => state.agents);
   const storeHideAgents = useStore(state => state.hideAgents);
@@ -57,18 +54,16 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
     }
   };
 
-  const isHeatmap = viewMode === ViewMode.HEATMAP;
-
   return (
     <>
-      <color attach="background" args={[isHeatmap ? '#111' : '#f0f0f0']} />
-      <fog attach="fog" args={[isHeatmap ? '#111' : '#f0f0f0', 5, 25]} />
+      <color attach="background" args={['#f0f0f0']} />
+      <fog attach="fog" args={['#f0f0f0', 5, 25]} />
 
-      <ambientLight intensity={isHeatmap ? 0.2 : 0.7} />
+      <ambientLight intensity={0.7} />
       <pointLight position={[10, 10, 10]} intensity={0.5} castShadow />
       
       <EnvErrorBoundary>
-        <Environment preset="studio" blur={1} environmentIntensity={isHeatmap ? 0.2 : 1} />
+        <Environment preset="studio" blur={1} environmentIntensity={1} />
       </EnvErrorBoundary>
 
       {/* Interaction Plane for Mouse Tracking */}
@@ -83,8 +78,8 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
         fadeStrength={1.5} 
         sectionSize={1} 
         cellSize={0.5} 
-        sectionColor={isHeatmap ? "#333" : "#cccccc"} 
-        cellColor={isHeatmap ? "#222" : "#e5e5e5"} 
+        sectionColor="#cccccc"
+        cellColor="#e5e5e5"
         position={[0, -0.01, 0]}
       />
 
@@ -118,8 +113,6 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
         />
       </group>
       
-      {isHeatmap && <HeatmapOverlay />}
-
       {!hideAgents && agents.map((agent) => (
         <Agent key={agent.id} initialState={agent} allAgents={agents} />
       ))}

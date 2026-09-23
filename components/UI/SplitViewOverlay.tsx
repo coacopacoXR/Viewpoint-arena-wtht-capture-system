@@ -5,14 +5,14 @@ import { useStore } from '../../store';
 import { useShallow } from 'zustand/react/shallow';
 import { usePresence } from '../../lib/PresenceContext';
 import { ViewMode } from '../../types';
+import { pickDefaultSplitTarget } from '../../lib/splitTarget';
 
 // Rendered above the canvas while SPLIT_SCREEN is active. Surfaces three
 // things the user can't otherwise see:
 //   1. Which two POVs are on screen (left = you, right = the followed target)
 //   2. A vertical separator so the two halves read as distinct viewports
-//   3. A picker to swap targets without leaving split mode — agents AND
-//      remote participants are listed, so following a teammate's view is
-//      one click.
+//   3. A picker to swap targets without leaving split mode — people AND
+//      agents are listed, so following a teammate's view is one click.
 const SplitViewOverlay: React.FC = () => {
   const {
     viewMode,
@@ -20,12 +20,14 @@ const SplitViewOverlay: React.FC = () => {
     splitScreenTarget,
     setSplitScreenTarget,
     agents,
+    hideAgents,
   } = useStore(useShallow(state => ({
     viewMode: state.viewMode,
     setViewMode: state.setViewMode,
     splitScreenTarget: state.splitScreenTarget,
     setSplitScreenTarget: state.setSplitScreenTarget,
     agents: state.agents,
+    hideAgents: state.hideAgents,
   })));
 
   const { remoteParticipantList } = usePresence();
@@ -45,28 +47,48 @@ const SplitViewOverlay: React.FC = () => {
     return () => window.removeEventListener('mousedown', onClick);
   }, [pickerOpen]);
 
-  const targetName = useMemo<string | null>(() => {
-    if (!splitScreenTarget) return null;
-    if (splitScreenTarget.kind === 'agent') {
-      return agents.find(a => a.id === splitScreenTarget.id)?.name ?? null;
-    }
-    return remoteParticipantList.find(p => p.userId === splitScreenTarget.userId)?.name ?? null;
-  }, [splitScreenTarget, agents, remoteParticipantList]);
+  // When agents are hidden, an agent target is treated as no target.
+  // We do NOT write to the store — turning agents back on should restore it.
+  const effectiveTarget = (splitScreenTarget?.kind === 'agent' && hideAgents)
+    ? null
+    : splitScreenTarget;
 
-  // If the followed user disconnects, gracefully fall back to the first agent so
-  // the right pane never goes permanently black.
+  const targetName = useMemo<string | null>(() => {
+    if (!effectiveTarget) return null;
+    if (effectiveTarget.kind === 'agent') {
+      return agents.find(a => a.id === effectiveTarget.id)?.name ?? null;
+    }
+    return remoteParticipantList.find(p => p.userId === effectiveTarget.userId)?.name ?? null;
+  }, [effectiveTarget, agents, remoteParticipantList]);
+
+  // If the followed user disconnects, gracefully fall back using the same
+  // priority as the default: next remaining participant → visible agent → null.
   useEffect(() => {
     if (!splitScreenTarget) return;
     if (splitScreenTarget.kind !== 'user') return;
     const stillThere = remoteParticipantList.some(p => p.userId === splitScreenTarget.userId);
-    if (!stillThere && agents.length > 0) {
-      setSplitScreenTarget({ kind: 'agent', id: agents[0].id });
+    if (!stillThere) {
+      setSplitScreenTarget(pickDefaultSplitTarget(remoteParticipantList, agents, hideAgents));
     }
-  }, [splitScreenTarget, remoteParticipantList, agents, setSplitScreenTarget]);
+  }, [splitScreenTarget, remoteParticipantList, agents, hideAgents, setSplitScreenTarget]);
+
+  // Split view opened while alone: the first person to join fills the right
+  // pane. Only when nothing was picked at all — a hidden agent target is kept
+  // so turning agents back on restores it.
+  useEffect(() => {
+    if (viewMode !== ViewMode.SPLIT_SCREEN) return;
+    if (splitScreenTarget !== null) return;
+    if (remoteParticipantList.length === 0) return;
+    setSplitScreenTarget({ kind: 'user', userId: remoteParticipantList[0].userId });
+  }, [viewMode, splitScreenTarget, remoteParticipantList, setSplitScreenTarget]);
 
   if (viewMode !== ViewMode.SPLIT_SCREEN) return null;
 
-  const targetKindLabel = splitScreenTarget?.kind === 'user' ? 'Participant' : 'Agent';
+  const targetKindLabel = effectiveTarget?.kind === 'user'
+    ? 'Participant'
+    : effectiveTarget?.kind === 'agent'
+      ? 'Agent'
+      : '';
 
   return (
     <div className="absolute inset-0 z-[60] pointer-events-none">
@@ -95,11 +117,11 @@ const SplitViewOverlay: React.FC = () => {
           )}
           title="Switch split-screen target"
         >
-          {splitScreenTarget?.kind === 'user' ? (
+          {effectiveTarget?.kind === 'user' ? (
             <User size={10} className="text-cyan-400" />
-          ) : (
+          ) : effectiveTarget?.kind === 'agent' ? (
             <Bot size={10} className="text-orange-400" />
-          )}
+          ) : null}
           <span className="truncate max-w-[160px]">{targetName ?? 'PICK A TARGET'}</span>
           <ChevronDown size={10} className={clsx('transition-transform', pickerOpen && 'rotate-180')} />
         </button>
@@ -125,15 +147,54 @@ const SplitViewOverlay: React.FC = () => {
           </div>
 
           <div className="max-h-[60vh] overflow-y-auto">
-            {/* AI Agents */}
-            {agents.length > 0 && (
-              <div className="px-3 py-2">
+            {/* Remote participants — listed first */}
+            <div className="px-3 py-2">
+              <div className="text-[8px] text-white/40 font-mono uppercase tracking-widest mb-1.5">
+                Participants
+              </div>
+              {remoteParticipantList.length === 0 ? (
+                <div className="text-[10px] text-white/30 italic px-1 py-2">
+                  No other participants in this room yet.
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {remoteParticipantList.map(p => {
+                    const isSel = effectiveTarget?.kind === 'user' && effectiveTarget.userId === p.userId;
+                    return (
+                      <button
+                        key={p.userId}
+                        onClick={() => {
+                          setSplitScreenTarget({ kind: 'user', userId: p.userId });
+                          setPickerOpen(false);
+                        }}
+                        className={clsx(
+                          'flex items-center gap-2 px-2 py-1.5 rounded text-[11px] transition-colors border',
+                          isSel
+                            ? 'bg-white/15 border-white/30 text-white'
+                            : 'bg-transparent border-white/5 text-white/65 hover:bg-white/10 hover:text-white',
+                        )}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: p.color }}
+                        />
+                        <span className="flex-1 truncate font-mono">{p.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* AI Agents — only when visible */}
+            {!hideAgents && agents.length > 0 && (
+              <div className="px-3 py-2 border-t border-white/5">
                 <div className="text-[8px] text-white/40 font-mono uppercase tracking-widest mb-1.5">
                   Agents
                 </div>
                 <div className="flex flex-col gap-1">
                   {agents.map(a => {
-                    const isSel = splitScreenTarget?.kind === 'agent' && splitScreenTarget.id === a.id;
+                    const isSel = effectiveTarget?.kind === 'agent' && effectiveTarget.id === a.id;
                     return (
                       <button
                         key={a.id}
@@ -162,45 +223,6 @@ const SplitViewOverlay: React.FC = () => {
                 </div>
               </div>
             )}
-
-            {/* Remote participants */}
-            <div className="px-3 py-2 border-t border-white/5">
-              <div className="text-[8px] text-white/40 font-mono uppercase tracking-widest mb-1.5">
-                Participants
-              </div>
-              {remoteParticipantList.length === 0 ? (
-                <div className="text-[10px] text-white/30 italic px-1 py-2">
-                  No other participants in this room yet.
-                </div>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  {remoteParticipantList.map(p => {
-                    const isSel = splitScreenTarget?.kind === 'user' && splitScreenTarget.userId === p.userId;
-                    return (
-                      <button
-                        key={p.userId}
-                        onClick={() => {
-                          setSplitScreenTarget({ kind: 'user', userId: p.userId });
-                          setPickerOpen(false);
-                        }}
-                        className={clsx(
-                          'flex items-center gap-2 px-2 py-1.5 rounded text-[11px] transition-colors border',
-                          isSel
-                            ? 'bg-white/15 border-white/30 text-white'
-                            : 'bg-transparent border-white/5 text-white/65 hover:bg-white/10 hover:text-white',
-                        )}
-                      >
-                        <span
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: p.color }}
-                        />
-                        <span className="flex-1 truncate font-mono">{p.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
           </div>
 
           {/* Footer: exit split-screen entirely */}
@@ -221,14 +243,21 @@ const SplitViewOverlay: React.FC = () => {
         </div>
       )}
 
-      {/* Right-panel corner: an empty-state hint when no target is selected */}
-      {!splitScreenTarget && (
+      {/* Empty state when no valid target is selected */}
+      {!effectiveTarget && remoteParticipantList.length === 0 && (
+        <div className="absolute top-1/2 right-[15%] -translate-y-1/2 pointer-events-none">
+          <p className="text-white/50 text-[11px] font-mono text-center leading-relaxed max-w-[200px]">
+            No one else is here yet. When someone joins, their view appears here.
+          </p>
+        </div>
+      )}
+      {!effectiveTarget && remoteParticipantList.length > 0 && (
         <div className="absolute top-1/2 right-[15%] -translate-y-1/2 pointer-events-auto">
           <button
             onClick={() => setPickerOpen(true)}
             className="bg-black/65 text-white text-[10px] font-mono uppercase tracking-widest px-3 py-2 rounded border border-white/20 hover:bg-black/85 transition-colors"
           >
-            + Pick a target
+            + Pick someone
           </button>
         </div>
       )}

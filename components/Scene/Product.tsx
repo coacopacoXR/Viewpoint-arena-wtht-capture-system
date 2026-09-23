@@ -2,7 +2,6 @@ import React, { useRef, useEffect } from 'react';
 import { RoundedBox } from '@react-three/drei';
 import { Group, Vector3 } from 'three';
 import { useStore } from '../../store';
-import { ViewMode } from '../../types';
 
 // Wrapper component that connects 3D objects to the Scene Tree State
 // Handles Visibility and Selection Glow
@@ -28,7 +27,7 @@ const ModelPart: React.FC<{
 };
 
 const Knob: React.FC<{ position: [number, number, number]; color?: string; id: string; label: string; selected?: boolean }> = ({ position, color = '#333', id, label, selected }) => {
-  const { registerPOI, viewMode } = useStore();
+  const registerPOI = useStore(state => state.registerPOI);
   const ref = useRef<Group>(null);
 
   useEffect(() => {
@@ -40,12 +39,10 @@ const Knob: React.FC<{ position: [number, number, number]; color?: string; id: s
       }
   }, [registerPOI, id, label]);
 
-  const isHeatmap = viewMode === ViewMode.HEATMAP;
-  
   // Selection Glow Color Override
-  const finalColor = selected ? '#0088ff' : (isHeatmap ? "#ff3333" : color);
-  const finalEmissive = selected ? '#0088ff' : (isHeatmap ? "#ff0000" : "#000000");
-  const finalEmissiveIntensity = selected ? 0.8 : (isHeatmap ? 0.5 : 0);
+  const finalColor = selected ? '#0088ff' : color;
+  const finalEmissive = selected ? '#0088ff' : "#000000";
+  const finalEmissiveIntensity = selected ? 0.8 : 0;
 
   return (
     <group ref={ref} position={position}>
@@ -75,7 +72,7 @@ const Key: React.FC<{ position: [number, number, number]; black?: boolean }> = (
 
 const Product: React.FC = () => {
   const groupRef = useRef<Group>(null);
-  const { registerPOI, viewMode } = useStore();
+  const registerPOI = useStore(state => state.registerPOI);
 
   useEffect(() => {
      if (groupRef.current) {
@@ -96,20 +93,18 @@ const Product: React.FC = () => {
     }
   }
   
-  const isHeatmap = viewMode === ViewMode.HEATMAP;
-
   return (
     <group ref={groupRef} position={[0, 0, 0]}>
-        
+
         <ModelPart id="assembly">
-            
+
             {/* CHASSIS GROUP */}
             <ModelPart id="chassis_grp">
                 <ModelPart id="main_body">
                     {({ selected }) => (
                         <RoundedBox args={[2.4, 0.2, 1.6]} radius={0.05} smoothness={4} position={[0, 0, 0]} castShadow receiveShadow>
-                            <meshStandardMaterial 
-                                color={isHeatmap ? "#444" : "#e0e0e0"} 
+                            <meshStandardMaterial
+                                color="#e0e0e0"
                                 roughness={0.6} 
                                 emissive={selected ? "#0044aa" : "#000000"}
                                 emissiveIntensity={selected ? 0.5 : 0}
@@ -137,7 +132,7 @@ const Product: React.FC = () => {
                         {({ selected }) => (
                              <mesh position={[0.6, 0.11, -0.3]} rotation={[-Math.PI / 2, 0, 0]}>
                                 <planeGeometry args={[0.8, 0.5]} />
-                                <meshBasicMaterial color={selected ? "#0044aa" : (isHeatmap ? "#ffaa00" : "#1a1a1a")} />
+                                <meshBasicMaterial color={selected ? "#0044aa" : "#1a1a1a"} />
                              </mesh>
                         )}
                     </ModelPart>
@@ -145,7 +140,7 @@ const Product: React.FC = () => {
                         {({ selected }) => (
                             <mesh position={[0.6, 0.12, -0.3]} rotation={[-Math.PI / 2, 0, 0]}>
                                 <planeGeometry args={[0.7, 0.4]} />
-                                <meshBasicMaterial color={selected ? "#00ffff" : "#ff5500"} wireframe={!isHeatmap} />
+                                <meshBasicMaterial color={selected ? "#00ffff" : "#ff5500"} wireframe />
                             </mesh>
                         )}
                     </ModelPart>

@@ -289,12 +289,6 @@ const SceneRenderer = () => {
              if (controls) controls.target.lerp(targetVec.current, 0.2);
         }
     }
-    else if (viewMode === ViewMode.OVERHEAD || viewMode === ViewMode.HEATMAP) {
-        posVec.current.set(0, 12, 0);
-        targetVec.current.set(0, 0, 0);
-        mainCam.position.lerp(posVec.current, 0.05);
-        if (controls) controls.target.lerp(targetVec.current, 0.1);
-    }
     else if (viewMode === ViewMode.AI_GUIDED) {
         const { target, position } = calculateWeightedCameraTarget(scene, agents, agentWeights, elapsedTime);
         

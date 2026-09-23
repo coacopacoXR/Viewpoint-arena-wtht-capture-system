@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Play, Pause, RefreshCw, Eye, EyeOff,
-  User, Map, Activity, Flame,
+  User, Activity,
   SplitSquareHorizontal, Sparkles, Users,
   Power, Layers, Network, Link, BellRing, X,
   ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic, MicOff,
@@ -16,6 +16,7 @@ import { ViewMode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
 import { useWebRTCContext } from '../../lib/WebRTCContext';
 import { useFingerPointerStore } from '../../lib/fingerPointerStore';
+import { pickDefaultSplitTarget } from '../../lib/splitTarget';
 import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
 import CommentsPanel from './CommentsPanel';
@@ -202,10 +203,8 @@ const Interface: React.FC = () => {
           setViewMode(ViewMode.FREE);
       } else {
           setViewMode(ViewMode.SPLIT_SCREEN);
-          // Default to the first agent if no target picked yet — the user
-          // can switch to a remote participant via the split-view selector.
-          if (!splitScreenTarget && agents.length > 0) {
-              setSplitScreenTarget({ kind: 'agent', id: agents[0].id });
+          if (!splitScreenTarget) {
+              setSplitScreenTarget(pickDefaultSplitTarget(remoteParticipantList, agents, hideAgents));
           }
       }
   };
@@ -1015,20 +1014,6 @@ const Interface: React.FC = () => {
                     title="Hybrid Split Screen"
                 >
                     <SplitSquareHorizontal size={16} />
-                </Button>
-                <Button 
-                    active={viewMode === ViewMode.OVERHEAD} 
-                    onClick={() => { setViewMode(ViewMode.OVERHEAD); setActiveAgent(null); }}
-                    title="Extended Map"
-                >
-                    <Map size={16} />
-                </Button>
-                <Button 
-                    active={viewMode === ViewMode.HEATMAP} 
-                    onClick={() => { setViewMode(ViewMode.HEATMAP); setActiveAgent(null); }}
-                    title="Attention Heatmap"
-                >
-                    <Flame size={16} />
                 </Button>
             </div>
         </div>

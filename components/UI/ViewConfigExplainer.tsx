@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { 
-    X, SplitSquareHorizontal, Users, Sparkles, Map, Flame, Activity,
+    X, SplitSquareHorizontal, Users, Sparkles, Activity,
     ScanEye, MousePointer2
 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -105,40 +105,6 @@ const CONFIGS: ConfigDetails[] = [
             </div>
         )
     },
-    {
-        id: ViewMode.OVERHEAD,
-        label: "Extended Map",
-        icon: Map,
-        shortDesc: "Orthographic Layout",
-        fullDesc: "Switches the camera to a high-altitude, nearly orthographic perspective. This mode is optimized for spatial layout reviews and understanding the relative positioning of agents. It removes perspective distortion to provide a 'Board Game' style overview.",
-        techSpecs: ["FOV: 10deg (Simulated Ortho)", "Altitude: 12m", "Interaction: Panning"],
-        illustration: (
-            <div className="w-full h-full flex items-center justify-center">
-                <div className="w-32 h-32 border border-gray-300 grid grid-cols-4 grid-rows-4">
-                    {[...Array(16)].map((_, i) => (
-                        <div key={i} className="border border-gray-100"></div>
-                    ))}
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-black rounded-sm shadow-xl"></div>
-                </div>
-            </div>
-        )
-    },
-    {
-        id: ViewMode.HEATMAP,
-        label: "Heatmap",
-        icon: Flame,
-        shortDesc: "Volumetric Data Overlay",
-        fullDesc: "Visualizes the accumulated 'Dwell Time' of agent gaze on specific geometries. The 3D model is rendered in a dark, neutral material, while attention data is superimposed as glowing volumetric spheres (Blue -> Red). Used to identify areas of high scrutiny or potential confusion.",
-        techSpecs: ["Data: Time-Weighted Gaze", "Vis: Additive Blending", "Material: Dark Matte"],
-        illustration: (
-            <div className="w-full h-full flex items-center justify-center bg-gray-900 rounded-lg relative overflow-hidden">
-                <div className="w-16 h-16 bg-gray-800 rounded-sm"></div>
-                {/* Heat blobs */}
-                <div className="absolute top-1/3 left-1/3 w-12 h-12 bg-blue-500 rounded-full blur-xl opacity-50 mix-blend-screen"></div>
-                <div className="absolute bottom-1/3 right-1/3 w-16 h-16 bg-red-500 rounded-full blur-xl opacity-60 mix-blend-screen"></div>
-            </div>
-        )
-    }
 ];
 
 const ViewConfigExplainer: React.FC<{ onClose: () => void }> = ({ onClose }) => {

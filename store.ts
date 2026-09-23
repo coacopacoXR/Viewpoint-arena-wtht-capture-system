@@ -226,9 +226,6 @@ interface AppState {
   // Temporary disengage from agent following
   temporarilyDisengagedFromAgentId: string | null;
 
-  // Heatmap
-  heatmapValues: Record<string, number>;
-
   // Conversation & AI
   chatHistory: ChatMessage[];
   liveChat: LiveChatMessage[];
@@ -318,8 +315,6 @@ interface AppState {
   setAgentWeight: (id: string, weight: number) => void;
 
   updateAgentStatus: (id: string, behavior: AgentBehaviorState, poiId: string | null) => void;
-  updateHeatmap: (poiId: string, amount: number) => void;
-
   addChatMessage: (msg: ChatMessage) => void;
   addLiveChatMessage: (msg: LiveChatMessage) => void;
   addInsightCard: (card: InsightCard) => void;
@@ -441,7 +436,6 @@ export const useStore = create<AppState>((set, get) => ({
   isPrivacyMode: false,
   followedAgentId: null,
   temporarilyDisengagedFromAgentId: null,
-  heatmapValues: {},
   chatHistory: [],
   liveChat: [],
   mobileLaserNDC: null,
@@ -512,7 +506,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ isMeetingEnded: ended, isPlaying: !ended });
   },
   setTime: (time) => set({ time }),
-  resetTime: () => set({ time: 0, heatmapValues: {}, chatHistory: [], insightCards: [] }),
+  resetTime: () => set({ time: 0, chatHistory: [], insightCards: [] }),
   
   registerPOI: (poi) => set((state) => {
     const existingIdx = state.pois.findIndex(p => p.id === poi.id);
@@ -576,10 +570,6 @@ export const useStore = create<AppState>((set, get) => ({
     agents: state.agents.map(a => a.id === id ? { ...a, behavior, currentPoiId: poiId } : a)
   })),
   
-  updateHeatmap: (id, amount) => set((state) => ({
-    heatmapValues: { ...state.heatmapValues, [id]: (state.heatmapValues[id] || 0) + amount }
-  })),
-
   addChatMessage: (msg) => set((state) => ({
     chatHistory: [...state.chatHistory, msg].slice(-50)
   })),
@@ -650,7 +640,6 @@ export const useStore = create<AppState>((set, get) => ({
             chatHistory: [],
             insightCards: [],
           }),
-          heatmapValues: {},
           drawingInteractionActive: false,
           importedScale: 1,
           importedBaseScale: 1,
@@ -677,7 +666,6 @@ export const useStore = create<AppState>((set, get) => ({
           comments: [],
           chatHistory: [],
           insightCards: [],
-          heatmapValues: {},
           isImporting: false,
           importError: null,
           importSuccess: `Successfully imported "${fileName}" as ${modelName} (${partCount} parts)`,

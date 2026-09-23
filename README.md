@@ -47,11 +47,6 @@ The right-hand panel serves as the cognitive engine of the review, transforming 
 
 ## 3. Visual Analysis Tools
 
-### 🔥 Attention Heatmap
-*   **What it is:** A volumetric visualization overlay.
-*   **How it works:** As agents look at specific parts of the product, those areas accumulate "heat."
-*   **Visuals:** Areas glow Blue → Green → Red depending on how long they have been inspected. This reveals which parts of the design are drawing the most scrutiny (or confusion).
-
 ### 👁️ Visual Grounding Aids
 *   **Frustums:** Wireframe cones showing exactly what an agent's camera sees.
 *   **Gaze Rays:** Dashed lines indicating the exact center of their focus.

@@ -29,7 +29,6 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
   const leaderId = useStore(state => state.leaderId);
   const splitScreenTarget = useStore(state => state.splitScreenTarget);
   const agentStyle = useStore(state => state.agentStyle);
-  const updateHeatmap = useStore(state => state.updateHeatmap);
   const updateAgentStatus = useStore(state => state.updateAgentStatus);
   const setFollowRequest = useStore(state => state.setFollowRequest);
   
@@ -141,11 +140,6 @@ const Agent: React.FC<AgentProps> = ({ initialState, allAgents }) => {
     }
 
     if (!isPlaying) return;
-
-    // --- Heatmap Data Collection ---
-    if (behavior === 'INSPECTING' && targetPoi) {
-        updateHeatmap(targetPoi.id, delta);
-    }
 
     // --- GLOBAL LEADER OVERRIDE ---
     const isForcedFollower = leaderId === 'USER';
