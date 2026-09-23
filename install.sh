@@ -445,6 +445,31 @@ NOENTROPY
   exit 1
 }
 
+# ─── Hash a password for .env ───────────────────────────────────────────────
+#
+# Produces <salt>:<sha256(salt + password)> — the same format the Node server
+# verifies in api/_lib/accessControl.ts. The salt is 16 hex chars (8 bytes)
+# from openssl rand. The hash is stored, never the password: a leaked .env
+# gives an attacker a salted hash to crack offline rather than the password
+# itself, and the salt ensures two installs with the same password produce
+# different hashes.
+#
+# Usage: hash_password "the password"
+# Prints: <16-hex-chars>:<64-hex-chars>  (a COLON: .env values go through
+# Docker Compose interpolation, which eats an unescaped '$'.)
+# An empty argument prints nothing (the caller writes an empty value to .env,
+# which means the gate is disabled — the pre-existing open behaviour).
+
+hash_password() {
+  local password="$1"
+  [[ -z "$password" ]] && return 0
+  local salt
+  salt="$(openssl rand -hex 8)"
+  local hash
+  hash="$(printf '%s' "${salt}${password}" | openssl dgst -sha256 -r | cut -d' ' -f1)"
+  printf '%s:%s' "$salt" "$hash"
+}
+
 # ─── Load existing env values (preserve secrets on re-run) ──────────────────
 #
 # The Supabase JWT infrastructure secrets (JWT_SECRET, SECRET_KEY_BASE,
@@ -494,6 +519,7 @@ mint_anon_jwt() {
 # back through one function's stdout is worse than naming them.
 
 A_HOSTNAME='' A_PUBLIC_URL='' A_TLS=''
+A_ACCESS_PASSWORD='' A_ADMIN_PASSPHRASE=''
 A_PLM='' A_PLM_BASE_URL=''
 A_ONSHAPE_CLIENT_ID='' A_ONSHAPE_CLIENT_SECRET=''
 A_TC_USERNAME='' A_TC_PASSWORD=''
@@ -505,6 +531,7 @@ A_NOTIFY='' A_TEAMS_WEBHOOK=''
 A_GPU='' A_N8N=''
 S_CAPTURE_SECRET='' S_POSTGRES_PASSWORD='' S_N8N_KEY='' S_COTURN_SECRET=''
 S_JWT_SECRET='' S_SECRET_KEY_BASE='' S_REALTIME_DB_ENC_KEY='' S_ANON_KEY=''
+S_ACCESS_PASSWORD_HASH='' S_ADMIN_PASSPHRASE_HASH=''
 
 # Detect this machine's LAN IPv4 address. Detection order, first hit wins:
 #   1. `ip -4 route get 1.1.1.1` (native Linux) — extract the src address
@@ -584,6 +611,16 @@ collect_answers() {
     'self-signed' \
     'self-signed|generate a certificate for this hostname now' \
     'own|I will mount my own certificate into deploy/certs')"
+
+  # ── Access control ─────────────────────────────────────────────────────
+  # Two optional shared secrets. Both empty by default — an existing install
+  # behaves exactly as today until the operator sets them. The passwords are
+  # hashed before writing to .env; the plaintext never touches disk.
+  say ''
+  say '  Access control: two optional passwords. Leave either empty to skip it.'
+  say '  This is a shared password on the front door, not per-person accounts.'
+  A_ACCESS_PASSWORD="$(ask_secret 'Front-door password for the whole app (Enter to leave open)')"
+  A_ADMIN_PASSPHRASE="$(ask_secret 'Admin passphrase for install-wide settings (Enter to skip)')"
 
   # ── PLM ────────────────────────────────────────────────────────────────
   A_PLM="$(ask_choice \
@@ -767,6 +804,12 @@ collect_answers() {
     S_ANON_KEY="$(mint_anon_jwt "$S_JWT_SECRET")"
     A_SUPABASE_ANON_KEY="$S_ANON_KEY"
   fi
+
+  # Hash the access-control passwords. Empty input produces empty output, which
+  # render_env writes as an empty value — the gate stays disabled. The plaintext
+  # never reaches .env; only the salted hash does.
+  S_ACCESS_PASSWORD_HASH="$(hash_password "$A_ACCESS_PASSWORD")"
+  S_ADMIN_PASSPHRASE_HASH="$(hash_password "$A_ADMIN_PASSPHRASE")"
 }
 
 # Refuse to write a config that lib/config/schema.ts would reject. An installer
@@ -1123,6 +1166,15 @@ REALTIME_DB_ENC_KEY=${S_REALTIME_DB_ENC_KEY}
 # 10-year expiry. VITE_SUPABASE_ANON_KEY below is the same value (the browser
 # reads it). Preserved across re-runs via JWT_SECRET preservation.
 ANON_KEY=${S_ANON_KEY}
+
+# ── Access control (optional) ─────────────────────────────────────────────
+# Salted SHA-256 hashes of the front-door password and admin passphrase.
+# Empty means the gate is disabled — the pre-existing open behaviour. The
+# plaintext passwords are never written here; only the hashes. Re-run
+# ./install.sh to change either one.
+# Format: <16-hex-salt>:<64-hex-sha256(salt + password)>
+ACCESS_PASSWORD_HASH=${S_ACCESS_PASSWORD_HASH}
+ADMIN_PASSPHRASE_HASH=${S_ADMIN_PASSPHRASE_HASH}
 SECRETS
 
   env_comment ''
@@ -1646,6 +1698,16 @@ print_summary() {
   say "  notifications    ${A_NOTIFY}"
   say "  gpu override     ${A_GPU}"
   say "  n8n profile      ${A_N8N}"
+  if [[ -n "$S_ACCESS_PASSWORD_HASH" ]]; then
+    say '  front-door pw    set (shared password — not per-person accounts)'
+  else
+    say '  front-door pw    open (no password; anyone with the link can enter)'
+  fi
+  if [[ -n "$S_ADMIN_PASSPHRASE_HASH" ]]; then
+    say '  admin passphrase set'
+  else
+    say '  admin passphrase not set'
+  fi
 
   if [[ "${#PENDING_VARS[@]}" -gt 0 ]]; then
     say ''

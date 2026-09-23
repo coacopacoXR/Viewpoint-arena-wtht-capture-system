@@ -446,6 +446,32 @@ runs caught, batch by batch, is the point of this entry:
   Verified by posting a recording straight to capture-service with a two-part
   tree: the risk card came back on 'left_cushion', the others with none.
 
+- **Front-door password and admin passphrase (batch AH)**. Two optional
+  shared secrets, both empty by default, so an existing install behaves
+  exactly as before. `./install.sh` asks for them and writes salted SHA-256
+  hashes to `.env`; `/api/access` and `/api/admin-unlock` verify them and set
+  an HMAC cookie keyed with the stored hash. Live findings, all three
+  invisible to the test suite:
+  - **Docker Compose ate the hash separator.** The format was
+    `<salt>$<hash>`; Compose interpolates `$` in `.env` values, so the
+    container saw a truncated hash and refused every correct password. The
+    separator is now a colon in both the Node helper and the installer, with
+    legacy `$` values still parsed.
+  - **The gate and the app each had their own copy of the state.** Two
+    components calling the same hook meant two `useState`s: entering the
+    right password unlocked the gate screen's copy and the wrapper never
+    heard, so the user stayed staring at the gate. The state moved into the
+    module and is read with `useSyncExternalStore`.
+  - **A module-level store needs resetting between tests.** The wrapper tests
+    inherited the previous test's answer (and its "already fetched" flag), so
+    they asserted against stale state; `resetAccessGateForTests()` now runs in
+    both describes' `beforeEach`.
+  Verified live: with no password the app opens and `/api/access` reports
+  `required:false`; with one, the gate appears, a wrong password is refused, a
+  right one opens the app and survives a reload, and a second browser is still
+  gated. The admin passphrase answers `required/unlocked` correctly, rejects a
+  bogus cookie, and 401s a wrong passphrase.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.

@@ -276,4 +276,9 @@ After `down -v`, `./install.sh` starts again from a clean slate.
 - **Onshape, Teamcenter and Microsoft Teams** connections need your own
   accounts and keys; the installer asks for them if you pick those options.
 - **Sign-in.** Anyone who can open the app can open any room whose link they
-  have, and see saved reviews. Keep it on a trusted network.
+  have, and see saved reviews. Keep it on a trusted network. The optional
+  front-door password (`./install.sh`, or `ACCESS_PASSWORD_HASH` in `.env`)
+  adds a shared password in front of the whole app — but it is one password
+  for everyone, not per-person accounts. Anyone with the password gets in,
+  and the app cannot tell one person from another. A deployment that needs
+  real identity should put the app behind its own SSO proxy.

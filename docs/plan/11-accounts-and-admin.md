@@ -76,12 +76,12 @@ account):
 
 ## Sequencing and honesty about size
 
-| Batch | Work | Size |
-|---|---|---|
-| AG | L (icon rail on the curate page) | small |
-| AH | M1 (front-door password + admin passphrase, installer + app gate) | medium |
-| AI | M2 (knock-to-join, per-link policy, per-review visibility) | medium |
-| AJ | N (admin screen behind the passphrase) | medium |
+| Batch | Work | Size | Status |
+|---|---|---|---|
+| AG | L (icon rail on the curate page) | small | **done** |
+| AH | M1 (front-door password + admin passphrase, installer + app gate) | medium | **done 2026-09-23** |
+| AI | M2 (knock-to-join, per-link policy, per-review visibility) | medium | next |
+| AJ | N (admin screen behind the passphrase) | medium | after AI |
 
 L is a UI batch and ships next. M and N are the difference between a demo and
 a multi-team tool: they touch the installer, the compose stack, every data
