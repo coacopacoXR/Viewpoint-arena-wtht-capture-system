@@ -10,9 +10,9 @@ It simulates a multi-user environment where AI agents act as collaborators, allo
 The core of the application is the ability to switch between different "lenses" to view the collaborative session.
 
 ### 🕷️ Hybrid Split-Screen
-*   **What it is:** A dual-viewport mode. The left screen remains your independent "Free View," while the right screen locks into the perspective of a specific collaborator.
-*   **Use Case:** Allows you to maintain your own context while simultaneously seeing exactly what a colleague is referring to.
-*   **How to use:** Toggle Split Screen, then select an agent from the right-hand sidebar to "tune in" to their video feed.
+*   **What it is:** A dual-viewport mode. The left half stays your own free view; the right half shows exactly what another person in the room is looking at.
+*   **Use Case:** Keep your own context while seeing what a colleague is referring to.
+*   **How to use:** Toggle Split Screen. It opens on the first other participant; pick someone else from the name badge over the right half. AI agents are only offered when agents are switched on.
 
 ### 🧠 AI-Guided Focus
 *   **What it is:** An autonomous camera mode driven by a "Center of Attention" algorithm.
@@ -21,9 +21,10 @@ The core of the application is the ability to switch between different "lenses" 
 *   **Customization:** Use the slider overlay to weight specific agents (e.g., prioritize the "Design Lead" over the "Observer").
 
 ### 🔗 Sync / Leader Mode
-*   **What it is:** A formation-flying mode.
-*   **How it works:** When enabled, all AI agents break their autonomous behavior and physically form up around you. They align their position and gaze with yours.
-*   **Use Case:** Simulating a "Presenter" scenario where one person drives the review and ensures everyone is looking at the same feature.
+*   **What it is:** One person drives the camera; everyone else's view follows theirs.
+*   **Leading:** Press the Lead button. Everyone in the room starts following your view, and a badge above the dock shows who is following. When the last follower leaves, you drop back to free view.
+*   **Following:** Dragging the camera does not leave the follow. You can look around, and about two seconds after you let go your view eases back to the leader's. The pill at the top says so. Only **Free view** actually leaves.
+*   **Free view** orbits the model itself, including right after you stop following someone.
 
 ---
 
