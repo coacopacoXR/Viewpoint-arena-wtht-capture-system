@@ -2,12 +2,13 @@ import React from 'react';
 import {
   Camera, MapPin, AlertTriangle, Info, ShieldAlert,
   ChevronLeft, ChevronRight, FileText, Image as ImageIcon, Layers,
-  ClipboardList,
+  ClipboardList, MessageSquare,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { usePresence } from '../../lib/PresenceContext';
 import { useStore } from '../../store';
+import { getIdentity } from '../../lib/identity';
 import type { PinSeverity } from '../../lib/reviewSetupStore';
 
 const PIN_COLOR: Record<PinSeverity, string> = {
@@ -58,13 +59,15 @@ const ReviewPanelContent: React.FC<Props> = ({ theme = 'light', embedded = false
   const jumpToViewpoint = useActiveReviewStore((s) => s.jumpToViewpoint);
   const updateViewpoint = useActiveReviewStore((s) => s.updateViewpoint);
   const updatePin = useActiveReviewStore((s) => s.updatePin);
+  const commitPinAsComment = useActiveReviewStore((s) => s.commitPinAsComment);
   const agendaIdx = useActiveReviewStore((s) => s.agendaIdx);
   const nextSlide = useActiveReviewStore((s) => s.nextSlide);
   const prevSlide = useActiveReviewStore((s) => s.prevSlide);
   const jumpToSlide = useActiveReviewStore((s) => s.jumpToSlide);
   const setManagerMode = useActiveReviewStore((s) => s.setManagerMode);
   const sessionHostId = useStore((s) => s.sessionHostId);
-  const { broadcastReviewConfig, localUserId } = usePresence();
+  const addComment = useStore((s) => s.addComment);
+  const { broadcastReviewConfig, broadcastCommentAdd, localUserId } = usePresence();
   const isHost = sessionHostId === localUserId || sessionHostId === null;
 
   if (!config) return null;
@@ -95,6 +98,41 @@ const ReviewPanelContent: React.FC<Props> = ({ theme = 'light', embedded = false
 
   const sync = (next: ReturnType<typeof updateViewpoint>) => {
     if (next) broadcastReviewConfig(next);
+  };
+
+  const handleCommitPin = (pinId: string) => {
+    const identity = getIdentity();
+    const author = identity?.name ?? 'Guest';
+    const authorColor = identity?.color ?? '#4F8EF7';
+    const result = commitPinAsComment(pinId, author, authorColor);
+    if (!result) return;
+    addComment(result.comment);
+    broadcastCommentAdd(result.comment);
+    broadcastReviewConfig(result.config);
+  };
+
+  const handleCommitAllPins = () => {
+    const uncommitted = pins.filter((p) => !p.committedCommentId);
+    if (uncommitted.length === 0) return;
+    // Confirm bulk action with a plain count — the spec calls for it because
+    // it creates one comment per pin in the room.
+    if (typeof window !== 'undefined' && window.confirm) {
+      const ok = window.confirm(`Commit ${uncommitted.length} pin${uncommitted.length === 1 ? '' : 's'} as comments?`);
+      if (!ok) return;
+    }
+    const identity = getIdentity();
+    const author = identity?.name ?? 'Guest';
+    const authorColor = identity?.color ?? '#4F8EF7';
+    let lastConfig = null;
+    for (const pin of uncommitted) {
+      const result = commitPinAsComment(pin.id, author, authorColor);
+      if (!result) continue;
+      addComment(result.comment);
+      broadcastCommentAdd(result.comment);
+      lastConfig = result.config;
+    }
+    // One broadcast for the final state — intermediate ones would race.
+    if (lastConfig) broadcastReviewConfig(lastConfig);
   };
 
   // Theme-aware classes
@@ -346,8 +384,39 @@ const ReviewPanelContent: React.FC<Props> = ({ theme = 'light', embedded = false
                 placeholder="Comment…"
                 className={clsx('w-full h-12 text-[11px] rounded p-1.5 border outline-none resize-none transition-colors', t.notesBg)}
               />
+              <button
+                onClick={() => handleCommitPin(p.id)}
+                disabled={!!p.committedCommentId}
+                className={clsx(
+                  'flex items-center justify-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wide transition-colors',
+                  p.committedCommentId
+                    ? 'opacity-50 cursor-not-allowed bg-gray-100 text-gray-400 border border-gray-200'
+                    : theme === 'dark'
+                      ? 'bg-white/10 text-white/80 hover:bg-white/20 border border-white/10'
+                      : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200',
+                )}
+                title={p.committedCommentId ? 'This pin has been committed as a comment' : 'Create a live comment from this pin'}
+              >
+                <MessageSquare size={10} />
+                {p.committedCommentId ? 'Committed' : 'Commit as comment'}
+              </button>
             </div>
           ))}
+          {pins.some((p) => !p.committedCommentId) && (
+            <button
+              onClick={handleCommitAllPins}
+              className={clsx(
+                'flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[10px] font-bold uppercase tracking-wide transition-colors mt-1',
+                theme === 'dark'
+                  ? 'text-white/50 hover:text-white/70 hover:bg-white/5'
+                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50',
+              )}
+              title="Commit every uncommitted pin as a live comment"
+            >
+              <MessageSquare size={10} />
+              Commit all pins ({pins.filter((p) => !p.committedCommentId).length})
+            </button>
+          )}
         </div>
       )}
 

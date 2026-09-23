@@ -410,6 +410,7 @@ interface AppState {
   setSessionHostId: (id: string | null) => void;
 }
 
+
 export const useStore = create<AppState>((set, get) => ({
   viewMode: ViewMode.FREE,
   representationMode: RepresentationMode.FULL,
@@ -631,15 +632,24 @@ export const useStore = create<AppState>((set, get) => ({
   // --- NEW: Model Import Actions ---
   setModelTransform: (modelTransform) => set({ modelTransform }),
 
-  setActiveModelType: (type) => set(() => {
+  setActiveModelType: (type) => set((state) => {
       const tree = type === 'bicycle' ? BICYCLE_SCENE_TREE : type === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
+      // Only a REAL model change wipes the meeting's content. This used to
+      // clear unconditionally, and the room re-applies the model on every
+      // REVIEW_CONFIG sync — so committing a pin (which updates the review)
+      // erased every comment, chat line and insight card on the other
+      // participants' screens moments after they arrived. Found live
+      // 2026-09-23 while testing commit-as-comment.
+      const sameModel = state.activeModelType === type;
       return {
           activeModelType: type,
           objectStates: initObjectStates(tree),
           pois: derivePoisFromSceneTree(tree),
-          comments: [], // Clear comments for new model
-          chatHistory: [], // Clear chat for fresh start
-          insightCards: [], // Clear insights
+          ...(sameModel ? {} : {
+            comments: [],
+            chatHistory: [],
+            insightCards: [],
+          }),
           heatmapValues: {},
           drawingInteractionActive: false,
           importedScale: 1,

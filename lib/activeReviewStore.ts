@@ -5,6 +5,34 @@ import type { TeamMember } from './people';
 import { useStore } from '../store';
 import { parseModelFile } from '../utils/modelLoader';
 
+// Build a live SpatialComment from a curated pin at commit time. The comment
+// is authored by whoever presses the button (not the curator), attached to the
+// same node the pin was placed on, and uses the pin's notes — or its label
+// when there are no notes, or "label — notes" when both are present.
+export function pinToLiveComment(
+  pin: ReviewPin,
+  author: string,
+  authorColor: string,
+): SpatialComment {
+  const content = pin.notes?.trim()
+    ? (pin.label.trim() ? `${pin.label.trim()} — ${pin.notes.trim()}` : pin.notes.trim())
+    : (pin.label.trim() || 'Pinned comment');
+  return {
+    id: Math.random().toString(36).substr(2, 9),
+    type: 'text',
+    content,
+    author,
+    authorColor,
+    timestamp: Date.now(),
+    position: { x: pin.worldPos[0], y: pin.worldPos[1], z: pin.worldPos[2] },
+    attachedToNodeId: pin.meshIndex ?? pin.modelId ?? '',
+    attachedToNodeName: pin.partName ?? pin.label,
+    assignees: [],
+    resolved: false,
+    linkedToMeeting: false,
+  };
+}
+
 // Room-time view of the curated review. Distinct from the host's local draft:
 // this is the config currently in effect in the live session (received from the
 // host via PartyKit, or seeded directly by the host on entry).
@@ -159,6 +187,16 @@ interface ActiveReviewState {
   // the updated draft so the caller can re-broadcast it.
   applyCommentEdit: (commentId: string, patch: Partial<SpatialComment>) => ReviewDraft | null;
 
+  // Commit a curated pin as a live SpatialComment. Returns the created comment
+  // and the updated config (so the caller can broadcast REVIEW_CONFIG), or null
+  // when there is no config or the pin is unknown/already committed.
+  commitPinAsComment: (pinId: string, author: string, authorColor: string) => { comment: SpatialComment; config: ReviewDraft } | null;
+
+  // Clear the committedCommentId on whichever pin holds it. Called when a
+  // comment is deleted (locally or via COMMENT_DELETE) so the pin can be
+  // committed again.
+  clearCommittedCommentId: (commentId: string) => ReviewDraft | null;
+
   setAgendaIdx: (idx: number) => void;
   nextSlide: () => void;
   prevSlide: () => void;
@@ -264,6 +302,41 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       return get().updatePin(pinId, pinPatch);
     }
     return null;
+  },
+
+  commitPinAsComment: (pinId, author, authorColor) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const pin = cfg.pins.find((p) => p.id === pinId);
+    if (!pin) return null;
+    // Idempotent: a pin that already produced a comment cannot produce another
+    // until the first one is deleted (which clears committedCommentId).
+    if (pin.committedCommentId) return null;
+    const comment = pinToLiveComment(pin, author, authorColor);
+    const next: ReviewDraft = {
+      ...cfg,
+      pins: cfg.pins.map((p) => p.id === pinId ? { ...p, committedCommentId: comment.id } : p),
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    // The live comment is added to the main store by the caller (alongside
+    // broadcastCommentAdd), so every client sees it. We only update the
+    // config here — the caller owns the comment side-effect.
+    return { comment, config: next };
+  },
+
+  clearCommittedCommentId: (commentId) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const pin = cfg.pins.find((p) => p.committedCommentId === commentId);
+    if (!pin) return null;
+    const next: ReviewDraft = {
+      ...cfg,
+      pins: cfg.pins.map((p) => p.id === pin.id ? { ...p, committedCommentId: undefined } : p),
+      updatedAt: Date.now(),
+    };
+    set({ config: next });
+    return next;
   },
 
   setAgendaIdx: (agendaIdx) => set({ agendaIdx }),

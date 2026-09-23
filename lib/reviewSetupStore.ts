@@ -27,6 +27,10 @@ export interface ReviewPin {
   partName?: string | null;
   severity: PinSeverity;
   createdAt: number;
+  // Set when the pin has been committed as a live SpatialComment in the room.
+  // Lives inside the pins jsonb (no new column) so it travels with the review
+  // through REVIEW_CONFIG broadcasts. Cleared when the comment is deleted.
+  committedCommentId?: string;
 }
 
 export interface AgendaItem {

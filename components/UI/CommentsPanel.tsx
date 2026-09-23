@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
+import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import {
     MessageSquare, Pencil, Plus, X, Send, AtSign,
     CheckCircle2, Trash2, MoreVertical, Link2,
@@ -318,7 +319,7 @@ const CommentsPanel: React.FC = () => {
         setShowDrawingCanvas
     } = useStore();
 
-    const { broadcastCommentAdd, broadcastCommentUpdate, broadcastCommentDelete, broadcastCommentResolve } = usePresence();
+    const { broadcastCommentAdd, broadcastCommentUpdate, broadcastCommentDelete, broadcastCommentResolve, broadcastReviewConfig } = usePresence();
 
     const [filter, setFilter] = useState<'all' | 'open' | 'resolved'>('all');
 
@@ -403,8 +404,15 @@ const CommentsPanel: React.FC = () => {
     };
 
     const handleDelete = (id: string) => {
+        // If this comment was produced by committing a curated pin, clear the
+        // pin's committedCommentId so it can be committed again. Broadcast the
+        // config change so every client sees the pin become available again.
+        const clearedConfig = useActiveReviewStore.getState().clearCommittedCommentId(id);
         deleteComment(id);
         broadcastCommentDelete(id);
+        if (clearedConfig) {
+            broadcastReviewConfig(clearedConfig);
+        }
     };
 
     const handleLinkToMeeting = (comment: SpatialComment) => {

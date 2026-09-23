@@ -366,6 +366,9 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         updateComment(msg.payload.id, msg.payload.updates);
       } else if (msg.type === 'COMMENT_DELETE') {
         const { deleteComment } = useStore.getState();
+        // If the deleted comment was produced by committing a curated pin,
+        // clear the pin's committedCommentId so it can be committed again.
+        useActiveReviewStore.getState().clearCommittedCommentId(msg.payload.id);
         deleteComment(msg.payload.id);
       } else if (msg.type === 'COMMENT_RESOLVE') {
         const { resolveComment } = useStore.getState();
