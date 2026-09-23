@@ -1,8 +1,4 @@
-// ReviewViewpointsDock positioning tests.
-//
-// The expanded card must not overlap the right sidebar. When the sidebar is
-// open, the card anchors to the left of the sidebar's left edge (right-[356px]).
-// When the sidebar is collapsed, the card anchors to the right edge (right-0).
+// ReviewViewpointsDock tests, including where the expanded card opens.
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -63,44 +59,24 @@ describe('ReviewViewpointsDock positioning', () => {
     expect(screen.getByText('Test Review')).toBeInTheDocument();
   });
 
-  it('positions expanded card to the left of sidebar when sidebar is open', () => {
+  it('opens the expanded card straight up from the pill, whatever the side panel does', () => {
     setupStore({
       title: 'Test Review',
       viewpoints: [{ id: 'v1', name: 'Viewpoint 1' }],
       pins: [],
       agenda: [],
     });
-    render(<ReviewViewpointsDock isRightPanelCollapsed={false} />);
-    
-    // Click the expand button (the chevron button in the dock bar - first one)
-    const expandButtons = screen.getAllByTitle('Expand');
-    fireEvent.click(expandButtons[0]);
-    
-    // The expanded card should have right-[356px] class
-    const activeReviewElements = screen.getAllByText('Active Review');
-    const expandedCard = activeReviewElements[0].closest('div[class*="absolute"]');
-    expect(expandedCard).toBeTruthy();
-    expect(expandedCard?.className).toContain('right-[356px]');
-  });
+    render(<ReviewViewpointsDock />);
 
-  it('positions expanded card at right edge when sidebar is collapsed', () => {
-    setupStore({
-      title: 'Test Review',
-      viewpoints: [{ id: 'v1', name: 'Viewpoint 1' }],
-      pins: [],
-      agenda: [],
-    });
-    render(<ReviewViewpointsDock isRightPanelCollapsed={true} />);
-    
-    // Click the expand button
-    const expandButtons = screen.getAllByTitle('Expand');
-    fireEvent.click(expandButtons[0]);
-    
-    // The expanded card should have right-0 class
-    const activeReviewElements = screen.getAllByText('Active Review');
-    const expandedCard = activeReviewElements[0].closest('div[class*="absolute"]');
+    fireEvent.click(screen.getAllByTitle('Expand')[0]);
+
+    // The bottom row is inset to the free canvas, so no offset is needed to
+    // clear the side panel — and the old right-[356px] shift put the card on
+    // top of the model tree at laptop widths.
+    const expandedCard = screen.getAllByText('Active Review')[0].closest('div[class*="absolute"]');
     expect(expandedCard).toBeTruthy();
     expect(expandedCard?.className).toContain('right-0');
+    expect(expandedCard?.className).not.toContain('right-[356px]');
   });
 
   it('auto-closes when manager mode is enabled', () => {

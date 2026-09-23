@@ -1,21 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Play, Pause, RefreshCw, Eye, EyeOff,
-  User, Activity,
-  SplitSquareHorizontal, Sparkles, Users,
-  Power, Layers, Network, Link, BellRing, X,
-  ShieldOff, Shield, Radio, Glasses, MessageSquare, MessageCircle, Mic, MicOff,
+  Eye, EyeOff,
+  User, Sparkles, Users,
+  Layers, Network, Link, BellRing, X,
+  Radio, Glasses, MessageSquare, MessageCircle, Mic,
   ChevronDown, ChevronRight, PanelRightClose, PanelRight,
-  MonitorPlay, Share2, Crosshair, Hand, MousePointer, Volume2, VolumeX, Home, Headphones
+  Home, Headphones
 } from 'lucide-react';
-import SharePanel from './SharePanel';
-import XRButton from './XRButton';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../../store';
 import { ViewMode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
 import { useWebRTCContext } from '../../lib/WebRTCContext';
-import { useFingerPointerStore } from '../../lib/fingerPointerStore';
 import { pickDefaultSplitTarget } from '../../lib/splitTarget';
 import { clsx } from 'clsx';
 import ConversationPanel from './ConversationPanel';
@@ -35,98 +31,30 @@ import BoardroomCountdown from './BoardroomCountdown';
 import SplitViewOverlay from './SplitViewOverlay';
 import JoinRequests from './JoinRequests';
 import FollowersBadge, { FollowingBadge } from './FollowersBadge';
+import TopBar from './room/TopBar';
+import CallBar from './room/CallBar';
+import ManageButton from './room/ManageButton';
 import { useLeaderAutoRelease } from '../../lib/useLeaderAutoRelease';
 
-const Button: React.FC<{ 
-  active?: boolean; 
-  onClick: () => void; 
-  children: React.ReactNode;
-  className?: string;
-  title?: string;
-}> = ({ active, onClick, children, className, title }) => (
-  <button
-    onClick={onClick}
-    title={title}
-    className={clsx(
-      "w-10 h-10 flex items-center justify-center rounded-sm transition-all duration-200 pointer-events-auto border",
-      active 
-        ? "bg-black text-white border-black shadow-inner" 
-        : "bg-white text-gray-600 border-gray-200 hover:border-gray-400 hover:text-black hover:shadow-sm",
-      className
-    )}
-  >
-    {children}
-  </button>
-);
-
-const InlineFingerPill: React.FC = () => {
-  const mode = useFingerPointerStore((s) => s.mode);
-  const calibration = useFingerPointerStore((s) => s.calibration);
-  const enable = useFingerPointerStore((s) => s.enableFingerPointer);
-  const disable = useFingerPointerStore((s) => s.disableFingerPointer);
-  const recalibrate = useFingerPointerStore((s) => s.startRecalibration);
-  const isActive = mode === 'active';
-  return (
-    <div className="flex items-center gap-1 px-2">
-      <Hand size={14} className={isActive ? 'text-emerald-500' : 'text-gray-400'} />
-      <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Finger</span>
-      <button
-        onClick={isActive ? disable : enable}
-        title={isActive ? 'Disable finger pointer' : 'Enable finger pointer'}
-        className={clsx(
-          'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
-          isActive ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-800'
-        )}
-      >
-        {isActive ? 'On' : 'Off'}
-      </button>
-      {calibration && (
-        <button
-          onClick={recalibrate}
-          title="Recalibrate corners"
-          className="text-[9px] font-bold uppercase px-2 py-0.5 rounded text-gray-400 hover:text-gray-700 transition-all"
-        >
-          Recal
-        </button>
-      )}
-    </div>
-  );
-};
-
-const InlineHoverPill: React.FC = () => {
-  const enabled = useStore((s) => s.hoverPointingEnabled);
-  const setEnabled = useStore((s) => s.setHoverPointingEnabled);
-  return (
-    <div className="flex items-center gap-1 px-2">
-      <MousePointer size={14} className={enabled ? 'text-emerald-500' : 'text-gray-400'} />
-      <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Hover</span>
-      <button
-        onClick={() => setEnabled(!enabled)}
-        title={enabled ? 'Disable hover-to-point' : 'Auto-engage when you dwell on a part'}
-        className={clsx(
-          'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
-          enabled ? 'bg-emerald-600 text-white' : 'text-gray-500 hover:text-gray-800'
-        )}
-      >
-        {enabled ? 'On' : 'Off'}
-      </button>
-    </div>
-  );
-};
+// The side panel owns the right edge, so every bar that centres on the *free*
+// canvas has to stop short of it. Collapsed rail is 48px, the open panel 340px,
+// plus a 24px gutter; in Manager mode the panel is gone and RoomPage has already
+// taken the width off the flex row, so only the gutter is left.
+const canvasRight = (managerMode: boolean, collapsed: boolean) =>
+  managerMode ? 'right-6' : collapsed ? 'right-[72px]' : 'right-[364px]';
 
 const Interface: React.FC = () => {
   const {
     viewMode, setViewMode, followingRemoteUserId, setFollowingRemoteUser,
-    isPlaying, togglePlay,
-    resetTime, time,
+    isPlaying,
+    time,
     activeAgentId, setActiveAgent,
     leaderId, setLeader,
     splitScreenTarget, setSplitScreenTarget,
     agents,
     agentWeights, setAgentWeight,
-    endMeeting,
     followRequest, setFollowRequest,
-    isPrivacyMode, togglePrivacyMode,
+    isPrivacyMode,
     followedAgentId, setFollowedAgent,
     rightPanelMode, setRightPanelMode,
     comments,
@@ -142,21 +70,17 @@ const Interface: React.FC = () => {
     setPendingComment,
     setDrawingInteractionActive,
     isBoardroomMode,
-    toggleBoardroomMode,
-    triggerBoardroomEntry,
     hideAgents,
     toggleHideAgents,
   } = useStore();
-  const laserHighlightGranularity = useStore(state => state.laserHighlightGranularity);
-  const setLaserHighlightGranularity = useStore(state => state.setLaserHighlightGranularity);
 
-  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, broadcastBoardroomCountdown, broadcastPrivacyMode, broadcastArenaEntry, broadcastMeetingEnd, setSameRoom } = usePresence();
-  const { isMicOn, toggleMic, isSpeakerOn, toggleSpeaker, isSameRoom, toggleSameRoom, micPermissionState } = useWebRTCContext();
+  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, setSameRoom } = usePresence();
+  const { isSameRoom } = useWebRTCContext();
   const sessionHostId = useStore(state => state.sessionHostId);
   const isHost = sessionHostId === localUserId || sessionHostId === null; // null = solo session, treat as host
   const { roomId } = useParams<{ roomId: string }>();
+  const navigate = useNavigate();
   const [showShare, setShowShare] = useState(false);
-
   const [isDataFlowOpen, setIsDataFlowOpen] = useState(false);
   const [showExplainer, setShowExplainer] = useState(false);
   const [showDeicticExplainer, setShowDeicticExplainer] = useState(false);
@@ -187,6 +111,7 @@ const Interface: React.FC = () => {
   // When the host enters split-screen Manager mode, the right side-panel is
   // redundant (its tabs are absorbed into the workspace). Hide it entirely.
   const managerMode = useActiveReviewStore((s) => s.managerMode);
+  const canvasRightClass = canvasRight(managerMode, isRightPanelCollapsed);
 
   const unresolvedComments = comments.filter(c => !c.resolved).length;
   const liveChat = useStore(state => state.liveChat);
@@ -417,170 +342,30 @@ const Interface: React.FC = () => {
           )}
       </div>
 
-      {/* REQUEST TOAST (Center Top) */}
-      {followRequest && (
-          <div className="absolute top-8 left-1/2 -translate-x-1/2 z-[200] pointer-events-auto flex flex-col items-center animate-in slide-in-from-top-4 fade-in">
-              <div className="bg-black/90 text-white backdrop-blur-md px-4 py-3 rounded-lg shadow-2xl flex items-center gap-4 border border-gray-700">
-                  <div className="flex items-center gap-2">
-                      <BellRing className="text-orange-400 animate-bounce" size={18} />
-                      <div className="flex flex-col">
-                          <span className="text-xs font-bold uppercase tracking-wide">Request to Follow</span>
-                          <span className="text-[10px] text-gray-400 font-mono">
-                              {agents.find(a => a.id === followRequest.agentId)?.name} wants to show you something.
-                          </span>
-                      </div>
-                  </div>
-                  <div className="h-8 w-px bg-gray-700"></div>
-                  <div className="flex gap-2">
-                      <button 
-                        onClick={handleAcceptFollow}
-                        className="px-3 py-1.5 bg-white text-black rounded text-xs font-bold hover:bg-gray-200 transition-colors"
-                      >
-                          Accept
-                      </button>
-                      <button 
-                        onClick={() => setFollowRequest(null)}
-                        className="px-2 py-1.5 text-gray-400 hover:text-white transition-colors"
-                      >
-                          <X size={14} />
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
+      {/* TOP BAR: pointing (Highlight granularity + Pointer ▾) and the room
+          controls that used to be a row in the top-right corner. Centred on the
+          free canvas, not on the window, so it never runs under the side panel. */}
+      <div className={clsx(
+        "absolute top-6 left-[300px] flex justify-center pointer-events-none z-[45]",
+        canvasRightClass
+      )}>
+        <TopBar
+          isHost={isHost}
+          roomId={roomId}
+          showShare={showShare}
+          onToggleShare={() => setShowShare(v => !v)}
+          showParticipants={showParticipants}
+          onToggleParticipants={() => setShowParticipants(v => !v)}
+          onOpenDeicticExplainer={() => setShowDeicticExplainer(true)}
+        />
+      </div>
 
-      {/* Right Header Area (Agent Status / End Meeting) */}
-      <div className="absolute top-6 right-6 flex flex-col items-end gap-2 pointer-events-auto z-[40]">
-
-           {/* Top buttons row */}
-           <div className="flex items-center gap-2 mb-2">
-                {/* XR Entry */}
-                <XRButton />
-
-                {/* Mic toggle — always visible in a room */}
-                <button
-                    onClick={toggleMic}
-                    title={micPermissionState === 'blocked' ? 'Microphone blocked — re-enable in browser settings' : isMicOn ? 'Mute microphone' : 'Unmute microphone'}
-                    className={clsx(
-                        'px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2',
-                        micPermissionState === 'blocked'
-                            ? 'bg-orange-100 text-orange-700 border-orange-300'
-                            : !isMicOn
-                                ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
-                                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400'
-                    )}
-                >
-                    {micPermissionState === 'blocked' ? <MicOff size={12} /> : isMicOn ? <Mic size={12} /> : <MicOff size={12} />}
-                    {micPermissionState === 'blocked' ? 'Blocked' : isMicOn ? 'Mic On' : 'Mic Off'}
-                </button>
-
-                {/* Speaker toggle — mutes all remote audio */}
-                <button
-                    onClick={toggleSpeaker}
-                    title={isSpeakerOn ? 'Mute all remote audio' : 'Unmute remote audio'}
-                    className={clsx(
-                        'px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2',
-                        !isSpeakerOn
-                            ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
-                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400'
-                    )}
-                >
-                    {isSpeakerOn ? <Volume2 size={12} /> : <VolumeX size={12} />}
-                    {isSpeakerOn ? 'Speaker On' : 'Speaker Off'}
-                </button>
-
-                {/* Same room toggle — mutes speakers, keeps mic live */}
-                <button
-                    onClick={toggleSameRoom}
-                    title={isSameRoom ? 'You are in the same physical room' : 'Mark that you share a physical room with another participant'}
-                    className={clsx(
-                        'px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2',
-                        isSameRoom
-                            ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
-                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400'
-                    )}
-                >
-                    <Home size={12} />
-                    {isSameRoom ? 'Same Room' : 'Same Room'}
-                </button>
-
-                {/* Privacy Mode Toggle */}
-                <button
-                    onClick={() => { togglePrivacyMode(); broadcastPrivacyMode(!isPrivacyMode); }}
-                    className={clsx(
-                        "px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2",
-                        isPrivacyMode
-                            ? "bg-red-600 text-white border-red-600 hover:bg-red-700"
-                            : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400"
-                    )}
-                >
-                    {isPrivacyMode ? <ShieldOff size={12} /> : <Shield size={12} />}
-                    {isPrivacyMode ? "Privacy On" : "Privacy"}
-                </button>
-
-                {/* Share */}
-                <div className="relative">
-                  <button
-                    onClick={() => setShowShare(v => !v)}
-                    className={clsx(
-                      'px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2',
-                      showShare
-                        ? 'bg-gray-800 text-white border-gray-600'
-                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400'
-                    )}
-                  >
-                    <Share2 size={12} /> Share
-                  </button>
-                  {showShare && roomId && (
-                    <SharePanel roomId={roomId} onClose={() => setShowShare(false)} />
-                  )}
-                </div>
-
-                {/* Boardroom Mode Toggle — host only */}
-                {isHost && (
-                <button
-                    onClick={() => {
-                        if (isBoardroomMode) {
-                            toggleBoardroomMode();
-                            broadcastArenaEntry();
-                        } else {
-                            triggerBoardroomEntry();
-                            broadcastBoardroomCountdown();
-                        }
-                    }}
-                    className={clsx(
-                        "px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2",
-                        isBoardroomMode
-                            ? "bg-black text-white border-black"
-                            : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400"
-                    )}
-                >
-                    <MonitorPlay size={12} /> Boardroom
-                </button>
-                )}
-
-                {/* Participants Toggle */}
-                <button
-                    onClick={() => setShowParticipants(!showParticipants)}
-                    className={clsx(
-                        "px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide border shadow-md transition-all flex items-center gap-2",
-                        showParticipants
-                            ? "bg-black text-white border-black"
-                            : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-400"
-                    )}
-                >
-                    <Users size={12} /> Participants
-                </button>
-
-                {isHost && (
-                <button
-                    onClick={() => { endMeeting(true, remoteParticipantList.length + 1); broadcastMeetingEnd(); }}
-                    className="px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide bg-black text-white border border-black shadow-md hover:bg-gray-800 transition-colors flex items-center gap-2"
-                >
-                    <Power size={12} className="text-red-500" /> End Session
-                </button>
-                )}
-           </div>
+      {/* Status indicators — top right of the canvas, below the bar and clear
+          of the side panel, which now starts at the very top of the window. */}
+      <div className={clsx(
+        "absolute top-[76px] flex flex-col items-end gap-2 pointer-events-auto z-[40]",
+        canvasRightClass
+      )}>
 
            {/* Recording indicator when privacy mode is OFF */}
            {!isPrivacyMode && (
@@ -628,7 +413,7 @@ const Interface: React.FC = () => {
       {showParticipants && (
           <div className={clsx(
             "absolute top-28 z-[45] pointer-events-auto w-56 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-lg animate-in fade-in slide-in-from-right-4 duration-200 transition-all",
-            isRightPanelCollapsed ? "right-20" : "right-[356px]"
+            canvasRightClass
           )}>
               <div className="p-2 border-b border-gray-100 flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wider flex items-center gap-2">
@@ -762,17 +547,19 @@ const Interface: React.FC = () => {
           </div>
       )}
 
-      {/* RIGHT PANEL: Mode Switcher + Content. Hidden while the host is in
-          split-screen Manager mode (its tabs live there instead). */}
+      {/* RIGHT PANEL: Mode Switcher + Content. A full-height column that owns
+          the right edge — the manager workspace takes the same edge, and the
+          two never show at once. Hidden while the host is in split-screen
+          Manager mode (its tabs live there instead). */}
       {!managerMode && (
       <div className={clsx(
-        "absolute right-6 top-20 bottom-20 flex flex-col pointer-events-none z-[40] transition-all duration-300",
-        isRightPanelCollapsed ? "w-12" : "w-[320px]"
+        "absolute right-0 top-0 bottom-0 flex flex-col pointer-events-none z-[40] bg-white border-l border-gray-200 transition-all duration-300",
+        isRightPanelCollapsed ? "w-12" : "w-[340px]"
       )}>
         {/* Collapse Toggle Button */}
         <button
           onClick={() => setIsRightPanelCollapsed(!isRightPanelCollapsed)}
-          className="pointer-events-auto mb-2 w-10 h-10 bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all self-end"
+          className="pointer-events-auto m-2 shrink-0 w-10 h-10 bg-white rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all self-end"
           title={isRightPanelCollapsed ? "Expand panel" : "Collapse panel"}
         >
           {isRightPanelCollapsed ? (
@@ -784,9 +571,9 @@ const Interface: React.FC = () => {
 
         {/* Panel Content - Hidden when collapsed */}
         {!isRightPanelCollapsed && (
-          <>
+          <div className="flex-1 min-h-0 flex flex-col gap-2 px-2 pb-2">
             {/* Panel Mode Toggle */}
-            <div className="flex mb-2 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm p-1 gap-0.5">
+            <div className="flex shrink-0 pointer-events-auto bg-white rounded-lg border border-gray-200 shadow-sm p-1 gap-0.5">
               <button
                 onClick={() => setRightPanelMode('meeting')}
                 className={clsx(
@@ -839,7 +626,7 @@ const Interface: React.FC = () => {
             </div>
 
             {/* Panel Content */}
-            <div className="flex-1 min-h-0 pointer-events-auto bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+            <div className="flex-1 min-h-0 pointer-events-auto bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
               {rightPanelMode === 'meeting' ? (
                 <ConversationPanel />
               ) : rightPanelMode === 'comments' ? (
@@ -848,16 +635,16 @@ const Interface: React.FC = () => {
                 <ChatPanel />
               )}
             </div>
-          </>
+          </div>
         )}
 
         {/* Collapsed indicators */}
         {isRightPanelCollapsed && (
-          <div className="flex flex-col gap-2 pointer-events-auto">
+          <div className="flex flex-col gap-2 pointer-events-auto px-1">
             <button
               onClick={() => { setIsRightPanelCollapsed(false); setRightPanelMode('meeting'); }}
               className={clsx(
-                "w-10 h-10 bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all",
+                "w-10 h-10 bg-white rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all",
                 rightPanelMode === 'meeting' && "border-black bg-black text-white hover:bg-gray-800"
               )}
               title="Meeting Capture"
@@ -867,7 +654,7 @@ const Interface: React.FC = () => {
             <button
               onClick={() => { setIsRightPanelCollapsed(false); setRightPanelMode('comments'); }}
               className={clsx(
-                "w-10 h-10 bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all relative",
+                "w-10 h-10 bg-white rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all relative",
                 rightPanelMode === 'comments' && "border-black bg-black text-white hover:bg-gray-800"
               )}
               title="Comments"
@@ -882,7 +669,7 @@ const Interface: React.FC = () => {
             <button
               onClick={() => { setIsRightPanelCollapsed(false); setRightPanelMode('chat'); }}
               className={clsx(
-                "w-10 h-10 bg-white/90 backdrop-blur-md rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all relative",
+                "w-10 h-10 bg-white rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all relative",
                 rightPanelMode === 'chat' && "border-black bg-black text-white hover:bg-gray-800"
               )}
               title="Chat"
@@ -915,7 +702,7 @@ const Interface: React.FC = () => {
       {showAIControls && (
          <div className={clsx(
            "absolute top-28 z-[40] pointer-events-auto w-48 bg-white/95 backdrop-blur-md border border-gray-200 rounded-lg shadow-sm p-2.5 animate-in slide-in-from-right-4 transition-all",
-           isRightPanelCollapsed ? "right-20" : "right-[356px]"
+           canvasRightClass
          )}>
              <div className="flex items-center gap-2 mb-2 border-b border-gray-100 pb-2">
                  <Sparkles size={12} className="text-purple-600"/>
@@ -944,13 +731,14 @@ const Interface: React.FC = () => {
       )}
 
       {/* BOTTOM-LEFT TOGGLES
-          The centred dock below is ~1030px wide, so on a 1280px-wide window its
-          left edge lands at x≈127 — 11px inside this cluster, which is how
-          "AGENTS ON" came to sit on top of the playback controls. Below ~1360px
-          the cluster sits above the dock instead; the labels stay readable
-          (shrinking them to icons hides whether the agents are on, which is the
-          one thing this button is for). */}
-      <div className="absolute bottom-[97px] [@media(min-width:1360px)]:bottom-6 left-6 z-[40] pointer-events-auto flex flex-col gap-2 items-start">
+          No width-dependent lift any more. The old bottom-[97px] below 1360px
+          existed because the dock was centred on the *window* and ~1030px wide,
+          so at 1280px its left edge landed 11px inside this cluster. The bottom
+          row is now inset left-[300px] and centres on the free canvas, so it
+          cannot reach this cluster at any width; both sit at bottom-6/bottom-8.
+          The labels stay readable (shrinking them to icons hides whether the
+          agents are on, which is the one thing this button is for). */}
+      <div className="absolute bottom-6 left-6 z-[40] pointer-events-auto flex flex-col gap-2 items-start">
           <button
             onClick={toggleHideAgents}
             className={clsx(
@@ -980,32 +768,16 @@ const Interface: React.FC = () => {
 
       </div>
 
-      {/* Bottom Controls Panel (Centered Dock) */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-end justify-center pointer-events-none gap-6 z-[30]"> 
-        
-        {/* Left: Playback Controls */}
-        <div className="flex gap-2 pointer-events-auto bg-white/90 backdrop-blur-md p-1.5 rounded-md border border-gray-200 shadow-sm transition-all hover:shadow-md">
-           <Button onClick={togglePlay} active={isPlaying} title="Play/Pause">
-             {isPlaying ? <Pause size={16} /> : <Play size={16} />}
-           </Button>
-           <Button onClick={resetTime} title="Reset">
-             <RefreshCw size={16} />
-           </Button>
-           <div className="w-px h-10 bg-gray-200 mx-1"></div>
-           <div className="h-10 flex flex-col justify-center px-3 font-mono text-[10px] text-gray-500 w-24">
-              <div className="flex justify-between mb-1">
-                <span>OP.STATUS</span>
-                <span className={isPlaying ? "text-green-600" : "text-orange-500"}>
-                    {isPlaying ? "RUNNING" : "PAUSED"}
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 h-1 rounded-full overflow-hidden">
-                <div className={`h-full bg-black transition-all duration-300 ${isPlaying ? 'animate-[shimmer_2s_infinite]' : ''}`} style={{width: isPlaying ? '100%' : '0%'}}></div>
-              </div>
-           </div>
-        </div>
+      {/* BOTTOM ROW: the call bar (call controls · view modes · the way out),
+          with the review pill and the host's Manage button beside it. Centred on
+          the free canvas: the row starts at x=300, so it can never reach the
+          bottom-left cluster (x=24, ~110px wide) whatever the window width. */}
+      <div className={clsx(
+        "absolute bottom-8 left-[300px] flex items-end justify-center pointer-events-none gap-3 z-[30]",
+        canvasRightClass
+      )}>
 
-        {/* Center: View Modes */}
+        {/* Center: View Modes, and the call controls that share their bar */}
         <div className="flex flex-col items-center gap-2 pointer-events-auto">
             {/* Who is locked to my camera, so leading is not a guess */}
             <FollowersBadge />
@@ -1020,109 +792,83 @@ const Interface: React.FC = () => {
             >
                 View Configuration
             </button>
-            <div className="flex gap-2 bg-white/90 backdrop-blur-md p-1.5 rounded-md border border-gray-200 shadow-sm transition-all hover:shadow-md">
-                <Button
-                    active={viewMode === ViewMode.FREE && !leaderId}
-                    onClick={handleFreeView}
-                    title="Free View"
-                >
-                    <Activity size={16} />
-                </Button>
-                <Button 
-                    active={leaderId === 'USER'} 
-                    onClick={handleLeaderToggle}
-                    title="Sync / Leader Mode"
-                    className={leaderId ? "text-indigo-600 border-indigo-200" : ""}
-                >
-                    <Users size={16} />
-                </Button>
-                <Button 
-                    active={viewMode === ViewMode.AI_GUIDED} 
-                    onClick={() => { setViewMode(ViewMode.AI_GUIDED); setActiveAgent(null); }}
-                    title="AI Guided Focus (Group Gaze)"
-                >
-                    <Sparkles size={16} />
-                </Button>
-                <Button 
-                    active={viewMode === ViewMode.SPLIT_SCREEN} 
-                    onClick={handleSplitToggle}
-                    title="Hybrid Split Screen"
-                >
-                    <SplitSquareHorizontal size={16} />
-                </Button>
-            </div>
+            <CallBar
+              isHost={isHost}
+              onFreeView={handleFreeView}
+              onLeaderToggle={handleLeaderToggle}
+              onSplitToggle={handleSplitToggle}
+              onLeave={() => navigate('/')}
+            />
         </div>
 
-        {/* Center-Right: Deictic Features */}
-        <div className="flex flex-col items-center gap-2 pointer-events-auto">
-            <button
-                onClick={() => setShowDeicticExplainer(true)}
-                className="text-[10px] font-mono uppercase text-gray-400 tracking-widest mb-1 bg-white/40 px-2 py-0.5 rounded backdrop-blur-sm shadow-sm hover:bg-white/80 hover:text-black transition-colors"
-            >
-                Deictic Features
-            </button>
-            <div className="flex items-center gap-2 bg-white/90 backdrop-blur-md p-1.5 rounded-md border border-gray-200 shadow-sm transition-all hover:shadow-md">
-                {/* Highlight granularity */}
-                <div className="flex items-center gap-1 px-2">
-                    <Crosshair size={14} className="text-gray-400" />
-                    <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Highlight</span>
-                    <button
-                        onClick={() => setLaserHighlightGranularity('model')}
-                        title="Highlight whole model"
-                        className={clsx(
-                            'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
-                            laserHighlightGranularity === 'model'
-                                ? 'bg-black text-white'
-                                : 'text-gray-400 hover:text-gray-700'
-                        )}
-                    >Model</button>
-                    <button
-                        onClick={() => setLaserHighlightGranularity('part')}
-                        title="Highlight specific part"
-                        className={clsx(
-                            'text-[9px] font-bold uppercase px-2 py-0.5 rounded transition-all',
-                            laserHighlightGranularity === 'part'
-                                ? 'bg-black text-white'
-                                : 'text-gray-400 hover:text-gray-700'
-                        )}
-                    >Part</button>
-                </div>
-                <div className="w-px h-8 bg-gray-200" />
-                {/* Finger pointer */}
-                <InlineFingerPill />
-                <div className="w-px h-8 bg-gray-200" />
-                {/* Hover dwell */}
-                <InlineHoverPill />
-            </div>
-        </div>
+        {/* Active Review pane (replaces the old Visual Aids panel) */}
+        <ReviewViewpointsDock />
 
-        {/* Right: Active Review pane (replaces the old Visual Aids panel) */}
-        <ReviewViewpointsDock isRightPanelCollapsed={isRightPanelCollapsed} />
+        {/* The host's way into the manager workspace. Beside the bar rather than
+            inside the review pane, so it is there before the review has
+            produced anything. */}
+        <ManageButton />
 
-      </div>
-
-      {/* Follow state, top-centre. Dragging is only a nudge that snaps back;
-          this pill says so, and holds the one control that actually leaves.
-          Dropped below JoinRequests when I host, so the two never overlap. */}
-      <div className={clsx(
-        "absolute left-1/2 -translate-x-1/2 z-[240] pointer-events-auto",
-        isHost ? "top-[76px]" : "top-6"
-      )}>
-        <FollowingBadge onFreeView={handleFreeView} />
       </div>
 
       </> /* end !isBoardroomMode */}
 
-      {/* JOIN REQUESTS — host-only, shown when someone is waiting to be admitted.
-          OUTSIDE the !isBoardroomMode branch above, and above the boardroom
-          overlay's z-[150]: a knock during a boardroom session was invisible to
-          the host, so the person outside waited until the host happened to
-          leave the boardroom. */}
-      {isHost && (
-        <div className="absolute top-8 left-1/2 -translate-x-1/2 z-[250] pointer-events-auto">
-          <JoinRequests />
-        </div>
-      )}
+      {/* BELOW THE TOP BAR, centred on the same free canvas: an agent's request
+          to follow, the knocks waiting to be admitted, and my own follow state.
+          One stack, so the three never land on each other or on the bar.
+          JoinRequests stays OUTSIDE the !isBoardroomMode branch above, and above
+          the boardroom overlay's z-[150]: a knock during a boardroom session was
+          invisible to the host, so the person outside waited until the host
+          happened to leave the boardroom. In boardroom mode there is no top bar
+          and no side panel, so the stack keeps its old window-centred spot. */}
+      <div className={clsx(
+        "absolute flex flex-col items-center gap-2 pointer-events-none z-[250]",
+        isBoardroomMode
+          ? "top-8 left-0 right-0"
+          : clsx("top-[76px] left-[300px]", canvasRightClass)
+      )}>
+          {/* REQUEST TOAST */}
+          {!isBoardroomMode && followRequest && (
+              <div className="pointer-events-auto animate-in slide-in-from-top-4 fade-in">
+              <div className="bg-black/90 text-white backdrop-blur-md px-4 py-3 rounded-lg shadow-2xl flex items-center gap-4 border border-gray-700">
+                  <div className="flex items-center gap-2">
+                      <BellRing className="text-orange-400 animate-bounce" size={18} />
+                      <div className="flex flex-col">
+                          <span className="text-xs font-bold uppercase tracking-wide">Request to Follow</span>
+                          <span className="text-[10px] text-gray-400 font-mono">
+                              {agents.find(a => a.id === followRequest.agentId)?.name} wants to show you something.
+                          </span>
+                      </div>
+                  </div>
+                  <div className="h-8 w-px bg-gray-700"></div>
+                  <div className="flex gap-2">
+                      <button
+                        onClick={handleAcceptFollow}
+                        className="px-3 py-1.5 bg-white text-black rounded text-xs font-bold hover:bg-gray-200 transition-colors"
+                      >
+                          Accept
+                      </button>
+                      <button
+                        onClick={() => setFollowRequest(null)}
+                        className="px-2 py-1.5 text-gray-400 hover:text-white transition-colors"
+                      >
+                          <X size={14} />
+                      </button>
+                  </div>
+              </div>
+              </div>
+          )}
+
+          {isHost && <JoinRequests />}
+
+          {/* Follow state. Dragging is only a nudge that snaps back; this pill
+              says so, and holds the one control that actually leaves. */}
+          {!isBoardroomMode && (
+            <div className="pointer-events-auto">
+              <FollowingBadge onFreeView={handleFreeView} />
+            </div>
+          )}
+      </div>
 
       {/* Boardroom Mode Overlay — pointer-events-none so transparent area passes events to canvas */}
       {isBoardroomMode && (

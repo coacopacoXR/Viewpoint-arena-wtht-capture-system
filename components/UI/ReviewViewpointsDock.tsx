@@ -8,11 +8,12 @@ import ReviewPanelContent from './ReviewPanelContent';
 // Lives in the bottom dock (where Visual Aids used to be). Two states:
 //   collapsed (default) — compact pill: title + counts
 //   expanded — pops upward with the shared ReviewPanelContent editor
-interface ReviewViewpointsDockProps {
-  isRightPanelCollapsed?: boolean;
-}
-
-const ReviewViewpointsDock: React.FC<ReviewViewpointsDockProps> = ({ isRightPanelCollapsed = false }) => {
+// The pill sits in the bottom row, which is centred on the free canvas between
+// the left column and the side panel, so the card opens straight up from the
+// pill's right edge. (It used to shift 356px left to clear the side panel, from
+// when the dock was centred on the whole window; with the row inset that shift
+// only pushed the card onto the model tree.)
+const ReviewViewpointsDock: React.FC = () => {
   const config = useActiveReviewStore((s) => s.config);
   const managerMode = useActiveReviewStore((s) => s.managerMode);
   const [open, setOpen] = useState(false);
@@ -68,8 +69,7 @@ const ReviewViewpointsDock: React.FC<ReviewViewpointsDockProps> = ({ isRightPane
       {open && (
         <div
           className={clsx(
-            'absolute bottom-full mb-2 w-[340px] bg-white/97 backdrop-blur-md rounded-lg border border-gray-200 shadow-xl overflow-hidden',
-            isRightPanelCollapsed ? 'right-0' : 'right-[356px]'
+            'absolute bottom-full mb-2 right-0 w-[340px] bg-white rounded-lg border border-gray-200 shadow-xl overflow-hidden',
           )}
         >
           <div className="px-3 py-2 border-b border-gray-100 bg-gray-50/70 flex items-center justify-between">

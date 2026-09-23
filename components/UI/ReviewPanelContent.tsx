@@ -420,8 +420,10 @@ const ReviewPanelContent: React.FC<Props> = ({ theme = 'light', embedded = false
         </div>
       )}
 
-      {/* Host-only manager-mode trigger */}
-      {isHost && !embedded && (
+      {/* Host-only manager-mode trigger — boardroom only. In the arena the
+          call bar's Manage button is the one entry point (and is there even
+          with no review); the boardroom has no call bar, so it keeps this. */}
+      {isHost && !embedded && theme === 'dark' && (
         <div className={clsx('p-3 border-t', t.sectionBorder)}>
           <button
             onClick={() => setManagerMode(true)}

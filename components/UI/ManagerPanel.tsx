@@ -119,7 +119,13 @@ const ManagerPanel: React.FC = () => {
         {tab === 'notes'    && <NotesTab />}
         {tab === 'curated'  && (
           <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-            <ReviewPanelContent theme="light" embedded />
+            {config ? (
+              <ReviewPanelContent theme="light" embedded />
+            ) : (
+              <div className="text-center py-10 px-4 text-gray-400 text-[11px] italic">
+                No active review — nothing curated to edit yet.
+              </div>
+            )}
           </div>
         )}
         {tab === 'capture'  && <div className="flex-1 min-h-0 overflow-hidden"><ConversationPanel /></div>}
