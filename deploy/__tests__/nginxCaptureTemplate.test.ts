@@ -280,3 +280,37 @@ describe('docker-compose.yml — the app service is given the secret', () => {
     expect(COMPOSE.services['capture-service'].networks).toContain('backend');
   });
 });
+
+// ─── The access-check subrequest ────────────────────────────────────────────
+//
+// Both capture locations are held to the front-door password through
+// `auth_request /_access_check`. That subrequest broke whole-meeting captures
+// the day it landed, in a way no small test caught.
+
+describe('deploy/nginx/app.conf — /_access_check', () => {
+  const ACCESS_CHECK = flat(blockOf(APP_CONF_CODE, 'location = /_access_check {'));
+
+  it('does not apply a body-size limit to a body it never forwards', () => {
+    // nginx checks the PARENT request's declared size against the SUBREQUEST
+    // location's client_max_body_size, and `proxy_pass_request_body off` does
+    // not exempt it. With the 1m default, posting a recording gave:
+    //   "client intended to send too large body ... subrequest /_access_check"
+    //   "auth request unexpected status: 413"
+    // which nginx reports to the browser as a 500. Live-transcript chunks are
+    // ~200 KB so they kept working, and only longer meetings failed — it read
+    // as an intermittent capture bug (found 2026-09-23).
+    expect(ACCESS_CHECK).toContain('client_max_body_size 0;');
+  });
+
+  it('is internal, and never forwards the request body', () => {
+    expect(ACCESS_CHECK).toContain('internal;');
+    expect(ACCESS_CHECK).toContain('proxy_pass_request_body off;');
+  });
+
+  it('guards both capture endpoints', () => {
+    expect(flat(blockOf(APP_CONF_CODE, 'location = /api/capture/local {')))
+      .toContain('auth_request /_access_check;');
+    expect(flat(blockOf(APP_CONF_CODE, 'location = /api/capture/transcribe {')))
+      .toContain('auth_request /_access_check;');
+  });
+});

@@ -630,6 +630,26 @@ runs caught, batch by batch, is the point of this entry:
   link" each land a row, and the Activity section shows all three. The audit
   rows and the test passphrase were removed afterwards.
 
+- **The capture gate broke whole-meeting captures, and the user found it.**
+  "/api/capture/local returned 500", intermittently. Not in capture-service's
+  log at all — it never saw the request. nginx checks the PARENT request's
+  declared body size against the SUBREQUEST location's
+  `client_max_body_size`, and `proxy_pass_request_body off` does not exempt
+  it, so the 1 MiB default applied to `/_access_check`: 413 on the subrequest,
+  which nginx reports to the browser as 500. Live-transcript chunks are
+  ~200 KB and kept working; only longer meetings failed, which is why it read
+  as intermittent. The curl test that passed the night before sent a tiny
+  body — the lesson is that a size-dependent guard needs a real-sized probe.
+  Fixed with `client_max_body_size 0` on a subrequest whose body is never
+  forwarded, verified by posting the 1.2 MB review recording end to end (200,
+  real cards), and pinned in `deploy/__tests__/nginxCaptureTemplate.test.ts`.
+- **The Labels tab was a dead end.** With no fields defined it said "add
+  grouping fields in the tracker settings" and gave no way to do it — the
+  user hit exactly that. It now explains what a label field is for and opens
+  the same shared editor the tracker and the admin screen use; when fields
+  exist there is an "Add or edit label fields" link. Possible because batch AK
+  had already lifted that panel out of TrackerPage into a component.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.

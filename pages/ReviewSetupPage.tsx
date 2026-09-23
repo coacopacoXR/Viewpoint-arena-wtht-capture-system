@@ -24,6 +24,7 @@ import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import { getIdentity } from '../lib/identity';
 import { useFlushingDebounce } from '../lib/useFlushingDebounce';
 import OnshapeBrowser, { type OnshapeLaunchDocument } from '../components/UI/OnshapeBrowser';
+import LabelFieldsSettings from '../components/UI/LabelFieldsSettings';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
 import {
   PLM_SOURCE_LABELS,
@@ -1272,6 +1273,11 @@ export const LabelsTab: React.FC = () => {
   const loadFields = useLabelFieldsStore((s) => s.load);
   const loaded = useLabelFieldsStore((s) => s.loaded);
   const [usedValues, setUsedValues] = useState<Record<string, string[]>>({});
+  // The fields themselves are install-wide, so they are defined in the same
+  // panel the tracker and the admin screen use — reachable from here too,
+  // because "go to the tracker settings" is not an instruction anyone
+  // should have to follow to fill in the tab they are already looking at.
+  const [fieldSettingsOpen, setFieldSettingsOpen] = useState(false);
 
   useEffect(() => {
     if (!loaded) loadFields();
@@ -1297,10 +1303,17 @@ export const LabelsTab: React.FC = () => {
       {fields.length === 0 && loaded && (
         <div className="text-center py-10 flex flex-col items-center gap-3 text-gray-500 text-xs italic">
           <Tags size={28} className="opacity-30" />
-          No label fields defined
-          <span className="text-[10px] text-gray-600 max-w-[240px]">
-            Add grouping fields in the tracker settings to organise your reviews.
+          No label fields yet
+          <span className="text-[10px] text-gray-600 max-w-[240px] not-italic">
+            A label field is how you group reviews — by phase, programme,
+            product, whatever suits you. They are shared across the install.
           </span>
+          <button
+            onClick={() => setFieldSettingsOpen(true)}
+            className="mt-1 px-3 py-1.5 rounded bg-white text-gray-900 text-[11px] font-bold not-italic hover:bg-gray-100 transition-colors"
+          >
+            Add a label field
+          </button>
         </div>
       )}
 
@@ -1362,6 +1375,22 @@ export const LabelsTab: React.FC = () => {
           </div>
         );
       })}
+
+      {fields.length > 0 && (
+        <button
+          onClick={() => setFieldSettingsOpen(true)}
+          className="self-start text-[10px] text-gray-500 hover:text-white transition-colors underline underline-offset-2"
+        >
+          Add or edit label fields
+        </button>
+      )}
+
+      {fieldSettingsOpen && (
+        <LabelFieldsSettings
+          fields={fields}
+          onClose={() => setFieldSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 };
