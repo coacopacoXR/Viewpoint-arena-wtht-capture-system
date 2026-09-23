@@ -923,8 +923,14 @@ const Interface: React.FC = () => {
          </div>
       )}
 
-      {/* BOTTOM-LEFT TOGGLES */}
-      <div className="absolute bottom-6 left-6 z-[40] pointer-events-auto flex flex-col gap-2 items-start">
+      {/* BOTTOM-LEFT TOGGLES
+          The centred dock below is ~1030px wide, so on a 1280px-wide window its
+          left edge lands at x≈127 — 11px inside this cluster, which is how
+          "AGENTS ON" came to sit on top of the playback controls. Below ~1360px
+          the cluster sits above the dock instead; the labels stay readable
+          (shrinking them to icons hides whether the agents are on, which is the
+          one thing this button is for). */}
+      <div className="absolute bottom-[97px] [@media(min-width:1360px)]:bottom-6 left-6 z-[40] pointer-events-auto flex flex-col gap-2 items-start">
           <button
             onClick={toggleHideAgents}
             className={clsx(
