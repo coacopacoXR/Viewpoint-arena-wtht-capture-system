@@ -555,6 +555,23 @@ runs caught, batch by batch, is the point of this entry:
   visibility, needs two clicks to delete, flips visibility, and locks again —
   and the tracker's label-fields settings still open after the extraction.
 
+- **The front-door password now guards the GPU, not just the UI.** In the
+  self-hosted stack `/api/capture/local` and `/api/capture/transcribe` never
+  touch the `api` container: nginx streams them straight to capture-service
+  and adds `CAPTURE_SHARED_SECRET` itself. That secret keeps capture-service
+  unreachable from outside the compose network, but nginx added it for every
+  caller — so anyone who could open the origin could make the server
+  transcribe audio and run the LLM even with a password set. Both locations
+  now go through nginx `auth_request` to a new `GET /api/access-check`, which
+  answers 204 or 401 and nothing else (auth_request judges by status; the
+  body is ignored, and the subrequest drops the body so a 200 MiB recording
+  is not forwarded to it). With no password configured it answers 204 to
+  everything, so an open install is unchanged. Verified live in all three
+  states: open → 204 and the capture endpoints answer; password set and no
+  cookie → 401 on both; password set with the cookie → 204 and through. The
+  per-speaker live transcript still passes afterwards, which is the hot path
+  the subrequest was added to.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.
@@ -568,11 +585,11 @@ runs caught, batch by batch, is the point of this entry:
 - Requirements: no sample set, no generated codes, free-text category.
 
 ### Follow-ups
-- **`/api/capture/local` is open to anyone who can reach the app.** The
-  shared secret stops direct access to capture-service, but the proxy adds it
-  for every caller, so any visitor can make the server transcribe audio. Same
-  shape as `/api/capture/extract` spending an API key. The app has no user
-  auth to gate on yet; needs rate limiting or auth before a public deploy.
+- **`/api/capture/extract` can still spend a cloud API key** for any visitor
+  who can reach the app. The self-hosted capture endpoints are now behind the
+  front-door password (above), but that only helps a deployment that set one,
+  and the cloud-provider path runs through the `api` container rather than
+  nginx, so it needs the same check applied there.
 - **Vercel limits vs capture:** Functions accept 100 MB bodies, capture-service
   allows 200 MB, and the proxy waits up to 15 minutes. A long meeting on
   Vercel will hit the platform limit first. Self-hosted nginx has no such cap.
