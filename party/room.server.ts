@@ -54,6 +54,11 @@ type RoomMessage =
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
 
+// Where the admitted set is kept between restarts, and how many of the most
+// recent admissions are worth keeping.
+const ADMITTED_KEY = 'admitted-user-ids';
+const MAX_PERSISTED_ADMISSIONS = 200;
+
 export default class RoomServer implements Party.Server {
   participants = new Map<string, ParticipantPresence>();
   // Ordered by first PRESENCE — index 0 is always the session host
@@ -97,6 +102,54 @@ export default class RoomServer implements Party.Server {
   private auditNotConfiguredLogged = false;
 
   constructor(readonly room: Party.Room) {}
+
+  /**
+   * Admissions outlive a restart of this server.
+   *
+   * Everything else here is deliberately in-memory: a room that comes back
+   * empty is a room nobody is in. The admitted set is different, because the
+   * container is restarted for upgrades while meetings are running, and
+   * without this the first person to reconnect becomes host and everyone else
+   * lands back in the queue — the host re-admitting colleagues who never left
+   * (seen live 2026-09-23: guest bounced to the waiting room, host shown
+   * "Maria wants to join" for someone already in the meeting).
+   *
+   * onStart runs before the first connection, so the set is restored before
+   * any knock is judged. Storage is per room and persisted to the volume the
+   * compose file already mounts; if it is unavailable, every path below
+   * behaves exactly as it did before, which is the pre-restart-safety
+   * behaviour rather than a broken one.
+   *
+   * The join policy is NOT restored: it goes back to 'ask', which is the safe
+   * direction, and a host who wanted an open link can say so again.
+   */
+  async onStart() {
+    try {
+      const saved = await this.room.storage.get<string[]>(ADMITTED_KEY);
+      if (Array.isArray(saved)) {
+        for (const userId of saved) {
+          if (typeof userId === 'string' && userId) this.admitted.add(userId);
+        }
+      }
+    } catch {
+      // No storage on this runtime — carry on with an empty set.
+    }
+  }
+
+  /**
+   * Write the admitted set back. Fire-and-forget: an admission must not wait
+   * on a disk write, and a failed write costs a re-admission after a restart,
+   * not a broken room. Capped so a long-lived room cannot grow it without
+   * bound; a Set keeps insertion order, so the oldest go first.
+   */
+  private persistAdmitted(): void {
+    try {
+      const ids = [...this.admitted].slice(-MAX_PERSISTED_ADMISSIONS);
+      void this.room.storage.put(ADMITTED_KEY, ids).catch(() => {});
+    } catch {
+      // No storage on this runtime.
+    }
+  }
 
   private computeHost(): string | null {
     return this.joinOrder[0] ?? null;
@@ -354,6 +407,7 @@ export default class RoomServer implements Party.Server {
       //         it never empties.
       if (this.joinPolicy === 'open' || this.participants.size === 0) {
         this.admitted.add(userId);
+        this.persistAdmitted();
         this.pending.delete(userId);
 
         // Now treat this as a normal first PRESENCE for an admitted user.
@@ -401,6 +455,7 @@ export default class RoomServer implements Party.Server {
       const subjectName = pendingEntry.name;
       this.pending.delete(userId);
       this.admitted.add(userId);
+      this.persistAdmitted();
 
       this.deliverAdmission(userId);
 
@@ -461,6 +516,7 @@ export default class RoomServer implements Party.Server {
         for (const [userId] of this.pending) {
           this.pending.delete(userId);
           this.admitted.add(userId);
+          this.persistAdmitted();
           this.deliverAdmission(userId);
         }
       }

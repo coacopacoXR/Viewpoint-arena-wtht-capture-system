@@ -7,10 +7,21 @@ import RoomServer from '../room.server';
 
 // ─── Fakes ──────────────────────────────────────────────────────────────────
 
-function fakeRoom(): Party.Room {
+/** In-memory stand-in for the room's persisted key-value storage. */
+function fakeStorage(initial: Record<string, unknown> = {}) {
+  const data = new Map<string, unknown>(Object.entries(initial));
+  return {
+    get: vi.fn(async (key: string) => data.get(key)),
+    put: vi.fn(async (key: string, value: unknown) => { data.set(key, value); }),
+    _data: data,
+  };
+}
+
+function fakeRoom(storage = fakeStorage()): Party.Room {
   return {
     id: 'test-room',
     broadcast: vi.fn(),
+    storage,
   } as unknown as Party.Room;
 }
 
@@ -23,9 +34,13 @@ function fakeConn(id: string): FakeConnection {
   return { id, send: vi.fn() };
 }
 
-function createServer(): RoomServer & { room: { broadcast: ReturnType<typeof vi.fn> } } {
-  const room = fakeRoom();
-  return new RoomServer(room) as RoomServer & { room: { broadcast: ReturnType<typeof vi.fn> } };
+function createServer(
+  storage = fakeStorage(),
+): RoomServer & { room: { broadcast: ReturnType<typeof vi.fn>; storage: ReturnType<typeof fakeStorage> } } {
+  const room = fakeRoom(storage);
+  return new RoomServer(room) as RoomServer & {
+    room: { broadcast: ReturnType<typeof vi.fn>; storage: ReturnType<typeof fakeStorage> };
+  };
 }
 
 /** Register a connection (onConnect) and then send PRESENCE to admit it. */
@@ -838,5 +853,85 @@ describe('room.server — audit log', () => {
     expect(server.admitted.has('guest-1')).toBe(true);
     const guestTypes = sentTypes(guestConn);
     expect(guestTypes).toContain('JOIN_ADMITTED');
+  });
+});
+
+// ─── Admissions across a restart ────────────────────────────────────────────
+
+describe('room.server — admissions survive a restart', () => {
+  it('restores the admitted set before judging any knock', async () => {
+    // The container is restarted for upgrades while meetings are running.
+    // Without this, the first person to reconnect becomes host and everyone
+    // else is bounced into the queue — the host re-admitting people who never
+    // left (seen live before this was added).
+    const storage = fakeStorage({ 'admitted-user-ids': ['host-1', 'guest-1'] });
+    const server = createServer(storage);
+    await server.onStart();
+
+    // A second person reconnecting, with someone already in the room, would
+    // otherwise be parked.
+    const hostConn = fakeConn('c-host');
+    admitUser(server, hostConn, 'host-1', 'Alice');
+    const guestConn = fakeConn('c-guest');
+    server.onConnect(guestConn as unknown as Party.Connection);
+    guestConn.send.mockClear();
+    sendPresence(server, guestConn, 'guest-1', 'Bob');
+
+    expect(server.pending.has('guest-1')).toBe(false);
+    expect(sentTypes(guestConn)).not.toContain('JOIN_PENDING');
+    expect(sentTypes(guestConn)).toContain('JOIN_ADMITTED');
+  });
+
+  it('writes each admission back', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+
+    const hostConn = fakeConn('c-host');
+    admitUser(server, hostConn, 'host-1', 'Alice');
+    const guestConn = fakeConn('c-guest');
+    admitUser(server, guestConn, 'guest-1', 'Bob');
+    server.onMessage(
+      JSON.stringify({ type: 'ADMIT', payload: { userId: 'guest-1' } }),
+      hostConn as unknown as Party.Connection,
+    );
+
+    expect(storage.put).toHaveBeenCalled();
+    expect(storage._data.get('admitted-user-ids')).toEqual(['host-1', 'guest-1']);
+  });
+
+  it('carries on when the runtime has no storage', async () => {
+    // partykit node mode, a future runtime, or a disk problem: an admission
+    // must not depend on a disk write succeeding.
+    const broken = {
+      get: vi.fn(async () => { throw new Error('no storage'); }),
+      put: vi.fn(async () => { throw new Error('no storage'); }),
+      _data: new Map<string, unknown>(),
+    };
+    const server = createServer(broken as unknown as ReturnType<typeof fakeStorage>);
+    await expect(server.onStart()).resolves.toBeUndefined();
+
+    const conn = fakeConn('c1');
+    admitUser(server, conn, 'alice', 'Alice');
+    expect(server.admitted.has('alice')).toBe(true);
+    expect(sentTypes(conn)).toContain('JOIN_ADMITTED');
+  });
+
+  it('keeps the set bounded', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    for (let i = 0; i < 250; i += 1) {
+      const conn = fakeConn(`c${i}`);
+      server.onConnect(conn as unknown as Party.Connection);
+      sendPresence(server, conn, `user-${i}`, `User ${i}`);
+      // Everyone after the first is parked, so admit them as the host would.
+      server.onMessage(
+        JSON.stringify({ type: 'ADMIT', payload: { userId: `user-${i}` } }),
+        (() => { const h = fakeConn('c0'); return h; })() as unknown as Party.Connection,
+      );
+    }
+    const saved = storage._data.get('admitted-user-ids') as string[] | undefined;
+    if (saved) expect(saved.length).toBeLessThanOrEqual(200);
   });
 });

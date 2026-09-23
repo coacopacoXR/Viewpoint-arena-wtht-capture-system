@@ -650,6 +650,23 @@ runs caught, batch by batch, is the point of this entry:
   exist there is an "Add or edit label fields" link. Possible because batch AK
   had already lifted that panel out of TrackerPage into a component.
 
+- **A restart of the room server used to end everyone's meeting.** Found by
+  asking what happens on the upgrade path, not by a report: the admitted set
+  is in memory, so after `docker compose restart partykit` the first person to
+  reconnect became host and everyone else was bounced into the waiting room —
+  with the host being asked to admit colleagues who had never left. Admissions
+  are now written to the room's own storage (the compose file already mounts
+  the volume) and restored in `onStart`, which runs before the first
+  connection, so no knock is judged against an empty set. Capped at the 200
+  most recent, fire-and-forget on write, and a runtime with no storage behaves
+  exactly as before. The join policy is deliberately NOT restored: it returns
+  to "ask", which is the safe direction. Verified by restarting the container
+  mid-meeting: before, the guest was thrown out; after, both stay in.
+- **Recording with the front-door password on was never tested together**
+  until now — the same shape of assumption as the 413. It works: both
+  browsers unlock, the cookie rides along to the capture endpoints, and the
+  live transcript and cards behave exactly as on an open install.
+
 ### Decisions the user made in this stretch
 - Organising structure (tracker grouping) is **user-defined fields**, edited
   in the app, seeded with nothing.
