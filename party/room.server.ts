@@ -19,6 +19,8 @@ import {
   asSceneUpdate,
   sceneFromLegacyReference,
 } from '../lib/scene/sceneWire';
+import { can, type Role } from '../lib/reviews/roles';
+import { ReviewFactsCache, roleFromFacts, type ReviewFactsSource } from './reviewRoles';
 
 export type WebRTCSignalData =
   | { type: 'offer'; sdp: RTCSessionDescriptionInit }
@@ -255,6 +257,20 @@ export default class RoomServer implements Party.Server {
     string,
     { token: string; result: Promise<VerifiedAccount | null> }
   >();
+  // What each connection's token PROVED, kept beside the token cache because the
+  // presence payload it stamps is not the place to look for it later: that object
+  // is relayed to everybody, and `isAdmin` is this server's business alone.
+  // Populated only from a token this server verified, so it is never a claim a
+  // client made. Dropped in onClose with the token it came from.
+  private verifiedAccounts = new Map<string, { accountId: string; isAdmin: boolean }>();
+  // The review's owner and roster, read from PostgREST with the anon key and
+  // believed for sixty seconds. Lazily built, because a deployment on
+  // identity.mode 'none' — the default install — must not make the room server
+  // talk to a database it has no reason to. See party/reviewRoles.ts.
+  private reviewFactsCache: ReviewFactsCache | null = null;
+  // Whether we have already logged that a role lookup could not be made. Once per
+  // server instance, like the audit and identity lines.
+  private roleLookupNotConfiguredLogged = false;
   // Whether we have already logged that identity is switched on but cannot be
   // verified (JWT_SECRET empty). Once per server instance, like the audit line.
   private identityNotConfiguredLogged = false;
@@ -393,16 +409,127 @@ export default class RoomServer implements Party.Server {
   }
 
   /**
+   * The review's owner and roster, cached — or null when this deployment has no
+   * identities to look up.
+   *
+   * Built on first use rather than in onStart, so a room on the default install
+   * (identity.mode 'none') never constructs one and never reads ANON_KEY for this.
+   * The source is a FUNCTION of the cache's argument for the same reason: the
+   * environment is read at lookup time, exactly as envValue does everywhere else
+   * in this file.
+   */
+  private reviewFactsCacheFor(): ReviewFactsCache | null {
+    if (!this.identityRequired()) return null;
+    if (this.reviewFactsCache) return this.reviewFactsCache;
+
+    const source = (): ReviewFactsSource | null => {
+      const anonKey = this.envValue('ANON_KEY');
+      if (!anonKey) {
+        if (!this.roleLookupNotConfiguredLogged) {
+          this.roleLookupNotConfiguredLogged = true;
+          console.log(
+            '[roles] ANON_KEY is not set — this room cannot read the review\'s ' +
+              'members, so nobody in it is an owner or an editor and only the ' +
+              '"who may change models" setting can allow a change',
+          );
+        }
+        return null;
+      }
+      // PostgREST serves its tables at the ROOT, and `/rest/v1/` is the prefix
+      // nginx-proxy rewrites away for the browser. The same fact the audit write
+      // above depends on, and for the same reason: posting to the prefixed path
+      // from inside the compose network is a 404.
+      const restUrl = (this.envValue('REST_URL') || 'http://rest:3000').replace(/\/+$/, '');
+      return { restUrl, anonKey };
+    };
+
+    this.reviewFactsCache = new ReviewFactsCache(this.room.id, source);
+    return this.reviewFactsCache;
+  }
+
+  /**
+   * The role this connection holds in the design review, or null when this
+   * deployment has no roles.
+   *
+   * Null means "judge it the way batch BB did", which is the whole of the
+   * compatibility story here: identity.mode 'none' never gets a role, so it keeps
+   * the host-only rule it has always had, down to the refusal reason it is sent.
+   *
+   * The account comes from `verifiedAccounts`, which is populated only from a
+   * token this server verified — never from a presence payload, which is why
+   * applyVerifiedIdentity deletes the `accountId` a client claimed. A connection
+   * whose token did not verify has no entry, resolves to 'guest', and may not
+   * change the models.
+   */
+  private async roleFor(connId: string): Promise<Role | null> {
+    const cache = this.reviewFactsCacheFor();
+    if (!cache) return null;
+
+    const account = this.verifiedAccounts.get(connId);
+    const senderUserId = this.connToUser.get(connId) ?? null;
+    const facts = await cache.get();
+    return roleFromFacts(facts, {
+      accountId: account?.accountId ?? null,
+      isAdmin: account?.isAdmin === true,
+      isMeetingHost: senderUserId !== null && senderUserId === this.computeHost(),
+    });
+  }
+
+  /**
+   * Whether this connection is still in the room, asked again after an await.
+   *
+   * The knock gate at the top of onMessage already answered this once, but
+   * judging a scene change on a deployment with accounts can take a round trip to
+   * the database the first time it is asked (party/reviewRoles.ts). In that window
+   * the sender can disconnect, or be sent back to the waiting room by the host.
+   * Their change must not land afterwards: an answer that was true when it was
+   * asked is not an answer that is true now, and the room's scene is the one thing
+   * here that everybody else is looking at.
+   */
+  private stillAdmitted(connId: string): boolean {
+    const userId = this.connToUser.get(connId);
+    return userId !== undefined && this.admitted.has(userId);
+  }
+
+  /**
    * Why this connection may not change the models, or null when it may.
    *
-   * The host is whoever computeHost() says — the first person in, which is the
-   * same answer the client was given by HOST_CHANGE, so the button it disabled
-   * and the refusal it gets here are the same judgement made twice rather than
-   * two different judgements that can disagree.
+   * TWO rules, and which one applies depends on whether this deployment can say
+   * who anybody is:
+   *
+   * WITHOUT accounts, batch BB's rule unchanged. The host is whoever
+   * computeHost() says — the first person in, which is the same answer the client
+   * was given by HOST_CHANGE, so the button it disabled and the refusal it gets
+   * here are the same judgement made twice rather than two different judgements
+   * that can disagree.
+   *
+   * WITH accounts, the person's role in the review replaces "the host" as the
+   * authority, because the host is only whoever happened to arrive first and a
+   * supplier's guest could be that. Owners and editors may change the models;
+   * participants and guests may not — UNLESS the review's own "who may change
+   * models" setting says otherwise, which is still the owner's choice to make and
+   * is the reason BB's 'everyone' and named-people settings keep working rather
+   * than being quietly overridden by the role.
    */
-  private sceneRefusalFor(senderUserId: string | undefined): SceneRefusalReason | null {
-    if (mayChangeModels(this.modelEditors, senderUserId ?? null, this.computeHost())) return null;
-    return this.modelEditors === 'host' ? 'host-only' : 'not-an-editor';
+  private async sceneRefusalFor(connId: string): Promise<SceneRefusalReason | null> {
+    const senderUserId = this.connToUser.get(connId);
+    const role = await this.roleFor(connId);
+
+    if (role === null) {
+      if (mayChangeModels(this.modelEditors, senderUserId ?? null, this.computeHost())) return null;
+      return this.modelEditors === 'host' ? 'host-only' : 'not-an-editor';
+    }
+
+    if (can(role, 'editReview')) return null;
+    if (this.modelEditors === 'everyone') return null;
+    if (
+      Array.isArray(this.modelEditors) &&
+      senderUserId !== undefined &&
+      this.modelEditors.includes(senderUserId)
+    ) {
+      return null;
+    }
+    return 'role-forbidden';
   }
 
   /**
@@ -696,6 +823,11 @@ export default class RoomServer implements Party.Server {
     const token = typeof raw === 'string' && raw !== '' ? raw : undefined;
     delete payload.accessToken;
     delete payload.accountId;
+    // Cleared on every presence, and only re-set below from a token that verified
+    // on THIS one: a session that expires mid-meeting must stop conferring the
+    // owner's powers on the next message, and a cached token verdict is keyed by
+    // the token string so a refresh re-verifies anyway.
+    this.verifiedAccounts.delete(connId);
 
     if (!this.identityRequired()) return null;
 
@@ -731,6 +863,13 @@ export default class RoomServer implements Party.Server {
       payload.name = verified.name;
       payload.guest = false;
       payload.accountId = verified.sub;
+      // And the role this server will judge their scene changes by. Kept here
+      // rather than on the payload: `isAdmin` is a permission, and the payload is
+      // relayed to everybody in the room.
+      this.verifiedAccounts.set(connId, {
+        accountId: verified.sub,
+        isAdmin: verified.role === 'admin',
+      });
     });
   }
 
@@ -1001,12 +1140,14 @@ export default class RoomServer implements Party.Server {
       // be written into room state, into persisted storage, and out to every
       // other connection, so a field this server has never heard of must not be
       // able to ride along.
-      const senderId = this.connToUser.get(sender.id);
-      const refusal = this.sceneRefusalFor(senderId);
+      const refusal = await this.sceneRefusalFor(sender.id);
       if (refusal) {
         this.refuseScene(sender, refusal);
         return;
       }
+      // Asked again, because judging it may have taken a round trip and the
+      // sender may no longer be in the room. See stillAdmitted.
+      if (!this.stillAdmitted(sender.id)) return;
       const update = asSceneUpdate(msg.payload);
       if (!update) {
         this.refuseScene(sender, 'unreadable-update');
@@ -1015,14 +1156,27 @@ export default class RoomServer implements Party.Server {
       this.applySceneUpdate(update, sender);
 
     } else if (msg.type === 'SET_MODEL_EDITORS') {
-      // Host-only, and a step above the scene itself: whoever may change the
-      // models decides what everybody else's import button does, so letting a
-      // non-host set it would have been letting them grant themselves the right.
+      // A step above the scene itself: whoever may change the models decides what
+      // everybody else's import button does, so letting somebody without the
+      // right set it would have been letting them grant themselves that right.
+      //
+      // WITHOUT accounts that right is the meeting host's, exactly as batch BB
+      // made it. WITH accounts it is the review OWNER's — lib/reviews/roles.ts's
+      // `setModelEditors` — because an editor who could set 'everyone' could give
+      // the whole room a power the owner had not, and the host is only whoever
+      // arrived first.
       const senderId = this.connToUser.get(sender.id);
-      if (senderId !== this.computeHost() || !this.admitted.has(senderId)) {
-        this.refuseScene(sender, 'host-only-setting');
+      const role = await this.roleFor(sender.id);
+      if (role === null) {
+        if (senderId !== this.computeHost() || !this.admitted.has(senderId)) {
+          this.refuseScene(sender, 'host-only-setting');
+          return;
+        }
+      } else if (!can(role, 'setModelEditors')) {
+        this.refuseScene(sender, 'role-forbidden-setting');
         return;
       }
+      if (!this.stillAdmitted(sender.id)) return;
       const editors = asModelEditors(msg.payload.modelEditors);
       if (!editors) {
         this.refuseScene(sender, 'unreadable-update');
@@ -1066,11 +1220,12 @@ export default class RoomServer implements Party.Server {
       // message arrived in the old shape: an un-updated client is still a client,
       // and "who may change models" would mean nothing to one that had not
       // reloaded since the setting was introduced.
-      const refusal = this.sceneRefusalFor(this.connToUser.get(sender.id));
+      const refusal = await this.sceneRefusalFor(sender.id);
       if (refusal) {
         this.refuseScene(sender, refusal);
         return;
       }
+      if (!this.stillAdmitted(sender.id)) return;
       const translated = sceneFromLegacyReference(reference);
       if (!translated) {
         this.dropModelChange('it could not be read as a model this room could fetch.');
@@ -1183,6 +1338,7 @@ export default class RoomServer implements Party.Server {
     // The connection's access token, and the verdict on it, go with it. A
     // reconnect arrives with its own token and is verified again.
     this.verifiedTokens.delete(conn.id);
+    this.verifiedAccounts.delete(conn.id);
     const userId = this.connToUser.get(conn.id);
     this.connToUser.delete(conn.id);
 

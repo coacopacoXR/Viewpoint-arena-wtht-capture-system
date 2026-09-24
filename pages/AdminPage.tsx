@@ -250,7 +250,7 @@ const AdminContent: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode })
 
   const sections: { id: Section; label: string }[] = [
     ...(mode !== 'none' ? [{ id: 'people' as Section, label: 'People' }] : []),
-    { id: 'reviews', label: 'Reviews' },
+    { id: 'reviews', label: 'Design reviews' },
     { id: 'ai', label: 'AI' },
     { id: 'labels', label: 'Labels' },
     { id: 'access', label: 'Access' },
@@ -691,12 +691,12 @@ const ReviewsSection: React.FC = () => {
   return (
     <section>
       <h2 className="text-sm font-bold font-mono text-gray-400 uppercase tracking-widest mb-4">
-        Reviews{loaded && curations.length > 0 ? ` · ${curations.length}` : ''}
+        Design reviews{loaded && curations.length > 0 ? ` · ${curations.length}` : ''}
       </h2>
       {!loaded ? (
         <p className="text-gray-600 text-xs">Loading…</p>
       ) : curations.length === 0 ? (
-        <p className="text-gray-600 text-xs">No reviews yet.</p>
+        <p className="text-gray-600 text-xs">No design reviews yet.</p>
       ) : (
         <div className="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
           {curations.map((c) => (
@@ -755,8 +755,8 @@ const LabelFieldsSection: React.FC<{ onOpen: () => void }> = ({ onOpen }) => (
       Label fields
     </h2>
     <p className="text-gray-500 text-xs leading-relaxed mb-3">
-      Configure how reviews are organised across the install. Changes apply to
-      every review immediately.
+      Configure how design reviews are organised across the install. Changes
+      apply to every design review immediately.
     </p>
     <button
       onClick={onOpen}

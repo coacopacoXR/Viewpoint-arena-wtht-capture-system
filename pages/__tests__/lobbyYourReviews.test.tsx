@@ -131,7 +131,7 @@ describe('a signed-in person on a deployment with accounts', () => {
 
     await renderLobby();
 
-    expect(screen.getByText('Your Reviews · 2')).toBeInTheDocument();
+    expect(screen.getByText('Your design reviews · 2')).toBeInTheDocument();
     expect(screen.getByText('Landing gear review')).toBeInTheDocument();
     expect(screen.getByText('Hosted')).toBeInTheDocument();
     expect(screen.getByText('today')).toBeInTheDocument();
@@ -160,9 +160,9 @@ describe('a signed-in person on a deployment with accounts', () => {
 
     await renderLobby();
 
-    const headings = screen.getAllByText(/Reviews/).map((el) => el.textContent);
-    expect(headings[0]).toMatch(/^Your Reviews/);
-    expect(headings.some((text) => text?.startsWith('Saved Reviews'))).toBe(true);
+    const headings = screen.getAllByText(/design reviews/i).map((el) => el.textContent);
+    expect(headings[0]).toMatch(/^Your design reviews/);
+    expect(headings.some((text) => text?.startsWith('Saved design reviews'))).toBe(true);
   });
 
   it('offers the same edit action for a curated review, and none for an ad-hoc one', async () => {
@@ -181,7 +181,7 @@ describe('a signed-in person on a deployment with accounts', () => {
 
     await renderLobby();
     await act(async () => {
-      screen.getByTitle('Open the review room').click();
+      screen.getByTitle('Open the room').click();
     });
 
     // enterRoom, not a bare navigate: the identity is written first, and the
@@ -199,7 +199,7 @@ describe('a signed-in person on a deployment with accounts', () => {
     await renderLobby();
 
     expect(
-      screen.getByText('Reviews you take part in will appear here.'),
+      screen.getByText('Design reviews you take part in will appear here.'),
     ).toBeInTheDocument();
   });
 
@@ -211,7 +211,7 @@ describe('a signed-in person on a deployment with accounts', () => {
 
     await renderLobby();
 
-    expect(screen.getByText('Your Reviews')).toBeInTheDocument();
+    expect(screen.getByText('Your design reviews')).toBeInTheDocument();
   });
 });
 
@@ -223,10 +223,10 @@ describe('who does not get the list', () => {
 
     await renderLobby();
 
-    expect(screen.queryByText(/Your Reviews/)).toBeNull();
+    expect(screen.queryByText(/Your design reviews/)).toBeNull();
     expect(myReviewsMock.list).not.toHaveBeenCalled();
-    // The rest of the lobby is untouched: the saved reviews are still there.
-    expect(screen.getByText(/Saved Reviews/)).toBeInTheDocument();
+    // The rest of the lobby is untouched: the saved design reviews are still there.
+    expect(screen.getByText(/Saved design reviews/)).toBeInTheDocument();
   });
 
   it('is not rendered for a guest, who has no account to key a row on', async () => {
@@ -238,7 +238,7 @@ describe('who does not get the list', () => {
 
     await renderLobby();
 
-    expect(screen.queryByText(/Your Reviews/)).toBeNull();
+    expect(screen.queryByText(/Your design reviews/)).toBeNull();
     expect(myReviewsMock.list).not.toHaveBeenCalled();
   });
 
@@ -247,7 +247,7 @@ describe('who does not get the list', () => {
 
     await renderLobby();
 
-    expect(screen.queryByText(/Your Reviews/)).toBeNull();
+    expect(screen.queryByText(/Your design reviews/)).toBeNull();
     expect(myReviewsMock.list).not.toHaveBeenCalled();
   });
 
@@ -260,7 +260,7 @@ describe('who does not get the list', () => {
 
     await renderLobby();
 
-    expect(screen.queryByText(/Your Reviews/)).toBeNull();
+    expect(screen.queryByText(/Your design reviews/)).toBeNull();
     expect(myReviewsMock.list).not.toHaveBeenCalled();
   });
 });

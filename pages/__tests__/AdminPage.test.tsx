@@ -113,7 +113,7 @@ describe('AdminPage', () => {
       });
     }));
 
-    // Reviews: empty list.
+    // Design reviews: empty list.
     const afterOrder = { limit: mockLimit };
     mockLimit.mockResolvedValue({ data: [], error: null });
     mockSelectChain.mockReturnValue({ order: mockOrder });
@@ -122,10 +122,10 @@ describe('AdminPage', () => {
     renderAdmin();
 
     await vi.waitFor(() => {
-      expect(screen.getByText('No reviews yet.')).toBeTruthy();
+      expect(screen.getByText('No design reviews yet.')).toBeTruthy();
     });
     // The sidebar shows all section names; the content area shows the
-    // selected section (Reviews by default in mode 'none').
+    // selected section (Design reviews by default in mode 'none').
     expect(screen.getByText('Labels')).toBeTruthy();
     expect(screen.getByText('Access')).toBeTruthy();
   });

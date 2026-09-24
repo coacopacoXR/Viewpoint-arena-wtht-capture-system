@@ -111,7 +111,7 @@ const LobbyPage: React.FC = () => {
   }
 
   async function handleDeleteCuration(id: string) {
-    if (!confirm('Delete this curation? It will be gone for everyone with the link.')) return;
+    if (!confirm('Delete this design review? It will be gone for everyone with the link.')) return;
     const ok = await deleteCuration(id);
     if (ok) setCurations((cs) => cs.filter((c) => c.id !== id));
   }
@@ -407,7 +407,7 @@ const LobbyPage: React.FC = () => {
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-white/5" />
                 <span className="text-[10px] font-mono uppercase tracking-widest text-gray-600">
-                  Your Reviews{myReviews && myReviews.length > 0 ? ` · ${myReviews.length}` : ''}
+                  Your design reviews{myReviews && myReviews.length > 0 ? ` · ${myReviews.length}` : ''}
                 </span>
                 <div className="flex-1 h-px bg-white/5" />
               </div>
@@ -417,7 +417,7 @@ const LobbyPage: React.FC = () => {
                 </div>
               ) : myReviews.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-white/10 px-4 py-5 text-center">
-                  <p className="text-[11px] text-gray-500">Reviews you take part in will appear here.</p>
+                  <p className="text-[11px] text-gray-500">Design reviews you take part in will appear here.</p>
                 </div>
               ) : (
               <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1 custom-scrollbar">
@@ -429,7 +429,7 @@ const LobbyPage: React.FC = () => {
                     <button
                       onClick={() => enterRoom(r.reviewId)}
                       className="w-full text-left px-3 py-2"
-                      title="Open the review room"
+                      title="Open the room"
                     >
                       <div className="flex items-center justify-between gap-2">
                         {/* An ad-hoc session has no curation and therefore no
@@ -480,13 +480,13 @@ const LobbyPage: React.FC = () => {
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-white/5" />
                 <span className="text-[10px] font-mono uppercase tracking-widest text-gray-600">
-                  Saved Reviews{curations.length > 0 ? ` · ${curations.length}` : ''}
+                  Saved design reviews{curations.length > 0 ? ` · ${curations.length}` : ''}
                 </span>
                 <div className="flex-1 h-px bg-white/5" />
               </div>
               {curations.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-white/10 px-4 py-5 text-center">
-                  <p className="text-[11px] text-gray-500">No saved reviews yet.</p>
+                  <p className="text-[11px] text-gray-500">No saved design reviews yet.</p>
                   <p className="text-[10px] text-gray-600 mt-1">
                     Click <span className="text-emerald-400">Curate a design review</span> to start one — it'll save automatically and appear here for anyone you share the link with.
                   </p>
@@ -501,10 +501,10 @@ const LobbyPage: React.FC = () => {
                     <button
                       onClick={() => resumeCuration(c.id, 'room')}
                       className="w-full text-left px-3 py-2"
-                      title="Open the review room"
+                      title="Open the room"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-white truncate">{c.title || 'Untitled review'}</span>
+                        <span className="text-xs font-bold text-white truncate">{c.title || 'Untitled design review'}</span>
                         <span className="text-[9px] font-mono text-gray-600 shrink-0">{fmtShort(c.updated_at)}</span>
                       </div>
                       <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-gray-500">

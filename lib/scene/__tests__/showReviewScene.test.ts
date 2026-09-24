@@ -1,0 +1,202 @@
+// Tests for showReviewScene — what a design review puts on screen when it is
+// opened, which since batch BC is its whole stored revision history rather than
+// only the single model its curation row names.
+//
+// docs/plan/14-rooms-models-admin-ai.md: "Opening a design review builds its
+// scene from its revisions (the latest revision of each line visible) instead of
+// only asset.modelHash — keep asset.modelHash working for reviews that have no
+// revisions yet." The second half of that sentence is the regression this file
+// spends most of its time on, because every review that exists today has no
+// revisions and must open exactly as it did before.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { RoomScene } from '../roomScene';
+import type { ModelRevision } from '../../reviews/revisionsRepo';
+
+const { state } = vi.hoisted(() => ({
+  state: {
+    scene: { models: [], builtIn: null } as RoomScene,
+    stored: [] as ModelRevision[],
+    setRoomScene: vi.fn(),
+    upsertSceneModel: vi.fn(),
+  },
+}));
+
+vi.mock('../../../store', () => ({
+  useStore: {
+    getState: () => ({
+      get scene() {
+        return state.scene;
+      },
+      setRoomScene: (scene: RoomScene) => {
+        state.scene = scene;
+        state.setRoomScene(scene);
+      },
+      upsertSceneModel: state.upsertSceneModel,
+    }),
+  },
+}));
+
+// Only the READ is faked: sceneFromRevisions is the real one, so what these tests
+// assert is the scene a history actually produces.
+vi.mock('../../reviews/revisionsRepo', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../reviews/revisionsRepo')>();
+  return {
+    ...actual,
+    listModelRevisions: vi.fn(async () => state.stored),
+  };
+});
+
+vi.mock('../../../utils/modelLoader', () => ({ parseModelFile: vi.fn() }));
+
+import { forgetReviewScene, showReviewScene } from '../showCurationModel';
+
+const HASH_A = 'a1'.repeat(32);
+const HASH_B = 'b2'.repeat(32);
+
+function revision(overrides: Partial<ModelRevision> = {}): ModelRevision {
+  return {
+    id: 'rev-1',
+    reviewId: 'review-1',
+    line: 'bracket',
+    revision: 'A',
+    hash: HASH_A,
+    fileName: 'bracket.step',
+    size: 1024,
+    notes: '',
+    uploadedBy: null,
+    uploadedByName: '',
+    createdAt: '2026-09-01T09:00:00.000Z',
+    ...overrides,
+  };
+}
+
+const ASSET = { modelType: 'imported', modelHash: HASH_A, importedFileName: 'bracket.step' };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  state.scene = { models: [], builtIn: null };
+  state.stored = [];
+  forgetReviewScene('review-1');
+  forgetReviewScene('review-2');
+});
+
+describe('showReviewScene — the fallback every existing review takes', () => {
+  it('answers false for a preset, and reads no revisions', async () => {
+    expect(await showReviewScene('review-1', { modelType: 'headphones' }, 'test')).toBe(false);
+    expect(state.setRoomScene).not.toHaveBeenCalled();
+  });
+
+  it('shows the curation model synchronously, before any read has answered', async () => {
+    // The point of doing it in two steps: the product is on screen immediately,
+    // and a slow or failing query never leaves somebody looking at an empty room.
+    const promise = showReviewScene('review-1', ASSET, 'test');
+    expect(state.scene.models).toHaveLength(1);
+    expect(state.scene.models[0].hash).toBe(HASH_A);
+    await promise;
+  });
+
+  it('leaves that one-model scene alone when the review has no stored revisions', async () => {
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(state.scene.models).toHaveLength(1);
+    expect(state.scene.models[0]).toMatchObject({ hash: HASH_A, line: 'bracket', revision: 'A', visible: true });
+    // Set once, by the synchronous half. A second setRoomScene with an identical
+    // scene would drop and re-adopt the parsed geometry for no reason.
+    expect(state.setRoomScene).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the curation model with no review id at all, and asks the database nothing', async () => {
+    await showReviewScene(null, ASSET, 'test');
+    expect(state.scene.models).toHaveLength(1);
+    expect(state.stored).toEqual([]);
+  });
+
+  it('leaves a preset review to its caller, which then sets the active model type', async () => {
+    expect(await showReviewScene('review-1', { modelType: 'bicycle' }, 'test')).toBe(false);
+    expect(await showReviewScene('review-1', undefined, 'test')).toBe(false);
+  });
+});
+
+describe('showReviewScene — a review with a history', () => {
+  beforeEach(() => {
+    state.stored = [
+      revision({ id: 'rev-1', revision: 'A', hash: HASH_A }),
+      revision({ id: 'rev-2', revision: 'B', hash: HASH_B, fileName: 'bracket-v2.step' }),
+    ];
+  });
+
+  it('opens on the newest revision, with the one it superseded still there and hidden', async () => {
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(state.scene.models).toHaveLength(2);
+    const a = state.scene.models.find((model) => model.revision === 'A');
+    const b = state.scene.models.find((model) => model.revision === 'B');
+    expect(a?.visible).toBe(false);
+    expect(b?.visible).toBe(true);
+  });
+
+  it('does not add the curation model twice when the history already holds that file', async () => {
+    await showReviewScene('review-1', ASSET, 'test');
+    expect(state.scene.models.filter((model) => model.hash === HASH_A)).toHaveLength(1);
+  });
+
+  it('keeps a curation model the history has never heard of, hidden behind what superseded it', async () => {
+    // A review created before model_revisions existed, whose first recorded
+    // upload became Rev B. Dropping the original would have left its pins
+    // floating in empty space next to the model that replaced it.
+    state.stored = [revision({ id: 'rev-2', revision: 'B', hash: HASH_B })];
+
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(state.scene.models).toHaveLength(2);
+    expect(state.scene.models.find((model) => model.hash === HASH_A)?.visible).toBe(false);
+    expect(state.scene.models.find((model) => model.hash === HASH_B)?.visible).toBe(true);
+  });
+
+  it('reads the history once per review, so a realtime echo cannot rebuild the scene over what happened since', async () => {
+    const { listModelRevisions } = await import('../../reviews/revisionsRepo');
+
+    await showReviewScene('review-1', ASSET, 'test');
+    expect(state.scene.models).toHaveLength(2);
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(1);
+
+    // Somebody compares two revisions, or the room server relays a scene of its
+    // own. setConfig runs again on the next realtime echo and must not go back to
+    // the database and put the review's opening scene back over the top of it.
+    await showReviewScene('review-1', ASSET, 'test');
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(1);
+  });
+
+  it('rebuilds again after the review has been left, so a second visit opens like the first', async () => {
+    const { listModelRevisions } = await import('../../reviews/revisionsRepo');
+
+    await showReviewScene('review-1', ASSET, 'test');
+    expect(state.scene.models).toHaveLength(2);
+
+    // Leaving the room clears the active config, which forgets the rebuild.
+    forgetReviewScene('review-1');
+    state.scene = { models: [], builtIn: null };
+
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(2);
+    expect(state.scene.models).toHaveLength(2);
+  });
+
+  it('does not replace a scene that changed while the read was in flight', async () => {
+    let release: (value: ModelRevision[]) => void = () => {};
+    const held = new Promise<ModelRevision[]>((resolve) => { release = resolve; });
+    const { listModelRevisions } = await import('../../reviews/revisionsRepo');
+    vi.mocked(listModelRevisions).mockReturnValueOnce(held);
+
+    const promise = showReviewScene('review-2', ASSET, 'test');
+    // An import lands while the query is still running.
+    state.scene = { models: [{ ...state.scene.models[0], line: 'something-else' }], builtIn: null };
+    const changed = state.scene;
+    release(state.stored);
+    await promise;
+
+    expect(state.scene).toBe(changed);
+  });
+});

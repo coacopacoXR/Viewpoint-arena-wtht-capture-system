@@ -3,7 +3,7 @@ import type { ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore
 import type { SpatialComment, Requirement } from '../types';
 import type { TeamMember } from './people';
 import { useStore } from '../store';
-import { showCurationModel } from './scene/showCurationModel';
+import { forgetReviewScene, showReviewScene } from './scene/showCurationModel';
 
 // Build a live SpatialComment from a curated pin at commit time. The comment
 // is authored by whoever presses the button (not the curator), attached to the
@@ -114,9 +114,9 @@ function syncMainRequirements(config: ReviewDraft | null) {
 // `activeModelType` from the main store, so loading a curation that
 // specifies e.g. 'bicycle' has to push that onto the main store too —
 // otherwise the room loads with whatever default (`headphones`) was
-// already there. An imported file becomes a one-model scene; see
-// lib/scene/showCurationModel, which the review setup page also calls so
-// that both paths build the same scene.
+// already there. An imported file becomes a scene holding the review's
+// models; see lib/scene/showCurationModel, which the review setup page also
+// calls so that both paths build the same scene.
 function syncMainModel(config: ReviewDraft | null) {
   if (!config) return;
   const { setActiveModelType, setModelTransform } = useStore.getState();
@@ -125,7 +125,17 @@ function syncMainModel(config: ReviewDraft | null) {
   // wrapper). Identity if none was set.
   setModelTransform(a?.transform ?? { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
   if (!a?.modelType) return;
-  if (showCurationModel(a, 'activeReviewStore')) return;
+  if (a.modelType === 'imported') {
+    // The whole review rather than only the model its curation row names: a
+    // design review that has been through three revisions opens on the third,
+    // with the first two present and hidden so Compare can still reach them
+    // (docs/plan/14 batch BC). A review with no stored revisions — every one
+    // written before model_revisions existed — gets exactly the one-model scene
+    // it got before, synchronously, because the async half of showReviewScene
+    // starts after the scene is already set and only ever adds to it.
+    void showReviewScene(config.reviewId, a, 'activeReviewStore');
+    return;
+  }
   setActiveModelType(a.modelType);
 }
 
@@ -195,6 +205,14 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
   sessionNotes: '',
 
   setConfig: (config) => {
+    const previous = get().config;
+    // Leaving a review, or moving to a different one, forgets that its scene was
+    // already rebuilt from history — so opening it again in this page session
+    // opens it properly rather than showing the single model its curation row
+    // names. See forgetReviewScene.
+    if (previous && previous.reviewId !== config?.reviewId) {
+      forgetReviewScene(previous.reviewId);
+    }
     set({
       config,
       activeViewpointIdx: Math.min(get().activeViewpointIdx, Math.max(0, (config?.viewpoints.length ?? 1) - 1)),

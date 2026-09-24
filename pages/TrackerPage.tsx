@@ -4,8 +4,12 @@ import clsx from 'clsx';
 import IntegrationsPanel from '../components/UI/IntegrationsPanel';
 import AssigneeComboBox from '../components/UI/AssigneeComboBox';
 import LabelFieldsSettings from '../components/UI/LabelFieldsSettings';
+import CardContinuityLine, { CardContinuityProvider } from '../components/UI/CardContinuity';
 import { getDisplayName } from '../lib/identity';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
+import { listAllCurations, type CurationSummary } from '../lib/curationsRepo';
+import { listModelRevisions, type ModelRevision } from '../lib/reviews/revisionsRepo';
+import { isClosed } from '../lib/trackerContinuity';
 import {
   groupSessions,
   filterSessions,
@@ -91,11 +95,61 @@ function computeStats(items: TrackerItem[]): Stats {
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
   return {
     total: items.length,
-    openRisks: items.filter(i => i.type === 'RISK' && i.status !== 'Approved' && i.status !== 'Rejected').length,
-    openActions: items.filter(i => i.type === 'ACTION' && i.status !== 'Approved' && i.status !== 'Rejected').length,
-    overdue: items.filter(i => i.due_date && i.due_date < today && i.status !== 'Approved' && i.status !== 'Rejected').length,
+    openRisks: items.filter(i => i.type === 'RISK' && !isClosed(i.status)).length,
+    openActions: items.filter(i => i.type === 'ACTION' && !isClosed(i.status)).length,
+    overdue: items.filter(i => i.due_date && i.due_date < today && !isClosed(i.status)).length,
     approvedThisWeek: items.filter(i => i.status === 'Approved' && i.updated_at >= weekAgo).length,
   };
+}
+
+// ─── Design review continuity (batch BC) ─────────────────────────────────────
+// docs/plan/14-rooms-models-admin-ai.md: a design review is the lasting thing,
+// a meeting is one dated occurrence inside it, and a card belongs to the review
+// and remembers the revision it was raised on. The three helpers below are the
+// page's side of that model; the sentences themselves are decided in
+// lib/trackerContinuity.ts, which is pure and tested on its own.
+
+/** The filter value for meetings and cards that belong to no design review. */
+export const NO_DESIGN_REVIEW = '__no_design_review__';
+
+/**
+ * The design review a card belongs to: its own, or the one its meeting was held
+ * in.
+ *
+ * The fallback is not a guess, it is the relationship the schema records — a card
+ * is raised in a meeting, and a meeting happens in a review — and it covers the
+ * card added by hand through this page's own Add Item modal, which names its
+ * session and has never written a review_id of its own. Without it, adding a card
+ * to a review's meeting would make that card disappear the moment the review was
+ * filtered for.
+ */
+function reviewOf(item: TrackerItem): string | null {
+  return item.review_id ?? item.session?.review_id ?? null;
+}
+
+/**
+ * Who a card came from, when that is worth saying.
+ *
+ * Only a card marked 'manual' gets a line, and the only thing that writes that
+ * marker is the meeting flush (lib/trackerBridge.ts) for a card a person typed in
+ * the room — batch BG's "+ Card". An agent's card says nothing here because its
+ * agent_id is already on the meeting it came from.
+ *
+ * This page's own Add Item modal does NOT write the marker, and that is deliberate
+ * rather than an oversight: the column is new in this batch, and an insert that
+ * named it would fail with 42703 on an install whose database has not had
+ * docs/supabase-schema.sql re-applied, taking the whole modal with it. So a card
+ * added here reads as an agent's — a small untruth on the card rather than a
+ * broken tracker. It cannot be fixed by falling back to agent_id either: that
+ * modal has always written the literal 'manual' into it, which is a marker and not
+ * a name, and rendering it as one would put the word "manual" where a person's
+ * name belongs. The honest fix belongs with batch BG, which owns hand-made cards
+ * end to end and knows who is signed in.
+ */
+function cardOrigin(item: TrackerItem): string | null {
+  if (item.source !== 'manual') return null;
+  const name = item.created_by_name?.trim();
+  return name ? `Added by hand · ${name}` : 'Added by hand';
 }
 
 // ─── Animated Counter ─────────────────────────────────────────────────────────
@@ -312,6 +366,7 @@ interface CardProps { item: TrackerItem; onClick: () => void; isDragging?: boole
 
 const CardContent: React.FC<{ item: TrackerItem; isDragging?: boolean }> = ({ item, isDragging }) => {
   const overdue = isOverdue(item.due_date);
+  const origin = cardOrigin(item);
   return (
     <div className={clsx(
       'bg-white rounded-xl border-l-4 border border-gray-200 p-3.5 space-y-2.5 group select-none',
@@ -322,12 +377,18 @@ const CardContent: React.FC<{ item: TrackerItem; isDragging?: boolean }> = ({ it
       <div className="flex items-center gap-1.5 flex-wrap">
         <TypeBadge type={item.type} />
         <PriorityBadge priority={item.priority} />
+        {origin && (
+          <span title={origin} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-500">
+            ✍ {item.created_by_name?.trim() || 'by hand'}
+          </span>
+        )}
       </div>
       <p className="text-sm font-semibold text-gray-900 leading-snug line-clamp-2">{item.title}</p>
       {item.description && <p className="text-[11px] text-gray-400 leading-snug line-clamp-1">{item.description}</p>}
       {item.component_reference && (
         <p className="font-mono text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded w-fit border border-gray-100">{item.component_reference}</p>
       )}
+      <CardContinuityLine item={item} />
       <div className="flex items-center justify-between pt-1 border-t border-gray-100">
         <span className="font-mono text-[10px] text-gray-400">{item.assignee ?? '—'}</span>
         {item.due_date && (
@@ -630,6 +691,7 @@ const ListView: React.FC<{ items: TrackerItem[]; onItemClick: (i: TrackerItem) =
               <td className="px-3 py-2.5 max-w-xs">
                 <span className="font-medium text-gray-900 line-clamp-1">{item.title}</span>
                 {item.component_reference && <span className="font-mono text-[10px] text-gray-400 ml-2">{item.component_reference}</span>}
+                <CardContinuityLine item={item} className="font-mono text-[10px] text-gray-500 mt-0.5" />
               </td>
               <td className="px-3 py-2.5 font-mono text-xs text-gray-500">{item.assignee ?? '—'}</td>
               <td className={clsx('px-3 py-2.5 font-mono text-xs whitespace-nowrap', isOverdue(item.due_date) ? 'text-red-500 font-bold' : 'text-gray-400')}>
@@ -802,6 +864,8 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate, onDele
         </div>
         <div className="px-6 pt-4 pb-2 border-b border-gray-100 flex-shrink-0">
           <InlineField label="" value={item.title} onSave={field('title')} placeholder="Item title…" />
+          <CardContinuityLine item={item} className="font-mono text-[11px] text-gray-500 px-2.5 pb-1" />
+          {cardOrigin(item) && <p className="font-mono text-[10px] text-gray-400 px-2.5 pb-1">{cardOrigin(item)}</p>}
         </div>
         <div className="flex gap-0 px-6 border-b border-gray-100 flex-shrink-0">
           <Tab id="details" label="Details" />
@@ -1137,11 +1201,15 @@ const SessionSidebar: React.FC<{
 
 // ─── Filter Bar ───────────────────────────────────────────────────────────────
 
-interface Filters { type: TrackerItem['type'] | 'All'; priority: TrackerItem['priority'] | 'All'; status: TrackerItem['status'] | 'All'; assignee: string | 'All'; search: string; }
+interface Filters { type: TrackerItem['type'] | 'All'; priority: TrackerItem['priority'] | 'All'; status: TrackerItem['status'] | 'All'; assignee: string | 'All'; search: string; review: string | 'All'; }
+
+/** One entry of the design-review filter: the review's id and what to call it. */
+interface ReviewOption { id: string; label: string; }
 
 interface FilterBarProps {
   filters: Filters;
   assignees: string[];
+  reviewOptions: ReviewOption[];
   onChange: (f: Filters) => void;
   onOpenPalette: () => void;
   sessions?: TrackerSession[];
@@ -1149,7 +1217,7 @@ interface FilterBarProps {
   onSelectSession?: (id: string | null) => void;
 }
 
-const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, onChange, onOpenPalette, sessions, selectedSessionId, onSelectSession }) => {
+const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, reviewOptions, onChange, onOpenPalette, sessions, selectedSessionId, onSelectSession }) => {
   const sel = 'border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-black cursor-pointer hover:border-gray-300 transition-colors';
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -1170,6 +1238,15 @@ const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, onChange, onO
         <span className="flex-1 text-left">Search…</span>
         <kbd className="font-mono text-[9px] bg-gray-100 px-1 py-0.5 rounded border border-gray-200 text-gray-400">⌘K</kbd>
       </button>
+      <select value={filters.review} onChange={e => onChange({ ...filters, review: e.target.value })} className={sel}
+        aria-label="Filter by design review" title="Show only the cards and meetings of one design review">
+        <option value="All">All design reviews</option>
+        {reviewOptions.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+        {/* Always offered, and not only when something is in it: every meeting
+            recorded before batch BC has no review, and those have to stay
+            reachable rather than becoming an unfilterable remainder. */}
+        <option value={NO_DESIGN_REVIEW}>No design review</option>
+      </select>
       <select value={filters.type} onChange={e => onChange({ ...filters, type: e.target.value as Filters['type'] })} className={sel}>
         <option value="All">All Types</option>
         {ALL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -1523,6 +1600,92 @@ const AddItemModal: React.FC<AddItemModalProps> = ({ sessions, defaultSessionId,
   );
 };
 
+// ─── Design Review Panel ─────────────────────────────────────────────────────
+
+/**
+ * One design review, as far as the tracker is concerned: what it has reviewed,
+ * when it met, and what is still open.
+ *
+ * docs/plan/14 asks the tracker to "show a room's history across revisions", and
+ * this is that history minus the 3D — which is the room's job, one click away.
+ * Revisions come from listModelRevisions, oldest first, which is the order a
+ * history reads in; meetings are this review's tracker_sessions.
+ *
+ * A review with no stored revisions says so instead of showing an empty box. On
+ * an install whose database predates model_revisions every review is in that
+ * state, and it is not an error — the meetings and the cards are all still here.
+ */
+const ReviewPanel: React.FC<{
+  reviewId: string;
+  review: CurationSummary | null;
+  revisions: ModelRevision[];
+  meetings: TrackerSession[];
+  items: TrackerItem[];
+  selectedSessionId: string | null;
+  onSelectSession: (id: string | null) => void;
+}> = ({ reviewId, review, revisions, meetings, items, selectedSessionId, onSelectSession }) => {
+  const open = items.filter(i => !isClosed(i.status)).length;
+  const heading = 'font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2';
+  const nothing = 'text-[11px] text-gray-300 font-mono italic';
+  return (
+    <div className="flex-shrink-0 px-6 py-4 bg-white border-b border-gray-100">
+      <div className="flex gap-8 flex-wrap items-start">
+        <div className="min-w-[180px] max-w-[240px]">
+          <p className={heading}>Design review</p>
+          <h2 className="text-sm font-semibold text-gray-900 leading-snug break-words">{review?.title || `Review ${reviewId.slice(0, 8)}`}</h2>
+          {review?.description && <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">{review.description}</p>}
+          <p className="font-mono text-[10px] text-gray-400 mt-2">
+            {items.length} cards · {open} open · {meetings.length} {meetings.length === 1 ? 'meeting' : 'meetings'}
+          </p>
+        </div>
+        <div className="flex-1 min-w-[240px]">
+          <p className={heading}>Revisions</p>
+          {revisions.length === 0 ? (
+            <p className={nothing}>No revisions stored for this review.</p>
+          ) : (
+            <ol className="space-y-1 max-h-28 overflow-y-auto">
+              {revisions.map(r => (
+                <li key={r.id} className="flex items-baseline gap-2 text-[11px] min-w-0">
+                  <span className="font-mono font-bold text-gray-700 flex-shrink-0">Rev {r.revision}</span>
+                  <span className="text-gray-500 truncate">{r.line}</span>
+                  {r.fileName && <span className="font-mono text-[10px] text-gray-400 truncate">{r.fileName}</span>}
+                  <span className="font-mono text-[10px] text-gray-300 ml-auto flex-shrink-0">{fmt(r.createdAt)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+        <div className="flex-1 min-w-[240px]">
+          <p className={heading}>Meetings</p>
+          {meetings.length === 0 ? (
+            <p className={nothing}>No meetings recorded in this review yet.</p>
+          ) : (
+            <ul className="space-y-0.5 max-h-28 overflow-y-auto">
+              {meetings.map(m => (
+                <li key={m.id}>
+                  <button
+                    onClick={() => onSelectSession(selectedSessionId === m.id ? null : m.id)}
+                    title={selectedSessionId === m.id ? 'Show every meeting of this review' : 'Show only this meeting'}
+                    className={clsx(
+                      'w-full text-left flex items-baseline gap-2 px-2 py-1 rounded transition-colors text-[11px]',
+                      selectedSessionId === m.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'
+                    )}
+                  >
+                    <span className="truncate flex-1">{m.title}</span>
+                    <span className="font-mono text-[10px] text-gray-400 flex-shrink-0">
+                      {fmtShort(m.ended_at)} · {items.filter(i => i.session_id === m.id).length}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 type ViewMode = 'board' | 'list' | 'matrix' | 'trends';
@@ -1538,11 +1701,18 @@ const TrackerPage: React.FC = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
-  const [filters, setFilters] = useState<Filters>({ type: 'All', priority: 'All', status: 'All', assignee: 'All', search: '' });
+  const [filters, setFilters] = useState<Filters>({ type: 'All', priority: 'All', status: 'All', assignee: 'All', search: '', review: 'All' });
   const [addItemState, setAddItemState] = useState<{ open: boolean; status: TrackerItem['status'] }>({ open: false, status: 'Open' });
   const [groupBy, setGroupBy] = useState<GroupByChoice>({ fieldIds: [] });
   const [groupFilters, setGroupFilters] = useState<GroupFilters>({});
   const [labelSettingsOpen, setLabelSettingsOpen] = useState(false);
+  // Batch BC: the design reviews a meeting or card can belong to, the revisions
+  // each of them has stored, and when each closed card was closed. All three
+  // start empty and stay empty on an install whose database predates them, which
+  // is the state the tracker already rendered.
+  const [reviews, setReviews] = useState<CurationSummary[]>([]);
+  const [revisionsByReview, setRevisionsByReview] = useState<Record<string, ModelRevision[]>>({});
+  const [closedAtByItem, setClosedAtByItem] = useState<Record<string, string>>({});
 
   // Label fields store
   const labelFields = useLabelFieldsStore((s) => s.fields);
@@ -1587,6 +1757,90 @@ const TrackerPage: React.FC = () => {
     async function init() { setLoading(true); await Promise.all([fetchSessions(), fetchItems()]); setLoading(false); }
     init();
   }, [fetchSessions, fetchItems]);
+
+  // Every design review on this install, not only the listed ones: the tracker is
+  // "every card from every design review, filterable", and a link-only review has
+  // cards too and has to be reachable from them. listAllCurations answers [] when
+  // the read fails, so the worst case is a filter with nothing in it.
+  useEffect(() => {
+    let cancelled = false;
+    listAllCurations()
+      .then(list => { if (!cancelled) setReviews(list); })
+      .catch(() => { if (!cancelled) setReviews([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // The review being looked at, when one is. 'All' and 'No design review' are
+  // filters rather than a review, and neither has a panel.
+  const selectedReviewId = filters.review === 'All' || filters.review === NO_DESIGN_REVIEW
+    ? null
+    : filters.review;
+
+  // The revision history behind the cards on screen: one read per design review
+  // that has a card pointing at a revision, plus the review being looked at,
+  // whose panel lists every revision whether or not a card names one.
+  //
+  // Driven by `raised_on_revision` rather than by "every review" on purpose. On an
+  // install whose database predates batch BC no card has one, so this effect makes
+  // no request at all and the page costs exactly what it cost before — which is
+  // what "renders the tracker exactly as it does today" has to mean in practice.
+  // A review already read is not read again, and a failure stores the empty
+  // history listModelRevisions would have answered anyway.
+  useEffect(() => {
+    const wanted: string[] = [];
+    for (const item of allItems) {
+      const reviewId = item.raised_on_revision ? reviewOf(item) : null;
+      if (reviewId && !wanted.includes(reviewId)) wanted.push(reviewId);
+    }
+    if (selectedReviewId && !wanted.includes(selectedReviewId)) wanted.push(selectedReviewId);
+    const missing = wanted.filter(id => !(id in revisionsByReview));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    Promise.all(missing.map(async id => ({ id, revisions: await listModelRevisions(id) })))
+      .then(loaded => {
+        if (cancelled) return;
+        setRevisionsByReview(prev => {
+          const next = { ...prev };
+          for (const entry of loaded) next[entry.id] = entry.revisions;
+          return next;
+        });
+      })
+      .catch(() => { /* a review whose history cannot be read has no continuity to show */ });
+    return () => { cancelled = true; };
+  }, [allItems, selectedReviewId, revisionsByReview]);
+
+  // When each closed card was closed — the other half of "Closed on Rev B · 12
+  // Mar". tracker_status_history has no revision column and this batch's schema is
+  // fixed, so the revision is derived by lining the two histories up by time in
+  // lib/trackerContinuity.ts; all this does is fetch the moments.
+  //
+  // Newest first and capped, because the cards on screen are the recent ones and a
+  // tracker with years of status changes should still answer for those. Read again
+  // whenever the items change, so dragging a card to Approved gives it its closing
+  // line without a reload. Quiet on failure: an empty table of moments only means
+  // cards say "Raised on Rev A" instead of naming the revision they closed in.
+  useEffect(() => {
+    if (!allItems.some(item => isClosed(item.status))) return;
+    let cancelled = false;
+    async function load() {
+      const { data } = await supabase
+        .from('tracker_status_history')
+        .select('item_id,created_at')
+        .in('status', ['Approved', 'Rejected'])
+        .order('created_at', { ascending: false })
+        .limit(1000);
+      if (cancelled || !data) return;
+      const newest: Record<string, string> = {};
+      for (const row of data as Array<{ item_id: string; created_at: string }>) {
+        // Descending, so the first row for an item is its most recent close — the
+        // one that counts for a card that was reopened and closed again.
+        if (!(row.item_id in newest)) newest[row.item_id] = row.created_at;
+      }
+      setClosedAtByItem(newest);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [allItems]);
 
   // Global Cmd+K
   useEffect(() => {
@@ -1639,27 +1893,62 @@ const TrackerPage: React.FC = () => {
     if (!confirm('Insert 3 demo sessions with 16 engineering items?')) return;
     setSeeding(true);
     await seedDemoData();
+    // The demo sessions belong to no design review, so seeding while one is
+    // selected would appear to do nothing at all.
+    setFilters(f => ({ ...f, review: 'All' }));
+    setSelectedSessionId(null);
     await Promise.all([fetchSessions(), fetchItems()]);
     setSeeding(false);
   }
 
   const assignees = useMemo(() => Array.from(new Set(allItems.map(i => i.assignee).filter((a): a is string => !!a))), [allItems]);
 
-  const filteredItems = useMemo(() => allItems.filter(item => {
+  // The design review filter, applied to a review id that may be null: 'All'
+  // keeps everything, NO_DESIGN_REVIEW keeps the meetings and cards that belong to
+  // no review — every one recorded before this batch, and every ad-hoc room — and
+  // anything else keeps one review's.
+  const matchesReview = useCallback((reviewId: string | null) => {
+    if (filters.review === 'All') return true;
+    if (filters.review === NO_DESIGN_REVIEW) return !reviewId;
+    return reviewId === filters.review;
+  }, [filters.review]);
+
+  // The review's cards, before the type/priority/status/assignee filters: what its
+  // panel counts and what Trends draws. Trends has always ignored the card
+  // filters, and the review is a scope rather than one of them.
+  const reviewItems = useMemo(() => allItems.filter(item => matchesReview(reviewOf(item))), [allItems, matchesReview]);
+
+  const visibleSessions = useMemo(() => sessions.filter(s => matchesReview(s.review_id ?? null)), [sessions, matchesReview]);
+
+  const filteredItems = useMemo(() => reviewItems.filter(item => {
     if (filters.type !== 'All' && item.type !== filters.type) return false;
     if (filters.priority !== 'All' && item.priority !== filters.priority) return false;
     if (filters.status !== 'All' && item.status !== filters.status) return false;
     if (filters.assignee !== 'All' && item.assignee !== filters.assignee) return false;
     return true;
-  }), [allItems, filters]);
+  }), [reviewItems, filters]);
+
+  // What the design-review filter offers. A review listAllCurations did not return
+  // — past its row limit, or deleted since the meeting was recorded — is still
+  // named here by its id, because otherwise its cards could never be filtered for.
+  const reviewOptions = useMemo<ReviewOption[]>(() => {
+    const options = reviews.map(r => ({ id: r.id, label: r.title || `Review ${r.id.slice(0, 8)}` }));
+    for (const s of sessions) {
+      const id = s.review_id;
+      if (id && !options.some(o => o.id === id)) options.push({ id, label: `Review ${id.slice(0, 8)}` });
+    }
+    return options;
+  }, [reviews, sessions]);
 
   // Grouped sessions: apply label filters, then group by chosen fields.
   const groupedSessions = useMemo(() => {
-    const filtered = filterSessions(sessions, groupFilters);
+    const filtered = filterSessions(visibleSessions, groupFilters);
     return groupSessions(filtered, groupBy.fieldIds);
-  }, [sessions, groupBy.fieldIds, groupFilters]);
+  }, [visibleSessions, groupBy.fieldIds, groupFilters]);
 
-  const stats = useMemo(() => computeStats(allItems), [allItems]);
+  const stats = useMemo(() => computeStats(reviewItems), [reviewItems]);
+
+  const continuityData = useMemo(() => ({ revisionsByReview, closedAtByItem }), [revisionsByReview, closedAtByItem]);
 
   if (loading) {
     return (
@@ -1673,137 +1962,162 @@ const TrackerPage: React.FC = () => {
   }
 
   return (
-    <div className="h-screen overflow-hidden flex flex-col bg-white" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      {/* Header */}
-      <header className="flex-shrink-0 bg-black text-white flex items-center justify-between px-6 h-12 z-30">
-        <div className="flex items-center gap-3">
-          <span className="font-mono text-sm font-bold tracking-widest uppercase select-none">Viewpoint Tracker</span>
-          {sessions.length > 0 && (
-            <span className="font-mono text-[10px] text-gray-600 border border-gray-800 rounded px-2 py-0.5">
-              {sessions.length} sessions · {allItems.length} items
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3">
-          <button onClick={handleSeed} disabled={seeding} className="font-mono text-xs text-gray-600 hover:text-gray-300 transition-colors disabled:opacity-40">
-            {seeding ? 'Seeding…' : '+ Demo Data'}
-          </button>
-          <button onClick={() => setLabelSettingsOpen(true)}
-            className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
-            <span>🏷</span> Label fields
-          </button>
-          <button onClick={() => setIntegrationsOpen(true)}
-            className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
-            <span>⚡</span> Integrations
-          </button>
-          <button onClick={() => exportToCSV(filteredItems)} disabled={filteredItems.length === 0}
-            className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors disabled:opacity-30">
-            ↓ Export CSV
-          </button>
-          <button onClick={() => navigate('/')} className="font-mono text-xs text-gray-600 hover:text-white transition-colors">← Arena</button>
-        </div>
-      </header>
-
-      {/* Stats */}
-      {allItems.length > 0 && <StatsBar stats={stats} />}
-
-      {/* Body */}
-      <div className="flex flex-1 overflow-hidden">
-        <SessionSidebar sessions={sessions} allItems={allItems} selectedSessionId={selectedSessionId}
-          onSelect={id => { setSelectedSessionId(id); setSelectedItem(null); }}
-          onDeleteSession={deleteSession}
-          onUpdateSession={updateSession}
-          groupedNodes={groupedSessions}
-          isGrouped={groupBy.fieldIds.length > 0}
-        />
-
-        <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
-          {/* Toolbar */}
-          <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3 bg-white border-b border-gray-100 flex-wrap">
-            <FilterBar filters={filters} assignees={assignees} onChange={setFilters} onOpenPalette={() => setPaletteOpen(true)} sessions={sessions} selectedSessionId={selectedSessionId} onSelectSession={id => { setSelectedSessionId(id); setSelectedItem(null); }} />
-            <button
-            onClick={() => setAddItemState({ open: true, status: 'Open' })}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white text-xs font-semibold rounded-lg hover:bg-gray-800 transition-colors ml-auto"
-          >
-            + New Item
-          </button>
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-              {(['board', 'list', 'matrix', 'trends'] as ViewMode[]).map(m => (
-                <button key={m} onClick={() => setViewMode(m)}
-                  className={clsx('px-3 py-1 text-xs font-semibold rounded-md capitalize transition-colors', viewMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-700')}>
-                  {m === 'matrix' ? '⬛ Matrix' : m === 'board' ? '🗂 Board' : m === 'list' ? '☰ List' : '📈 Trends'}
-                </button>
-              ))}
-            </div>
+    <CardContinuityProvider value={continuityData}>
+      <div className="h-screen overflow-hidden flex flex-col bg-white" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+        {/* Header */}
+        <header className="flex-shrink-0 bg-black text-white flex items-center justify-between px-6 h-12 z-30">
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-sm font-bold tracking-widest uppercase select-none">Viewpoint Tracker</span>
+            {visibleSessions.length > 0 && (
+              <span className="font-mono text-[10px] text-gray-600 border border-gray-800 rounded px-2 py-0.5">
+                {visibleSessions.length} sessions · {reviewItems.length} items
+              </span>
+            )}
           </div>
+          <div className="flex items-center gap-3">
+            <button onClick={handleSeed} disabled={seeding} className="font-mono text-xs text-gray-600 hover:text-gray-300 transition-colors disabled:opacity-40">
+              {seeding ? 'Seeding…' : '+ Demo Data'}
+            </button>
+            <button onClick={() => setLabelSettingsOpen(true)}
+              className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
+              <span>🏷</span> Label fields
+            </button>
+            <button onClick={() => setIntegrationsOpen(true)}
+              className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
+              <span>⚡</span> Integrations
+            </button>
+            <button onClick={() => exportToCSV(filteredItems)} disabled={filteredItems.length === 0}
+              className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors disabled:opacity-30">
+              ↓ Export CSV
+            </button>
+            <button onClick={() => navigate('/')} className="font-mono text-xs text-gray-600 hover:text-white transition-colors">← Arena</button>
+          </div>
+        </header>
 
-          {/* Group by bar — only visible when label fields exist */}
-          {labelFields.length > 0 && (
-            <GroupByBar
-              fields={labelFields}
-              choice={groupBy}
-              onChange={updateGroupBy}
-              filters={groupFilters}
-              onFiltersChange={updateGroupFilters}
-              sessions={sessions}
-            />
-          )}
+        {/* Stats */}
+        {reviewItems.length > 0 && <StatsBar stats={stats} />}
 
-          {/* Content */}
-          {sessions.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-6">
-              <div className="text-5xl mb-2">📋</div>
-              <p className="text-gray-500 text-sm max-w-xs leading-relaxed">No sessions yet. End a meeting to see items here, or load demo data to explore the tracker.</p>
-              <button onClick={handleSeed} disabled={seeding}
-                className="mt-2 px-5 py-2.5 bg-black text-white text-sm font-semibold rounded-xl hover:bg-gray-800 disabled:opacity-40 transition-colors">
-                {seeding ? 'Loading…' : 'Load Demo Data'}
-              </button>
+        {/* Body */}
+        <div className="flex flex-1 overflow-hidden">
+          <SessionSidebar sessions={visibleSessions} allItems={reviewItems} selectedSessionId={selectedSessionId}
+            onSelect={id => { setSelectedSessionId(id); setSelectedItem(null); }}
+            onDeleteSession={deleteSession}
+            onUpdateSession={updateSession}
+            groupedNodes={groupedSessions}
+            isGrouped={groupBy.fieldIds.length > 0}
+          />
+
+          <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+            {/* Toolbar */}
+            <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3 bg-white border-b border-gray-100 flex-wrap">
+              <FilterBar filters={filters} assignees={assignees} reviewOptions={reviewOptions}
+                onChange={f => {
+                  // Moving to another design review leaves the meeting that was
+                  // open in the last one: fetchItems scopes the board to it, and a
+                  // session the review filter hides would otherwise empty the view.
+                  if (f.review !== filters.review) { setSelectedSessionId(null); setSelectedItem(null); }
+                  setFilters(f);
+                }}
+                onOpenPalette={() => setPaletteOpen(true)} sessions={visibleSessions} selectedSessionId={selectedSessionId} onSelectSession={id => { setSelectedSessionId(id); setSelectedItem(null); }} />
+              <button
+              onClick={() => setAddItemState({ open: true, status: 'Open' })}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white text-xs font-semibold rounded-lg hover:bg-gray-800 transition-colors ml-auto"
+            >
+              + New Item
+            </button>
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                {(['board', 'list', 'matrix', 'trends'] as ViewMode[]).map(m => (
+                  <button key={m} onClick={() => setViewMode(m)}
+                    className={clsx('px-3 py-1 text-xs font-semibold rounded-md capitalize transition-colors', viewMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-700')}>
+                    {m === 'matrix' ? '⬛ Matrix' : m === 'board' ? '🗂 Board' : m === 'list' ? '☰ List' : '📈 Trends'}
+                  </button>
+                ))}
+              </div>
             </div>
-          ) : (
-            <div className="flex-1 overflow-hidden p-6">
-              {viewMode === 'board' && <BoardView items={filteredItems} onItemClick={setSelectedItem} onStatusChange={(id, s) => updateItem(id, { status: s })} onAddItem={status => setAddItemState({ open: true, status })} />}
-              {viewMode === 'list' && <ListView items={filteredItems} onItemClick={setSelectedItem} />}
-              {viewMode === 'matrix' && <RiskMatrix items={filteredItems} onItemClick={setSelectedItem} />}
-              {viewMode === 'trends' && <TrendsView sessions={sessions} allItems={allItems} />}
-            </div>
-          )}
-        </main>
+
+            {/* Group by bar — only visible when label fields exist */}
+            {labelFields.length > 0 && (
+              <GroupByBar
+                fields={labelFields}
+                choice={groupBy}
+                onChange={updateGroupBy}
+                filters={groupFilters}
+                onFiltersChange={updateGroupFilters}
+                sessions={visibleSessions}
+              />
+            )}
+
+            {/* One design review: its revisions, its meetings, and how much of it
+                is still open. The cards themselves are the board below, filtered
+                to the same review. */}
+            {selectedReviewId && (
+              <ReviewPanel
+                reviewId={selectedReviewId}
+                review={reviews.find(r => r.id === selectedReviewId) ?? null}
+                revisions={revisionsByReview[selectedReviewId] ?? []}
+                meetings={visibleSessions}
+                items={reviewItems}
+                selectedSessionId={selectedSessionId}
+                onSelectSession={id => { setSelectedSessionId(id); setSelectedItem(null); }}
+              />
+            )}
+
+            {/* Content */}
+            {sessions.length === 0 && !selectedReviewId ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-6">
+                <div className="text-5xl mb-2">📋</div>
+                <p className="text-gray-500 text-sm max-w-xs leading-relaxed">No sessions yet. End a meeting to see items here, or load demo data to explore the tracker.</p>
+                <button onClick={handleSeed} disabled={seeding}
+                  className="mt-2 px-5 py-2.5 bg-black text-white text-sm font-semibold rounded-xl hover:bg-gray-800 disabled:opacity-40 transition-colors">
+                  {seeding ? 'Loading…' : 'Load Demo Data'}
+                </button>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-hidden p-6">
+                {viewMode === 'board' && <BoardView items={filteredItems} onItemClick={setSelectedItem} onStatusChange={(id, s) => updateItem(id, { status: s })} onAddItem={status => setAddItemState({ open: true, status })} />}
+                {viewMode === 'list' && <ListView items={filteredItems} onItemClick={setSelectedItem} />}
+                {viewMode === 'matrix' && <RiskMatrix items={filteredItems} onItemClick={setSelectedItem} />}
+                {viewMode === 'trends' && <TrendsView sessions={visibleSessions} allItems={reviewItems} />}
+              </div>
+            )}
+          </main>
+        </div>
+
+        {/* Drawer */}
+        {selectedItem && <ItemDrawer item={selectedItem} onClose={() => setSelectedItem(null)} onUpdate={updateItem} onDelete={deleteItem} />}
+
+        {/* Add Item Modal */}
+        {addItemState.open && (
+          <AddItemModal
+            sessions={visibleSessions}
+            defaultSessionId={selectedSessionId}
+            defaultStatus={addItemState.status}
+            onSave={createItem}
+            onClose={() => setAddItemState({ open: false, status: 'Open' })}
+          />
+        )}
+
+        {/* Command Palette */}
+        {paletteOpen && <CommandPalette items={reviewItems} sessions={visibleSessions} onItemClick={item => { setSelectedItem(item); }} onClose={() => setPaletteOpen(false)} />}
+
+        {/* Label Fields Settings */}
+        {labelSettingsOpen && (
+          <LabelFieldsSettings
+            fields={labelFields}
+            onClose={() => setLabelSettingsOpen(false)}
+          />
+        )}
+
+        {/* Integrations Panel */}
+        {integrationsOpen && (
+          <IntegrationsPanel
+            session={visibleSessions.find(s => s.id === selectedSessionId) ?? visibleSessions[0] ?? null}
+            items={filteredItems}
+            onClose={() => setIntegrationsOpen(false)}
+          />
+        )}
       </div>
-
-      {/* Drawer */}
-      {selectedItem && <ItemDrawer item={selectedItem} onClose={() => setSelectedItem(null)} onUpdate={updateItem} onDelete={deleteItem} />}
-
-      {/* Add Item Modal */}
-      {addItemState.open && (
-        <AddItemModal
-          sessions={sessions}
-          defaultSessionId={selectedSessionId}
-          defaultStatus={addItemState.status}
-          onSave={createItem}
-          onClose={() => setAddItemState({ open: false, status: 'Open' })}
-        />
-      )}
-
-      {/* Command Palette */}
-      {paletteOpen && <CommandPalette items={allItems} sessions={sessions} onItemClick={item => { setSelectedItem(item); }} onClose={() => setPaletteOpen(false)} />}
-
-      {/* Label Fields Settings */}
-      {labelSettingsOpen && (
-        <LabelFieldsSettings
-          fields={labelFields}
-          onClose={() => setLabelSettingsOpen(false)}
-        />
-      )}
-
-      {/* Integrations Panel */}
-      {integrationsOpen && (
-        <IntegrationsPanel
-          session={sessions.find(s => s.id === selectedSessionId) ?? sessions[0] ?? null}
-          items={filteredItems}
-          onClose={() => setIntegrationsOpen(false)}
-        />
-      )}
-    </div>
+    </CardContinuityProvider>
   );
 };
 

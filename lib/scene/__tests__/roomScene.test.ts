@@ -575,6 +575,11 @@ const EVERY_REFUSAL: Record<SceneRefusalReason, true> = {
   'host-only': true,
   'not-an-editor': true,
   'host-only-setting': true,
+  // Batch BC (docs/plan/14): on a deployment with accounts the room server refuses
+  // by the person's ROLE IN THE REVIEW rather than by who arrived first, and a
+  // refusal that said "only the host can" would have pointed at the wrong thing.
+  'role-forbidden': true,
+  'role-forbidden-setting': true,
   'scene-full': true,
   'unreadable-update': true,
 };

@@ -228,7 +228,21 @@ export interface InsightCard {
   relatedPoiId?: string;
   sourceMessageIds?: string[]; // Array of IDs linking back to the conversation cluster
   details: InsightDetails;
-  
+
+  /**
+   * Who wrote this card: an agent that read the transcript, or a person in the
+   * room who typed it (docs/plan/14 batch BG). Absent means 'ai', which is what
+   * every card was before hand-made ones existed — including every card already
+   * in the tracker.
+   */
+  source?: 'ai' | 'manual';
+  /**
+   * The display name behind a hand-made card, so the tracker can say "added by
+   * Maria" instead of naming an agent. Not set on an agent's card: agentId
+   * already says who wrote it.
+   */
+  createdByName?: string;
+
   // NEW: Compliance & Historical Data
   affectedRequirementIds?: string[];
   kbRecommendations?: string[];

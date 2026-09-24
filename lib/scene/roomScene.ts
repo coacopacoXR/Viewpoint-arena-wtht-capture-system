@@ -83,11 +83,24 @@ export type SceneUpdate =
   | { op: 'setOffset'; id: string; offset: [number, number, number] }
   | { op: 'setBuiltIn'; builtIn: BuiltInModel | null };
 
-/** Why the room server turned a change down. The words a person reads live in describeSceneRefusal. */
+/**
+ * Why the room server turned a change down. The words a person reads live in describeSceneRefusal.
+ *
+ * 'host-only' and 'host-only-setting' are batch BB's answers, and they are what
+ * a deployment on identity.mode 'none' still gets — there, the meeting host is
+ * the only thing resembling an authority. The two 'role-' reasons are batch BC's:
+ * on a deployment with accounts, the room server looks up what the signed-in
+ * person is IN THIS DESIGN REVIEW (lib/reviews/roles.ts) and refuses them by
+ * role, which is a different fact with a different explanation. Telling an
+ * editor "only the host can" would have sent them looking for a host who was not
+ * the thing standing in their way.
+ */
 export type SceneRefusalReason =
   | 'host-only'
   | 'not-an-editor'
   | 'host-only-setting'
+  | 'role-forbidden'
+  | 'role-forbidden-setting'
   | 'scene-full'
   | 'unreadable-update';
 
@@ -106,6 +119,20 @@ export const MAX_SCENE_MODELS = 24;
 /** A scene with nothing in it and no built-in chosen. */
 export function emptyScene(): RoomScene {
   return { models: [], builtIn: null };
+}
+
+/**
+ * The two fields that make something "a revision of a line".
+ *
+ * A SceneModel has them, and so does a model_revisions row
+ * (lib/reviews/revisionsRepo.ts). Taking this instead of SceneModel is what lets
+ * the revision-letter arithmetic below have ONE implementation across the scene
+ * the room is showing and the history the review has stored — the two lists are
+ * not the same, and a second copy of the arithmetic would eventually disagree.
+ */
+export interface LineRevision {
+  line: string;
+  revision: string;
 }
 
 /** The label the model tree shows: "Bracket · Rev B". */
@@ -168,7 +195,7 @@ export function nextRevisionLetter(revision: string): string {
 }
 
 /** Which revision of a line is the newest. Later letters are longer, then alphabetical. */
-export function latestRevision(models: SceneModel[], line: string): string | null {
+export function latestRevision(models: readonly LineRevision[], line: string): string | null {
   let latest: string | null = null;
   for (const model of models) {
     if (model.line !== line) continue;
@@ -188,8 +215,12 @@ export function latestRevision(models: SceneModel[], line: string): string | nul
  * array: the array is in the order additions arrived, which is the same thing
  * for a room that has only ever been added to, and is not the same thing for a
  * scene restored from storage that somebody rearranged.
+ *
+ * Takes anything with a line and a revision, not only a SceneModel, because the
+ * same arithmetic decides the letter for a model_revisions row — and there the
+ * stored history is the truth rather than whatever the scene happens to hold.
  */
-export function nextRevisionFor(models: SceneModel[], line: string): string {
+export function nextRevisionFor(models: readonly LineRevision[], line: string): string {
   const latest = latestRevision(models, line);
   return latest === null ? FIRST_REVISION : nextRevisionLetter(latest);
 }
@@ -261,6 +292,12 @@ export function describeSceneRefusal(reason: SceneRefusalReason): string {
   }
   if (reason === 'host-only-setting') {
     return 'Only the host can choose who may change models.';
+  }
+  if (reason === 'role-forbidden') {
+    return 'Only the owner and the editors of this design review can change its models. Ask the owner to make you an editor.';
+  }
+  if (reason === 'role-forbidden-setting') {
+    return 'Only the owner of this design review can choose who may change its models.';
   }
   if (reason === 'scene-full') {
     return `This room is already showing ${MAX_SCENE_MODELS} models. Hide or remove one before adding another.`;

@@ -17,6 +17,27 @@ create table if not exists tracker_sessions (
 alter table tracker_sessions
   add column if not exists labels jsonb not null default '{}'::jsonb;
 
+-- Which design review this meeting belonged to, and what was on screen
+-- (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md batch BC).
+--
+-- `review_id` is review_curations.id. It is NULLABLE and there is deliberately
+-- no foreign key: a meeting held in a room nobody curated has a room_id and no
+-- curation row, and a key would refuse exactly the write that makes the tracker
+-- complete. Same reasoning as review_participants.review_id below.
+--
+-- `revision_ids` is the set of model_revisions rows that were VISIBLE when the
+-- meeting ended — "what was on screen". An array rather than one id because a
+-- review can show a product beside a mating part, and Compare shows two
+-- revisions of one line at once. Empty for a meeting with no stored revisions,
+-- which is every meeting recorded before this column existed.
+alter table tracker_sessions
+  add column if not exists review_id text;
+alter table tracker_sessions
+  add column if not exists revision_ids uuid[] not null default '{}';
+
+create index if not exists tracker_sessions_review_idx
+  on tracker_sessions (review_id, ended_at desc);
+
 -- Tracker items (one per InsightCard)
 create table if not exists tracker_items (
   id uuid primary key default gen_random_uuid(),
@@ -40,6 +61,43 @@ create table if not exists tracker_items (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- A card belongs to a design review and to the revision it was raised on
+-- (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md batch BC).
+--
+-- This is what makes the tracker able to say "raised on Rev A · still open on
+-- Rev C" instead of showing a flat list with no idea which version of the
+-- product a risk was about. `raised_on_revision` is a model_revisions.id and is
+-- nullable: a card from an ad-hoc session, from a review with no stored
+-- revisions, or from before this column existed has nothing to point at, and
+-- the tracker renders those without a revision line rather than dropping them.
+--
+-- `part_node_id` / `part_name` record the mesh a card was pointed at when it was
+-- raised, which `component_reference` almost but not quite does: that one is
+-- whatever the AI put in a free-text field, and it is only constrained to the
+-- model tree's ids when the extraction was given one. These two are what the
+-- app knew for certain.
+--
+-- `source` separates a card an agent wrote from one a person typed in the room
+-- (batch BG). 'ai' is the default so every existing row reads as an agent's,
+-- which is what it is. `created_by_name` is the display name behind a 'manual'
+-- card and stays NULL for an agent's — the agent is already named by agent_id.
+alter table tracker_items
+  add column if not exists review_id text;
+alter table tracker_items
+  add column if not exists raised_on_revision uuid;
+alter table tracker_items
+  add column if not exists part_node_id text;
+alter table tracker_items
+  add column if not exists part_name text;
+alter table tracker_items
+  add column if not exists created_by_name text;
+alter table tracker_items
+  add column if not exists source text not null default 'ai'
+    check (source in ('ai', 'manual'));
+
+create index if not exists tracker_items_review_idx on tracker_items (review_id);
+create index if not exists tracker_items_revision_idx on tracker_items (raised_on_revision);
 
 -- Comments on items
 create table if not exists tracker_comments (
@@ -154,6 +212,22 @@ alter table review_curations
 -- exactly as before. Idempotent like the other add-column blocks.
 alter table review_curations
   add column if not exists listed boolean not null default true;
+
+-- Who owns this design review, and whether it has been put away
+-- (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md batch BC).
+--
+-- `owner_id` is a GoTrue account id. NULLABLE, and NULL for every review that
+-- existed before accounts did: those were created on an install with no
+-- identity, so there is nobody to name. lib/reviews/roles.ts reads a NULL owner
+-- as "unclaimed" and treats this install's admins as owners of it, and the admin
+-- console's claim action (batch BH) is what fills the column in.
+--
+-- `archived` is the admin console's "put this away" (batch BE). Default false so
+-- every existing review keeps appearing exactly where it does today.
+alter table review_curations
+  add column if not exists owner_id uuid;
+alter table review_curations
+  add column if not exists archived boolean not null default false;
 
 create index if not exists review_curations_updated_at_idx
   on review_curations (updated_at desc);
@@ -308,6 +382,175 @@ create policy "own review participants insert" on review_participants
   for insert to authenticated with check (user_id = auth.uid());
 create policy "own review participants update" on review_participants
   for update to authenticated using (user_id = auth.uid());
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Design review members (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md
+-- batch BC). One row per SIGNED-IN account per design review, with the role that
+-- account holds in it. This is the table lib/reviews/roles.ts's resolveRole
+-- reads, and the one the room server reads to decide whether a scene change is
+-- this person's to make.
+--
+-- Distinct from review_participants, which is "the reviews I have been part of"
+-- — a record of attendance, keyed on the person, that they alone can read. This
+-- one is the review's own roster: who is allowed to do what in it, which every
+-- participant's screen has to be able to render (the People tab, the "Paco is
+-- editing the review" line in batch BH) and which the room server has to be able
+-- to read with the anon key it holds.
+--
+-- Guests are never members. There is nothing to key a row on: a guest has no
+-- account, and a row keyed on a self-asserted name would be a permission granted
+-- to whoever typed it. resolveRole answers 'guest' for them instead, which
+-- lib/reviews/roles.ts's can() keeps out of addCard and everything above it.
+--
+-- 'owner' is a role here as well as review_curations.owner_id, so the roster a
+-- screen renders and the column an ownership transfer writes cannot disagree:
+-- transferring ownership writes both.
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists review_members (
+  review_id text not null,
+  user_id uuid not null,
+  role text not null default 'participant'
+    check (role in ('owner', 'editor', 'participant')),
+  added_at timestamptz not null default now(),
+  added_by uuid,
+  primary key (review_id, user_id)
+);
+
+create index if not exists review_members_user_idx on review_members (user_id);
+
+alter table review_members enable row level security;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Model revisions (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md
+-- batch BC). Every version of every model line a design review has ever shown.
+--
+-- The FILE is not here. `hash` is the SHA-256 batch BA stored it under, and
+-- /api/models/<hash> serves the bytes; this row is the review's record that it
+-- showed that file, as that revision of that line, on that date, put there by
+-- that person. Small enough to read on every open, which is what lets a review
+-- rebuild its scene from history instead of from the single model its curation
+-- row happens to name.
+--
+-- `unique (review_id, line, revision)` is the whole point of the table: two
+-- uploads into the same review cannot both be Rev B of the bracket. The letter
+-- is computed by lib/scene/roomScene.nextRevisionFor from the line's newest, so
+-- the constraint is what catches two people importing at the same moment — the
+-- second insert fails and the importer is told to try again rather than silently
+-- overwriting the first one's history.
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists model_revisions (
+  id uuid primary key default gen_random_uuid(),
+  review_id text not null,
+  line text not null,
+  revision text not null,
+  hash text not null,
+  file_name text not null default '',
+  size bigint not null default 0,
+  notes text not null default '',
+  uploaded_by uuid,
+  uploaded_by_name text not null default '',
+  created_at timestamptz not null default now(),
+  unique (review_id, line, revision)
+);
+
+create index if not exists model_revisions_review_idx
+  on model_revisions (review_id, created_at);
+create index if not exists model_revisions_hash_idx on model_revisions (hash);
+
+alter table model_revisions enable row level security;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- RLS for the two tables above.
+--
+-- READ is open to anon and authenticated for any review, and has to be: a
+-- participant's screen renders the model tree and the People tab from these two
+-- tables, and on a deployment whose identity.mode is 'none' that screen holds
+-- only the anon key. This is also what the room server reads to work out a
+-- signed-in person's role — it has the anon key and nothing else.
+--
+-- WRITE is open too, which is the part worth saying plainly:
+--
+--   ROLE ENFORCEMENT IS IN THE APP AND IN THE ROOM SERVER, NOT HERE.
+--   lib/reviews/roles.ts decides who may add a revision, manage people or edit
+--   the review, and party/room.server.ts refuses a scene change from somebody
+--   whose role does not allow it. The database does not check any of that yet.
+--   Locking these tables down per role is a LATER HARDENING STEP, and it cannot
+--   be done by copying the policies above: it needs a SECURITY DEFINER helper
+--   that answers "what role does auth.uid() hold in this review", which only
+--   means anything on a deployment with accounts at all.
+--
+-- The reason it is open rather than denied is the same reason every other table
+-- in this file is open: a `mode: 'none'` install — the default self-hosted one —
+-- has no signed-in callers, so an auth.uid()-keyed policy would refuse the only
+-- writes that ever happen and the app would not work at all. What guards such an
+-- install is the front-door password on the origin, exactly as it does for
+-- review_curations and tracker_items.
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Membership decides who may edit a review and run its meetings, and the room
+-- server reads it with the public anon key. So it is readable by everyone but
+-- writable only narrowly: a signed-in person may add THEMSELVES as owner of a
+-- review they already own (the row ensureReviewOwner writes on creation).
+-- Adding editors and participants goes through the api with the service role
+-- (the People tab, batch BH). Open write policies here would let anyone holding
+-- the public key make themselves owner or editor of any review.
+drop policy if exists "public read review members" on review_members;
+drop policy if exists "public insert review members" on review_members;
+drop policy if exists "public update review members" on review_members;
+drop policy if exists "public delete review members" on review_members;
+drop policy if exists "owner adds themselves" on review_members;
+drop policy if exists "owner updates own row" on review_members;
+create policy "public read review members" on review_members for select using (true);
+create policy "owner adds themselves" on review_members for insert to authenticated
+  with check (
+    user_id = auth.uid() and role = 'owner'
+    and exists (select 1 from review_curations c where c.id = review_id and c.owner_id = auth.uid())
+  );
+create policy "owner updates own row" on review_members for update to authenticated
+  using (user_id = auth.uid() and role = 'owner')
+  with check (
+    user_id = auth.uid() and role = 'owner'
+    and exists (select 1 from review_curations c where c.id = review_id and c.owner_id = auth.uid())
+  );
+
+-- review_curations stays open to the anon key (a 'none' install writes it that
+-- way), so its owner_id needs its own guard: through the public API it can be
+-- set only to yourself, only while it is still empty, and never changed after.
+-- The service role and database administrators are not restricted.
+create or replace function guard_review_owner() returns trigger
+language plpgsql as $$
+begin
+  if current_user not in ('anon', 'authenticated') then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    if new.owner_id is not null and new.owner_id is distinct from auth.uid() then
+      raise exception 'a design review''s owner can only be the person creating it'
+        using errcode = '42501';
+    end if;
+  elsif new.owner_id is distinct from old.owner_id then
+    if old.owner_id is null and new.owner_id = auth.uid() then
+      return new;
+    end if;
+    raise exception 'the owner of a design review cannot be changed here'
+      using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists review_curations_guard_owner on review_curations;
+create trigger review_curations_guard_owner
+  before insert or update on review_curations
+  for each row execute function guard_review_owner();
+
+drop policy if exists "public read model revisions" on model_revisions;
+drop policy if exists "public insert model revisions" on model_revisions;
+drop policy if exists "public update model revisions" on model_revisions;
+create policy "public read model revisions"   on model_revisions for select using (true);
+create policy "public insert model revisions" on model_revisions for insert with check (true);
+create policy "public update model revisions" on model_revisions for update using (true);
+-- No delete policy: a revision is the review's history, and the admin console's
+-- "delete a revision" (batch BE) runs through the api with a service-role token,
+-- which has BYPASSRLS and does not need one.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Application settings (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md

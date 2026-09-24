@@ -3,6 +3,7 @@ import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, 
 import { Vector3 } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
 import { useReviewSetupStore } from './lib/reviewSetupStore';
+import { usePointingTimelineStore } from './lib/pointingTimelineStore';
 import type { SceneModelEntry } from './lib/scene/sceneEntries';
 import {
   applySceneUpdate,
@@ -13,6 +14,23 @@ import {
   type SceneModel,
   type SceneUpdate,
 } from './lib/scene/roomScene';
+
+/**
+ * The names of every part anybody pointed at during this meeting, by node id.
+ *
+ * Read at meeting-end rather than tracked as cards arrive, because a card's
+ * `componentReference` is a node id and the tree node's NAME is not on the card —
+ * and the pointing timeline is the one place that already holds both together.
+ * Later segments win, so a part renamed by a second model importing over the
+ * first is recorded as the room last called it.
+ */
+function pointedAtPartNames(): Record<string, string> {
+  const names: Record<string, string> = {};
+  for (const segment of usePointingTimelineStore.getState().segments) {
+    if (segment.partId && segment.partName) names[segment.partId] = segment.partName;
+  }
+  return names;
+}
 
 const INITIAL_AGENTS: AgentState[] = [
   { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: '#ff4400', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
@@ -670,6 +688,20 @@ interface AppState {
   // --- SESSION HOST ---
   sessionHostId: string | null; // Zoom-style host: first to join, controls view transitions
   setSessionHostId: (id: string | null) => void;
+
+  // --- THE DESIGN REVIEW THIS ROOM IS HOLDING ---
+  /**
+   * review_curations.id when this room was opened from a design review, and null
+   * for an ad-hoc session nobody curated.
+   *
+   * Not derived from the URL. A room id and a review id are the same STRING, but
+   * only one of them has a row behind it, and the difference is what decides
+   * whether a meeting is recorded against a review or stands alone — so it is set
+   * by pages/RoomPage.tsx at the moment it actually loads a curation, and cleared
+   * when the room unmounts.
+   */
+  activeReviewId: string | null;
+  setActiveReviewId: (id: string | null) => void;
 }
 
 
@@ -761,7 +793,7 @@ export const useStore = create<AppState>((set, get) => ({
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
   endMeeting: (ended, participantCount) => {
     if (ended) {
-      const { insightCards, agents, activeModelType, hideAgents } = get();
+      const { insightCards, agents, activeModelType, hideAgents, scene, activeReviewId } = get();
       const roomId = window.location.pathname.split('/room/')[1] ?? 'local';
       const reviewDraft = useReviewSetupStore.getState().draft;
       flushSessionToTracker({
@@ -774,6 +806,15 @@ export const useStore = create<AppState>((set, get) => ({
         participantCount: participantCount ?? (hideAgents ? 1 : agents.length),
         modelName: activeModelType ?? null,
         labels: reviewDraft?.labels ?? {},
+        // The design review this room is holding, or null for an ad-hoc session.
+        // Deliberately NOT the draft's reviewId: the draft is persisted, so a
+        // stale one from the review somebody curated an hour ago would otherwise
+        // attach this meeting to that review.
+        reviewId: activeReviewId,
+        // What was on screen, so the meeting and its cards can be recorded
+        // against revisions rather than against "the model".
+        onScreen: scene.models,
+        partNames: pointedAtPartNames(),
       });
     }
     set({ isMeetingEnded: ended, isPlaying: !ended });
@@ -1032,6 +1073,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   // --- SESSION HOST ---
   sessionHostId: null,
+
+  // --- THE DESIGN REVIEW THIS ROOM IS HOLDING ---
+  activeReviewId: null,
+  setActiveReviewId: (activeReviewId) => set({ activeReviewId }),
 
   // --- BOARDROOM MODE ---
   boardroomPendingEntry: false,

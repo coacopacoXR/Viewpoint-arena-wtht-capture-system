@@ -49,6 +49,14 @@ export type TrackerSession = {
   participant_count: number;
   model_name: string | null;
   labels: Record<string, string>;
+  // Batch BC (docs/plan/14). OPTIONAL, and not because a session may lack them:
+  // an install whose database has not re-applied docs/supabase-schema.sql since
+  // before batch BC returns rows with no such columns, and the tracker has to
+  // render those exactly as it did rather than fail on a missing field.
+  /** The design review this meeting was held in, or null for an ad-hoc room. */
+  review_id?: string | null;
+  /** model_revisions ids that were visible — "what was on screen". */
+  revision_ids?: string[] | null;
 };
 
 export type LabelField = {
@@ -80,6 +88,20 @@ export type TrackerItem = {
   tradeoff_analysis: string | null;
   created_at: string;
   updated_at: string;
+  // Batch BC (docs/plan/14). Optional for the same reason TrackerSession's are:
+  // a database that predates them returns rows without them, and a card from
+  // before them has nothing to point at. Both are rendered, neither is dropped.
+  /** The design review this card belongs to, or null for an ad-hoc session. */
+  review_id?: string | null;
+  /** model_revisions.id this card was raised on, or null when unknown. */
+  raised_on_revision?: string | null;
+  /** The mesh it was pointed at, when it was pointed at one. */
+  part_node_id?: string | null;
+  part_name?: string | null;
+  /** Who typed a hand-made card. Null for an agent's — agent_id names that one. */
+  created_by_name?: string | null;
+  /** 'manual' for a card a person typed in the room; 'ai' (or absent) otherwise. */
+  source?: 'ai' | 'manual';
   // joined
   session?: TrackerSession;
 };

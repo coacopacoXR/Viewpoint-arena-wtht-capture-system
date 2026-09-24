@@ -20,9 +20,10 @@ import { useStore } from '../store';
 import type { ModelType, Requirement } from '../types';
 import { MODEL_FILE_ACCEPT } from '../utils/modelFormats';
 import { uploadModelFile } from '../lib/modelsClient';
-import { showCurationModel } from '../lib/scene/showCurationModel';
+import { forgetReviewScene, showReviewScene } from '../lib/scene/showCurationModel';
 import { migrateCurationAsset } from '../lib/migrateCurationAsset';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, listUsedLabelValues, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
+import { ensureReviewOwner } from '../lib/reviews/membersRepo';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import { getIdentity } from '../lib/identity';
 import { useFlushingDebounce } from '../lib/useFlushingDebounce';
@@ -119,7 +120,13 @@ const ReviewSetupPage: React.FC = () => {
       }
       setHydrated(true);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Leaving this review: forget that its scene was rebuilt from history, so
+      // coming back to it in the same page session rebuilds it again. The setup
+      // page does not go through useActiveReviewStore, which clears its own.
+      forgetReviewScene(reviewId);
+    };
     // We intentionally do NOT depend on `draft` — only the route id matters here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewId, hydrateDraft, startNewDraft]);
@@ -134,6 +141,13 @@ const ReviewSetupPage: React.FC = () => {
       const res = await saveCuration(d);
       if (res.ok) lastSyncedRef.current = fp;
       setSaveState(res.ok ? 'saved' : 'error');
+      // The first save of a review by a signed-in person is its creation, so it
+      // is also where the owner is written (docs/plan/14 batch BC). It does
+      // nothing at all for a guest, for an install on identity.mode 'none', for
+      // a review that already has an owner, and — through a module-level set —
+      // more than once per review per page session, so this costs the debounce
+      // nothing on every save after the first.
+      if (res.ok) void ensureReviewOwner(d.reviewId);
     },
     800,
   );
@@ -226,12 +240,24 @@ const ReviewSetupPage: React.FC = () => {
   useEffect(() => {
     if (!modelType) return;
     // One function, shared with lib/activeReviewStore: an imported model becomes
-    // a one-model scene (and the loader in World fetches and parses it), a
+    // the review's scene (and the loader in World fetches and parses it), a
     // preset becomes the active model type. Doing it in both places is how a pin
     // placed here would end up naming a mesh the room cannot find.
-    if (showCurationModel({ modelType, modelHash, importedFileName, importedFileBase64 }, 'ReviewSetup')) return;
+    //
+    // `showReviewScene` shows the curation's own model synchronously and then,
+    // once per review, widens the scene to the revisions the review has stored —
+    // so a curator reopening a review they left on Rev C sees Rev C, with A and B
+    // hidden behind it and reachable from Compare.
+    if (modelType === 'imported') {
+      void showReviewScene(
+        reviewId,
+        { modelType, modelHash, importedFileName, importedFileBase64 },
+        'ReviewSetup',
+      );
+      return;
+    }
     setActiveModelType(modelType);
-  }, [modelType, modelHash, importedFileBase64, importedFileName, setActiveModelType]);
+  }, [modelType, modelHash, importedFileBase64, importedFileName, setActiveModelType, reviewId]);
 
   // ─── Move a legacy inline model into storage ───────────────────────────────
   // A draft this browser persisted before models were stored by hash still
@@ -651,7 +677,7 @@ const AssetTab: React.FC = () => {
               className="accent-emerald-500"
             />
             <span className="font-bold">Listed</span>
-            <span className="text-[10px] text-gray-500 ml-auto">Anyone who opens this deployment sees it in Saved Reviews.</span>
+            <span className="text-[10px] text-gray-500 ml-auto">Anyone who opens this deployment sees it in Saved design reviews.</span>
           </label>
           <label
             className={clsx(

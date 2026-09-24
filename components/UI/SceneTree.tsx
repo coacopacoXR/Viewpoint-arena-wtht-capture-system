@@ -14,6 +14,9 @@ import { parseModelFile, validateModelFile, type ModelImportResult } from '../..
 import { MODEL_FILE_ACCEPT } from '../../utils/modelFormats';
 import { MODEL_UPLOAD_NETWORK_MESSAGE, uploadModelFile } from '../../lib/modelsClient';
 import { usePresence } from '../../lib/PresenceContext';
+import { useActiveReviewStore } from '../../lib/activeReviewStore';
+import { useReviewSetupStore } from '../../lib/reviewSetupStore';
+import { recordModelRevision } from '../../lib/reviews/revisionsRepo';
 import {
     describeSceneRefusal,
     FIRST_REVISION,
@@ -542,7 +545,25 @@ const ModelEditorsControl: React.FC = () => {
 interface PendingImport {
     fileName: string;
     hash: string;
+    /** The stored size in bytes, which is what model_revisions records. */
+    size: number;
     parsed: ModelImportResult;
+}
+
+/**
+ * The design review this scene belongs to, or null.
+ *
+ * In a room the config arrived from the room server, or was seeded by the
+ * curator who walked in with the draft still in memory, and its reviewId IS the
+ * room id. On the review setup page it is the draft being edited, where there is
+ * no room at all. Null for an ad-hoc session nobody curated: there is no review
+ * to store a revision against, and the scene still works exactly as it did
+ * before model_revisions existed.
+ */
+function currentReviewId(): string | null {
+    const inRoom = useActiveReviewStore.getState().config?.reviewId;
+    if (inRoom) return inRoom;
+    return useReviewSetupStore.getState().draft?.reviewId ?? null;
 }
 
 type ImportChoice = 'revision' | 'beside' | 'replace';
@@ -724,10 +745,10 @@ const SceneTree: React.FC = () => {
         if (useStore.getState().scene.models.length === 0) {
             // Nothing in the scene, so there is nothing to ask about: it goes in
             // at the origin, which is the only place there is.
-            finishImport({ fileName: stored.fileName, hash: stored.hash, parsed }, 'beside');
+            finishImport({ fileName: stored.fileName, hash: stored.hash, size: stored.size, parsed }, 'beside');
             return;
         }
-        setPending({ fileName: stored.fileName, hash: stored.hash, parsed });
+        setPending({ fileName: stored.fileName, hash: stored.hash, size: stored.size, parsed });
     };
 
     /**
@@ -800,6 +821,31 @@ const SceneTree: React.FC = () => {
             null,
             `Imported "${imported.fileName}" as ${sceneModelLabel(model)} (${countParts(imported.parsed.sceneTree)} parts)`,
         );
+
+        // The review's own history, written beside the scene change rather than
+        // instead of it (docs/plan/14 batch BC). The scene is what the room is
+        // looking at and lives in the room server; this row is what the design
+        // review has shown, and it is what the tracker means by "raised on Rev A"
+        // a year from now.
+        //
+        // Fire and forget, and a failure is only logged: the model is on screen
+        // for everybody and works, so a bookkeeping write that did not land is
+        // not a reason to take it back. The letter comes from the scene, which is
+        // the same list the picker above showed its "Becomes Rev …" from, so the
+        // two cannot disagree — and if another browser got there first, the
+        // table's unique (review_id, line, revision) refuses this row rather than
+        // letting two files both be Rev B.
+        const reviewId = currentReviewId();
+        if (reviewId) {
+            void recordModelRevision({
+                reviewId,
+                line: model.line,
+                revision: model.revision,
+                hash: model.hash,
+                fileName: model.fileName,
+                size: imported.size,
+            });
+        }
     };
 
     const activeEntry = activeSceneModelId ? sceneEntries[activeSceneModelId] : undefined;

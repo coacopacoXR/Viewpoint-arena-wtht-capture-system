@@ -10,9 +10,10 @@
 import { useStore } from '../../store';
 import { parseModelFile } from '../../utils/modelLoader';
 import { modelFileMime } from '../../utils/modelFormats';
-import { curationScene, legacyCurationModel } from './curationScene';
+import { curationScene, curationSceneModel, legacyCurationModel } from './curationScene';
 import { sceneModelPrefix } from './roomScene';
 import { sceneModelEntry } from './sceneEntries';
+import { listModelRevisions, sceneFromRevisions } from '../reviews/revisionsRepo';
 
 /** The part of a curation's asset that decides what to show. */
 export interface CurationAssetModel {
@@ -71,5 +72,86 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
   console.warn(
     `[${logAs}] curation uses an imported model but this payload has neither its hash nor its file — keeping the current model`,
   );
+  return true;
+}
+
+// ─── The whole review, not just the model its curation names ────────────────
+
+/**
+ * Reviews this browser has already rebuilt a scene for.
+ *
+ * A guard on OPENING rather than on correctness. setConfig runs on every
+ * realtime echo and every poll of the curation row, and rebuilding the scene
+ * from history each time would pull the models somebody had just hidden or moved
+ * back to how the database says they were. Once per open is what "opening a
+ * design review" means; after that the scene belongs to the room server (in a
+ * room) and to the person using it (everywhere).
+ *
+ * Cleared by forgetReviewScene when the review is left, so opening it again in
+ * the same page session opens it properly rather than showing the single model
+ * its curation row names.
+ */
+const rebuilt = new Set<string>();
+
+/**
+ * Forget that a review's scene was rebuilt, because the review is being left.
+ *
+ * Called from lib/activeReviewStore when its config is cleared and from the review
+ * setup page on unmount. Without it, a curator who walks out of a review and back
+ * in without reloading would get the curation's single model the second time and
+ * the whole history the first — two different answers to the same question, which
+ * is exactly the kind of inconsistency this batch exists to remove.
+ */
+export function forgetReviewScene(reviewId: string | null | undefined): void {
+  if (reviewId) rebuilt.delete(reviewId);
+}
+
+/**
+ * Show a design review's models: its whole stored history if it has one, and its
+ * curation's single model if it does not.
+ *
+ * The synchronous half is `showCurationModel`, unchanged, so the product is on
+ * screen immediately and a review with no revisions behaves EXACTLY as it did
+ * before model_revisions existed. The revision read happens after, and replaces
+ * that scene only when there is a history to replace it with — and only while
+ * nobody has touched the scene in the meantime, which is what stops a slow query
+ * from undoing an import the curator made while it was running.
+ *
+ * In a room this is the opening move and not the final word: the room server owns
+ * the scene and relays SCENE_STATE once this connection is admitted, which
+ * replaces whatever is here. That is batch BB's rule and it does not change —
+ * the room is the live space, and what is on screen in it is the server's.
+ *
+ * @returns false when the asset is not an imported model, which is the caller's
+ *          cue to fall back to a preset, exactly as showCurationModel answers.
+ */
+export async function showReviewScene(
+  reviewId: string | null | undefined,
+  asset: CurationAssetModel | undefined,
+  logAs: string,
+): Promise<boolean> {
+  const shown = showCurationModel(asset, logAs);
+  if (!shown) return false;
+  if (!reviewId || rebuilt.has(reviewId)) return true;
+  rebuilt.add(reviewId);
+
+  const before = useStore.getState().scene;
+  const revisions = await listModelRevisions(reviewId);
+  if (revisions.length === 0) return true;
+
+  const state = useStore.getState();
+  // Somebody changed the scene while the read was in flight — an import, a
+  // Compare, a room server relay. Their change is the newer fact.
+  if (state.scene !== before) return true;
+
+  // The curation's own model goes in even when history has never heard of it,
+  // which is every review created before the table existed: it is the product the
+  // viewpoints and pins were placed on, and dropping it would have left them
+  // floating in empty space next to whatever was uploaded afterwards.
+  const unrecorded =
+    asset?.modelHash && asset.importedFileName
+      ? curationSceneModel(asset.modelHash, asset.importedFileName)
+      : null;
+  state.setRoomScene(sceneFromRevisions(revisions, unrecorded));
   return true;
 }

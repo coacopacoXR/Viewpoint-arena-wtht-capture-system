@@ -74,6 +74,9 @@ const RoomPage: React.FC = () => {
     const localDraft = useReviewSetupStore.getState().draft;
     if (localDraft && localDraft.reviewId === roomId) {
       useActiveReviewStore.getState().setConfig(localDraft);
+      // This room is holding a design review, not an ad-hoc session: the meeting
+      // that ends here is recorded against it (lib/trackerBridge).
+      useStore.getState().setActiveReviewId(roomId);
       return broadcastWhenReady(localDraft);
     }
 
@@ -82,6 +85,7 @@ const RoomPage: React.FC = () => {
       const remote = await loadCuration(roomId);
       if (cancelled || !remote) return;
       useActiveReviewStore.getState().setConfig(remote);
+      useStore.getState().setActiveReviewId(roomId);
       cleanup = broadcastWhenReady(remote);
     })();
     return () => { cancelled = true; cleanup?.(); };
@@ -138,7 +142,13 @@ const RoomPage: React.FC = () => {
 
   // Clear active review when leaving the room so it doesn't leak across sessions.
   useEffect(() => {
-    return () => { useActiveReviewStore.getState().setConfig(null); };
+    return () => {
+      useActiveReviewStore.getState().setConfig(null);
+      // Cleared with the config, for the same reason: a meeting ended from the
+      // lobby's demo, or from the next room this browser opens, must not be
+      // recorded against the review that was open a moment ago.
+      useStore.getState().setActiveReviewId(null);
+    };
   }, []);
 
   const webrtc = useWebRTC({

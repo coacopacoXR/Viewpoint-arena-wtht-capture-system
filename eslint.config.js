@@ -11,6 +11,11 @@ export default tseslint.config(
       ".vercel/**",
       "coverage/**",
       "*.config.{js,cjs,mjs}",
+      // Git-ignored scratch space of the delegated agents: task specs, run logs,
+      // throwaway browser scripts. Not part of the project; a local lint run
+      // must not fail on them (CI never has them).
+      ".qwen-tasks/**",
+      ".qwen/**",
     ],
   },
   ...tseslint.configs.recommended,
