@@ -834,6 +834,59 @@ It runs `03adc3c`. The Playwright scripts used for the live checks
 - **The 2 s snap-back feel.** Built and working; only use will tell if 2 s is right.
 - Pushing. The 8 commits from this session are not pushed.
 
+## Session 2026-09-24: tree highlight, CAD formats, identity
+
+The user tried the night's build ("feels pretty good") and asked for three
+things. All three are done, reviewed, verified live and committed.
+
+- `6f566aa` **Tree highlight (batch AV).** Pointing at a part now selects that
+  part in the tree, not the root.
+  - Cause: the built-in models stamped every mesh with the root id.
+  - Their trees are now built from the GLB, like imports, and the eye toggles
+    work on them for the first time.
+  - Review found three more problems:
+    - the selection glow was faded out every frame by the pointer pass (one
+      shared pass now, `lib/builtInModelGlow.ts`);
+    - the root object's id did not match the tree's root;
+    - the tree showed raw export names while the pop-up showed clean ones.
+  - Exporter wrapper groups are collapsed (`collapseSingleChildGroups`).
+- `5044df2` **Formats (batch AW).**
+  - STEP, IGES and BREP via occt-import-js, which is OpenCascade compiled to
+    WebAssembly. It runs in a worker, lazily, as a 7.6 MB separate asset; the
+    main bundle grew 7.5 kB. The licence (LGPL-2.1) is recorded in
+    `THIRD_PARTY.md`.
+  - 3MF, PLY, DAE, 3DS, VRML and AMF via three.js's own loaders.
+  - Native CAD formats get an "export as STEP" message.
+  - Importing real files in the running app found two older bugs:
+    - imports were centred with an unscaled offset, so a millimetre CAD model
+      landed off screen;
+    - compressed GLBs had no meshopt decoder.
+- **Identity (plan 13), `aa2d47b`, `9abb01c`, `8e8c4f4`.** The user decided that
+  each company chooses: none, accounts or SSO.
+  - Built on GoTrue in a compose profile, so the default install is unchanged.
+  - The sign-in page, guests, "Your reviews", and room names verified by the
+    server from the JWT.
+  - Each batch was run on the live install switched to accounts, then switched
+    back.
+  - Live testing found:
+    - the brute-force limit on `/auth/v1/token` never applied (the map was
+      keyed on `$uri`, which the rewrite had already changed);
+    - account creation had no name field.
+  - Confirmed live: no token in any of 83 WebSocket frames a guest received.
+
+**Testing notes.** Test the sign-in flow at the install's configured origin
+(`https://192.168.1.134`), not `localhost`: the Supabase URL is the LAN
+address, and from `localhost` the calls go cross-origin. The scripts are in
+`.qwen-tasks/`. `signin-live.mjs`, `myreviews-live.mjs` and `cad-live.mjs` are
+new; `wslax2/3/5.sh` in the scratchpad switched identity on and off. Running
+the `.mjs` scripts puts them in eslint's scan, so keep them lint-clean.
+
+**Left:**
+- identity's "later" row (admin role in place of the passphrase, a user list,
+  SAML registration, password-reset email);
+- an up-axis flip button for imports;
+- a validation surface on the review-setup upload.
+
 ### Resuming from a cold session
 
 Read this file top to bottom first — it is the only place the findings,
@@ -875,7 +928,7 @@ is missing against the ticket's acceptance criteria — batch O was ~90% complet
 and needed one duplicated const removed plus the one test the run never reached.
 
 **Highest-value work remaining**, roughly in order:
-1. **Plan 12 §C, identity**: blocked on the user's choice.
+1. **Identity**: done (plan 13). What is left is its "later" row.
 2. **Push** the branch (the install guide clones it from GitHub) once the user
    has looked at this session's work.
 3. **T0.1**: decided (cube at release).
