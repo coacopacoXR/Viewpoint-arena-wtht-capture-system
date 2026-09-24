@@ -63,6 +63,10 @@ const INSTALL_SH = read('install.sh');
 
 const AUTH_ENV = COMPOSE.services.auth.environment as Record<string, string>;
 const AUTH_INIT = COMPOSE.services['auth-init'];
+// Batch AZ: the room server verifies the same token GoTrue signs, and the
+// schema grows the one table that is not open to everybody.
+const PARTYKIT_ENV = COMPOSE.services.partykit.environment as Record<string, string>;
+const SCHEMA_SQL = sqlOnly(read('docs/supabase-schema.sql'));
 
 /** Pull one location block out of proxy.conf, braces and all. */
 function locationBlock(header: string): string {
@@ -568,5 +572,156 @@ describe('docker-compose.yml — a default install is unchanged', () => {
       .sort();
     expect(published).not.toContain('auth');
     expect(published).not.toContain('auth-init');
+  });
+});
+
+// ─── Batch AZ: the room server trusts signed names ──────────────────────────
+//
+// docs/plan/13-identity.md, part 3. Two things can go wrong here and both are
+// silent: a room server that is never told the mode keeps relaying typed names
+// on a deployment where those names are supposed to be proven, and a secret
+// that reaches the browser bundle stops being a secret. Neither is visible in
+// a running stack — the room works, people see each other, sign-in works — so
+// the wiring is pinned here instead.
+
+describe('docker-compose.yml — the room server and identity', () => {
+  it('tells the partykit container which mode this install has', () => {
+    // Room code runs inside workerd in that container and cannot read
+    // viewpoint.config.ts, so the mode has to travel through the environment
+    // and on through deploy/partykit-entrypoint.sh's --var.
+    expect(PARTYKIT_ENV.IDENTITY_MODE).toBe('${IDENTITY_MODE:-none}');
+  });
+
+  it('defaults to none, so an install that never set it behaves as before', () => {
+    // The failure this prevents is a room server that verifies nothing and
+    // says nothing about it on an install where the operator believes names
+    // are proven.
+    expect(PARTYKIT_ENV.IDENTITY_MODE).toMatch(/:-none\}$/);
+  });
+
+  it('gives the room server the same secret GoTrue signs with', () => {
+    // One secret, one trust boundary: the token the browser already holds is
+    // the proof, and the room server needs no call to the auth service.
+    const rest = COMPOSE.services.rest.environment as Record<string, string>;
+    expect(PARTYKIT_ENV.JWT_SECRET).toBe(AUTH_ENV.GOTRUE_JWT_SECRET);
+    expect(PARTYKIT_ENV.JWT_SECRET).toBe(rest.PGRST_JWT_SECRET);
+  });
+
+  it('keeps partykit out of the identity profile', () => {
+    // The room server runs on EVERY install, including one with no auth
+    // container at all, so it has to behave correctly with IDENTITY_MODE
+    // absent as well as with it set to 'none'.
+    expect(COMPOSE.services.partykit.profiles).toBeUndefined();
+  });
+
+  it('gives the secret no route into the client bundle', () => {
+    // The app image's build args are the only values Vite inlines into the
+    // shipped JavaScript, so nothing JWT-shaped may be one of them.
+    const appArgs = (COMPOSE.services.app.build as { args: Record<string, string> }).args;
+    expect(Object.keys(appArgs).some((name) => name.includes('JWT'))).toBe(false);
+    expect(Object.keys(appArgs).some((name) => name.includes('IDENTITY_MODE'))).toBe(false);
+  });
+});
+
+describe('install.sh — IDENTITY_MODE', () => {
+  it('writes the mode for every answer, none included', () => {
+    expect(INSTALL_SH).toMatch(/printf 'IDENTITY_MODE=%s\\n' "\$A_IDENTITY"/);
+    // Written before the case rather than inside a branch, so the 'none'
+    // answer cannot forget it and leave the container on a default nobody
+    // chose.
+    const writtenAt = INSTALL_SH.indexOf("printf 'IDENTITY_MODE=%s");
+    const caseAt = INSTALL_SH.indexOf('case "$A_IDENTITY" in', writtenAt);
+    expect(writtenAt).toBeGreaterThan(0);
+    expect(caseAt).toBeGreaterThan(writtenAt);
+  });
+
+  it('says which secret the room server verifies with, and that it is server-only', () => {
+    // The next operator to read the generated .env should not have to work out
+    // where JWT_SECRET went or wonder whether a VITE_ copy is needed.
+    expect(INSTALL_SH).toMatch(/JWT_SECRET from section 1/);
+    expect(INSTALL_SH).toMatch(/no VITE_ spelling/);
+  });
+});
+
+describe('docs/supabase-schema.sql — review_participants', () => {
+  /** The create-table statement, so assertions do not match other tables. */
+  function tableBody(): string {
+    const start = SCHEMA_SQL.indexOf('create table if not exists review_participants');
+    expect(start, 'review_participants is not created in the schema').toBeGreaterThan(-1);
+    return SCHEMA_SQL.slice(start, SCHEMA_SQL.indexOf(');', start));
+  }
+
+  /** Every create policy statement aimed at this table. */
+  function policies(): string[] {
+    return SCHEMA_SQL.match(/create policy[^;]*on review_participants[^;]*/g) ?? [];
+  }
+
+  it('creates the table idempotently, because install.sh re-applies this file', () => {
+    // The file is mounted into the database's first boot AND piped through
+    // psql -v ON_ERROR_STOP=1 on every install.sh run, so a bare CREATE would
+    // abort the whole load the second time.
+    expect(SCHEMA_SQL).toMatch(/create table if not exists review_participants \(/);
+    expect(tableBody()).not.toMatch(/create table review_participants \(/);
+    expect(tableBody()).toMatch(/primary key \(review_id, user_id\)/);
+    expect(SCHEMA_SQL).toMatch(
+      /create index if not exists review_participants_user_idx/,
+    );
+  });
+
+  it('keys the row on auth.uid() rather than on an id the client sends', () => {
+    // This is what makes the table safe to write from a browser: the column
+    // default is the caller's own authenticated id, so there is no row
+    // anybody can write for anybody else.
+    expect(tableBody()).toMatch(/user_id uuid not null default auth\.uid\(\)/);
+    expect(tableBody()).toMatch(/role text not null default 'participant'/);
+    expect(tableBody()).toMatch(/first_joined_at timestamptz not null default now\(\)/);
+    expect(tableBody()).toMatch(/last_joined_at timestamptz not null default now\(\)/);
+  });
+
+  it('turns RLS on and keys every policy on auth.uid()', () => {
+    expect(SCHEMA_SQL).toMatch(
+      /alter table review_participants enable row level security/,
+    );
+    for (const command of ['select', 'insert', 'update']) {
+      expect(policies().some((p) => p.includes(`for ${command} to authenticated`))).toBe(true);
+    }
+    // select/update compare with `using`, insert with `with check`, and all
+    // three ask the same question: is this your row?
+    expect(SCHEMA_SQL.match(/user_id = auth\.uid\(\)/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('gives the anon role no policy at all', () => {
+    // The anon key is published in the browser bundle. With RLS on and no
+    // policy for `anon`, it can read no row here — which is the point: who took
+    // part in a commercially sensitive design review is not public, and this is
+    // the one table in the schema that is not open.
+    expect(policies()).toHaveLength(3);
+    for (const policy of policies()) {
+      expect(policy).toContain('to authenticated');
+      expect(policy).not.toContain('anon');
+      expect(policy).not.toContain('public');
+      expect(policy).not.toContain('using (true)');
+    }
+    // No delete either: a participant row is a record, not something the app
+    // removes. RLS with no policy denies it.
+    expect(policies().some((p) => p.includes('for delete'))).toBe(false);
+  });
+
+  it('drops each policy before creating it, so a re-run cannot fail', () => {
+    for (const name of ['select', 'insert', 'update']) {
+      expect(SCHEMA_SQL).toContain(
+        `drop policy if exists "own review participants ${name}" on review_participants;`,
+      );
+      expect(SCHEMA_SQL).toContain(
+        `create policy "own review participants ${name}" on review_participants`,
+      );
+    }
+  });
+
+  it('has no foreign key to review_curations', () => {
+    // An ad-hoc session has a room id and no curation row. A key would refuse
+    // exactly the write that makes the lobby's list useful, so the join happens
+    // in a second query and a missing title renders as "Session <short id>".
+    expect(tableBody()).not.toMatch(/references/);
   });
 });

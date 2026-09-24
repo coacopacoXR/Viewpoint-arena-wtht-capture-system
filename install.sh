@@ -1536,6 +1536,22 @@ SECRETS
 
   env_comment ''
   env_comment '# ── 7a. Identity ───────────────────────────────────────────────────────────'
+  # The mode, in the environment as well as in viewpoint.config.ts. The room
+  # server cannot read that file — it runs inside workerd in the partykit
+  # container — so docker-compose.yml interpolates this value and
+  # deploy/partykit-entrypoint.sh passes it on as --var. Set to anything but
+  # 'none', the room server verifies the access token a signed-in browser sends
+  # with its presence and relays the name the account carries instead of the
+  # name that was typed.
+  #
+  # Written for EVERY answer, 'none' included, for the same reason the config
+  # file always carries an identity block: the running stack should record the
+  # decision rather than inherit a default nobody made.
+  printf 'IDENTITY_MODE=%s\n' "$A_IDENTITY"
+  env_comment '# The room server verifies that token with JWT_SECRET from section 1 — the same'
+  env_comment '# secret GoTrue signs it with and PostgREST and Realtime already check, so there'
+  env_comment '# is one trust boundary. It is server-only; there is deliberately no VITE_ spelling'
+  env_comment '# of it, and scripts/check-public-env.mjs fails the build if one ever appears.'
   case "$A_IDENTITY" in
     accounts)
       env_comment '# identity.mode is "accounts": people sign in with an email address and a'

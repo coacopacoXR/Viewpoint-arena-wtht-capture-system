@@ -252,6 +252,64 @@ create policy "public read audit events"   on audit_events for select using (tru
 create policy "public insert audit events" on audit_events for insert with check (true);
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Review participants (added 2026-09-24, docs/plan/13-identity.md batch AZ).
+-- "The reviews I have been part of": one row per person per room, written when
+-- a SIGNED-IN person is admitted to a room (lib/reviewParticipantsRepo.ts,
+-- called from pages/RoomPage.tsx) and read back by the lobby's "Your reviews".
+--
+-- review_id is the room id, which for a curated review IS review_curations.id.
+-- There is deliberately NO foreign key to it: an ad-hoc session has a room id
+-- and no curation row, and a key would refuse exactly the write that makes the
+-- list useful. The lobby joins by id with a second query and falls back to
+-- "Session <short id>" when there is no curation.
+--
+-- Unlike every other table here, this one is NOT open. user_id defaults to
+-- auth.uid() and each policy compares against auth.uid(), so a caller can write
+-- and read only their own rows — who took part in a commercially sensitive
+-- design review is nobody else's business, and the anon key the browser bundle
+-- carries has no auth.uid() and so can read nothing here at all. A deployment
+-- on identity.mode 'none' has no signed-in callers and never writes a row.
+--
+-- That this loads on a default install (identity profile OFF) is not an
+-- assumption: the `auth` schema, the auth.uid() helper and the `authenticated`
+-- role all come from the supabase/postgres image's own init-scripts, which
+-- docker-compose.yml documents as running BEFORE the migrations/ directory
+-- this file is mounted into. GoTrue adds tables inside `auth` at run time; it
+-- is not what provides the schema (see deploy/db/auth-init.sql, which creates
+-- nothing and only re-owns and re-grants what the image already made).
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists review_participants (
+  review_id text not null,
+  user_id uuid not null default auth.uid(),
+  role text not null default 'participant' check (role in ('host', 'participant')),
+  first_joined_at timestamptz not null default now(),
+  last_joined_at timestamptz not null default now(),
+  primary key (review_id, user_id)
+);
+
+-- The only read is "my rows, newest first", which RLS has already narrowed to
+-- one user_id.
+create index if not exists review_participants_user_idx
+  on review_participants (user_id, last_joined_at desc);
+
+alter table review_participants enable row level security;
+
+-- `authenticated` only, and no delete policy: a participant row is a record,
+-- not something the app ever removes. The update policy's USING doubles as its
+-- WITH CHECK (Postgres applies the same expression to both), so a row can be
+-- bumped — last_joined_at, or a role upgraded to 'host' — but never moved to
+-- another user_id.
+drop policy if exists "own review participants select" on review_participants;
+drop policy if exists "own review participants insert" on review_participants;
+drop policy if exists "own review participants update" on review_participants;
+create policy "own review participants select" on review_participants
+  for select to authenticated using (user_id = auth.uid());
+create policy "own review participants insert" on review_participants
+  for insert to authenticated with check (user_id = auth.uid());
+create policy "own review participants update" on review_participants
+  for update to authenticated using (user_id = auth.uid());
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Grants for the self-hosted PostgREST stack.
 --
 -- On a bundled install the deploy/db/roles.sql init script creates the anon

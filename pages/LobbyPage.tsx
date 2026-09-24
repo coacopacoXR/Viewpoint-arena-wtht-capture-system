@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase, TrackerSession } from '../lib/supabase';
 import { useIdentity, AVATAR_COLORS, UserIdentity } from '../lib/identity';
 import { signOutOfAccount } from '../lib/auth/useAuth';
+import { identityRequired, publicIdentityOf } from '../lib/auth/authRules';
+import { useConnectorConfig } from '../lib/config/ConfigContext';
 import { listRecentCurations, deleteCuration, getCurationSummary, type CurationSummary } from '../lib/curationsRepo';
+import { listMyReviews, describeLastVisit, type MyReview } from '../lib/reviewParticipantsRepo';
 import { Camera, MapPin, Layers, Play, Pencil, Trash2 } from 'lucide-react';
 
 const ROLES = ['Engineer', 'Designer', 'Systems Architect', 'Reviewer', 'Observer'];
@@ -46,6 +49,13 @@ const LobbyPage: React.FC = () => {
   const accountId = identity?.accountId ?? null;
   const isGuest = identity?.guest === true;
   const accountName = accountId ? identity?.name ?? '' : null;
+  // The deployment's identity block, not this browser's. Whether "Your reviews"
+  // exists at all is a property of the install: the list is what signing in
+  // buys you (docs/plan/13-identity.md), and on the default 'none' there is no
+  // account for a row to be keyed on.
+  const { config } = useConnectorConfig();
+  const deployment = useMemo(() => publicIdentityOf(config), [config]);
+  const showMyReviews = identityRequired(deployment) && !!accountId && !isGuest;
   const [name, setName] = useState(accountName ?? (joinRoomId ? '' : (identity?.name ?? '')));
   const [color, setColor] = useState(identity?.color ?? AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)]);
   const [role, setRole] = useState(identity?.role ?? '');
@@ -55,6 +65,10 @@ const LobbyPage: React.FC = () => {
   const [loadingStats, setLoadingStats] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [curations, setCurations] = useState<CurationSummary[]>([]);
+  // null until the rows have been read: they are fetched only for a signed-in
+  // person on a deployment with accounts, so "still loading" and "you have been
+  // in nothing yet" are different states and render differently.
+  const [myReviews, setMyReviews] = useState<MyReview[] | null>(null);
   const [invitedPreview, setInvitedPreview] = useState<CurationSummary | null | undefined>(
     joinRoomId ? undefined : null,
   );
@@ -66,6 +80,17 @@ const LobbyPage: React.FC = () => {
   useEffect(() => {
     listRecentCurations(8).then(setCurations);
   }, []);
+
+  // The reviews this account took part in. Not fetched at all unless the list
+  // is going to be shown, so a guest and a deployment on identity.mode 'none'
+  // make no request and see nothing — the table is keyed on auth.uid(), and
+  // Row Level Security answers an anon caller with no rows anyway.
+  useEffect(() => {
+    if (!showMyReviews) { setMyReviews(null); return; }
+    let cancelled = false;
+    listMyReviews().then(rows => { if (!cancelled) setMyReviews(rows); });
+    return () => { cancelled = true; };
+  }, [showMyReviews]);
 
   // If the user arrived via a room URL, fetch the curation summary so we can
   // show a preview card — they know exactly what they're walking into.
@@ -372,6 +397,85 @@ const LobbyPage: React.FC = () => {
               an account. */}
           {!isGuest && (
           <>
+          {/* Reviews this account took part in, above the saved ones: this list
+              follows the PERSON rather than the link, so a curated review they
+              joined from somebody else's URL is here and nowhere else. Only
+              rendered when the deployment has accounts and this browser is
+              signed in — see showMyReviews. */}
+          {showMyReviews && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-white/5" />
+                <span className="text-[10px] font-mono uppercase tracking-widest text-gray-600">
+                  Your Reviews{myReviews && myReviews.length > 0 ? ` · ${myReviews.length}` : ''}
+                </span>
+                <div className="flex-1 h-px bg-white/5" />
+              </div>
+              {myReviews === null ? (
+                <div className="space-y-1.5">
+                  {[1, 2].map(i => <div key={i} className="h-12 bg-white/5 rounded-xl animate-pulse" />)}
+                </div>
+              ) : myReviews.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-white/10 px-4 py-5 text-center">
+                  <p className="text-[11px] text-gray-500">Reviews you take part in will appear here.</p>
+                </div>
+              ) : (
+              <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1 custom-scrollbar">
+                {myReviews.map((r) => (
+                  <div
+                    key={r.reviewId}
+                    className="group rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-emerald-500/30 transition-colors"
+                  >
+                    <button
+                      onClick={() => enterRoom(r.reviewId)}
+                      className="w-full text-left px-3 py-2"
+                      title="Open the review room"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        {/* An ad-hoc session has no curation and therefore no
+                            title; its room id is the only name it ever had. */}
+                        <span className="text-xs font-bold text-white truncate">
+                          {r.title ?? `Session ${r.reviewId.slice(0, 8)}`}
+                        </span>
+                        <span className="text-[9px] font-mono text-gray-600 shrink-0">
+                          {describeLastVisit(r.lastJoinedAt)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-gray-500">
+                        <span>{r.role === 'host' ? 'Hosted' : 'Joined'}</span>
+                        {r.title !== null && (
+                          <span className="ml-auto text-gray-700 font-mono truncate">{r.reviewId.slice(0, 8)}</span>
+                        )}
+                      </div>
+                    </button>
+                    {/* The same two actions a saved review has, minus the
+                        delete: taking part in a review is not owning it, and
+                        somebody else's curation is not this person's to
+                        destroy from a list of meetings they attended. */}
+                    {r.title !== null && (
+                    <div className="px-3 pb-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => enterRoom(r.reviewId)}
+                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-200 text-[10px] font-bold uppercase tracking-wider transition-colors"
+                      >
+                        <Play size={10} /> Open Room
+                      </button>
+                      <button
+                        onClick={() => resumeCuration(r.reviewId, 'setup')}
+                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/15 text-gray-300 text-[10px] font-bold uppercase tracking-wider transition-colors"
+                        title="Resume editing"
+                      >
+                        <Pencil size={10} /> Edit
+                      </button>
+                    </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              )}
+            </div>
+          )}
+
           <div className="space-y-2">
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-white/5" />

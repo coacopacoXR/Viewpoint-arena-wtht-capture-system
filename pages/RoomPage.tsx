@@ -18,6 +18,7 @@ import { RecordingProvider } from '../lib/RecordingContext';
 import RemoteAudioSink from '../components/UI/RemoteAudioSink';
 import { useJoinState } from '../lib/usePartyPresence';
 import JoinWaitingRoom from '../components/UI/JoinWaitingRoom';
+import { recordJoin, joinRoleFor, type ReviewRole } from '../lib/reviewParticipantsRepo';
 
 function getMobileUserName(): string {
   try {
@@ -109,6 +110,31 @@ const RoomPage: React.FC = () => {
       unsub();
     };
   }, [roomId, sessionHostId, presence.localUserId]);
+
+  // "The reviews I have been part of" (docs/plan/13-identity.md batch AZ).
+  // Written once per room entry, and only for somebody this deployment signed
+  // in: recordJoin is the one place that knows what that means, and it does
+  // nothing at all for a guest or for an install on identity.mode 'none'. It
+  // also cannot break the room — every failure is logged and dropped there.
+  const recordedRef = useRef<{ roomId: string; role: ReviewRole } | null>(null);
+  useEffect(() => {
+    // Not before this: a person parked in the waiting room has not taken part
+    // in anything yet, and a declined one never does.
+    const role = joinRoleFor({
+      admitted: joinState === 'admitted',
+      sessionHostId,
+      localUserId: presence.localUserId,
+    });
+    if (!roomId || !role) return;
+    const recorded = recordedRef.current;
+    // Once per room entry, plus one correction: JOIN_ADMITTED reaches the
+    // client a message before HOST_CHANGE, so the first write can predate this
+    // client learning that it is the host. The upsert never downgrades a role,
+    // so the second write can only be the upgrade.
+    if (recorded?.roomId === roomId && (recorded.role === role || role !== 'host')) return;
+    recordedRef.current = { roomId, role };
+    void recordJoin(roomId, role);
+  }, [roomId, joinState, sessionHostId, presence.localUserId]);
 
   // Clear active review when leaving the room so it doesn't leak across sessions.
   useEffect(() => {

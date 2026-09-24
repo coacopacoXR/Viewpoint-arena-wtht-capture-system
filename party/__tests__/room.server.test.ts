@@ -1,7 +1,9 @@
 // Tests for room.server.ts — knock-to-join gate, RECORDING_STATE relay,
-// TRANSCRIPT_LINE speakerId stamping, and POINTING_SEGMENT relay.
+// TRANSCRIPT_LINE speakerId stamping, POINTING_SEGMENT relay, and the identity
+// layer that decides whether a presence name is proven or self-asserted.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createHmac } from 'node:crypto';
 import type * as Party from 'partykit/server';
 import RoomServer from '../room.server';
 
@@ -17,11 +19,12 @@ function fakeStorage(initial: Record<string, unknown> = {}) {
   };
 }
 
-function fakeRoom(storage = fakeStorage()): Party.Room {
+function fakeRoom(storage = fakeStorage(), env: Record<string, string> = {}): Party.Room {
   return {
     id: 'test-room',
     broadcast: vi.fn(),
     storage,
+    env,
   } as unknown as Party.Room;
 }
 
@@ -34,25 +37,40 @@ function fakeConn(id: string): FakeConnection {
   return { id, send: vi.fn() };
 }
 
-function createServer(
-  storage = fakeStorage(),
-): RoomServer & { room: { broadcast: ReturnType<typeof vi.fn>; storage: ReturnType<typeof fakeStorage> } } {
-  const room = fakeRoom(storage);
-  return new RoomServer(room) as RoomServer & {
-    room: { broadcast: ReturnType<typeof vi.fn>; storage: ReturnType<typeof fakeStorage> };
-  };
+/** The parts of the fake room a test reads back. */
+interface FakeRoomShape {
+  broadcast: ReturnType<typeof vi.fn>;
+  storage: ReturnType<typeof fakeStorage>;
+  env: Record<string, string>;
 }
 
-/** Register a connection (onConnect) and then send PRESENCE to admit it. */
+function createServer(
+  storage = fakeStorage(),
+  env: Record<string, string> = {},
+): RoomServer & { room: FakeRoomShape } {
+  const room = fakeRoom(storage, env);
+  return new RoomServer(room) as RoomServer & { room: FakeRoomShape };
+}
+
+/**
+ * Register a connection (onConnect) and then send PRESENCE to admit it.
+ *
+ * `extra` is spread into the presence payload — how the identity tests below
+ * send an accessToken without a second helper. The handler's promise is
+ * returned so a test that sent something the server has to verify can await
+ * it; a payload with no token is handled synchronously, which is why every
+ * caller that predates identity can carry on ignoring the return value.
+ */
 function admitUser(
   server: RoomServer & { room: { broadcast: ReturnType<typeof vi.fn> } },
   conn: FakeConnection,
   userId: string,
   name = 'User',
+  extra: Record<string, unknown> = {},
 ) {
   server.onConnect(conn as unknown as Party.Connection);
   conn.send.mockClear();
-  server.onMessage(
+  return server.onMessage(
     JSON.stringify({
       type: 'PRESENCE',
       payload: {
@@ -61,6 +79,7 @@ function admitUser(
         color: '#000',
         position: [0, 0, 0],
         lookAt: [0, 0, 0],
+        ...extra,
       },
     }),
     conn as unknown as Party.Connection,
@@ -68,8 +87,14 @@ function admitUser(
 }
 
 /** Send PRESENCE without prior onConnect (for testing the gate). */
-function sendPresence(server: RoomServer, conn: FakeConnection, userId: string, name = 'User') {
-  server.onMessage(
+function sendPresence(
+  server: RoomServer,
+  conn: FakeConnection,
+  userId: string,
+  name = 'User',
+  extra: Record<string, unknown> = {},
+) {
+  return server.onMessage(
     JSON.stringify({
       type: 'PRESENCE',
       payload: {
@@ -78,6 +103,7 @@ function sendPresence(server: RoomServer, conn: FakeConnection, userId: string, 
         color: '#000',
         position: [0, 0, 0],
         lookAt: [0, 0, 0],
+        ...extra,
       },
     }),
     conn as unknown as Party.Connection,
@@ -933,5 +959,315 @@ describe('room.server — admissions survive a restart', () => {
     }
     const saved = storage._data.get('admitted-user-ids') as string[] | undefined;
     if (saved) expect(saved.length).toBeLessThanOrEqual(200);
+  });
+});
+
+// ─── Identity: signed names, and the token that proves them ─────────────────
+//
+// docs/plan/13-identity.md batch AZ. A presence name is whatever the client
+// typed, so on a deployment with accounts anybody could be anybody in a design
+// review — and the tracker items, transcripts and audit rows they left behind
+// would say so. With IDENTITY_MODE set the client sends the signed-in person's
+// access token too, and the server relays the name that TOKEN carries, or
+// marks the person a guest when it cannot verify one.
+//
+// The other half of these tests is the credential itself. An access token is a
+// bearer token: a room server that relayed one would hand every participant
+// everybody else's session, so every assertion about what leaves the server is
+// also an assertion that the token is not in it.
+
+const JWT_SECRET = 'a-test-secret';
+const IDENTITY_ENV = { IDENTITY_MODE: 'accounts', JWT_SECRET };
+const ACCOUNT_ID = '6f1a2b3c-0000-4000-8000-000000000001';
+
+function base64Url(value: string): string {
+  return Buffer.from(value, 'utf8').toString('base64url');
+}
+
+/** An HS256 access token of the shape GoTrue issues, signed with node's crypto. */
+function accessToken(overrides: Record<string, unknown> = {}, secret = JWT_SECRET): string {
+  const header = base64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const claims = base64Url(
+    JSON.stringify({
+      sub: ACCOUNT_ID,
+      aud: 'authenticated',
+      role: 'authenticated',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      email: 'alex.chen@acme.example',
+      user_metadata: { full_name: 'Alex Chen' },
+      ...overrides,
+    }),
+  );
+  const signature = createHmac('sha256', secret).update(`${header}.${claims}`).digest('base64url');
+  return `${header}.${claims}.${signature}`;
+}
+
+interface Wire {
+  type: string;
+  payload: Record<string, unknown>;
+}
+
+/** Every message a connection was sent, parsed. */
+function sent(conn: FakeConnection): Wire[] {
+  return conn.send.mock.calls.map((c) => JSON.parse(c[0] as string) as Wire);
+}
+
+/** Every message the room broadcast, parsed. */
+function broadcast(server: ReturnType<typeof createServer>): Wire[] {
+  return server.room.broadcast.mock.calls.map((c) => JSON.parse(c[0] as string) as Wire);
+}
+
+/**
+ * Everything this server persisted or put on a wire, as raw strings — the
+ * surface a leaked credential could appear on.
+ */
+function persistedAndSent(
+  server: ReturnType<typeof createServer>,
+  conns: FakeConnection[],
+): string[] {
+  return [
+    ...server.room.broadcast.mock.calls.map((c) => c[0] as string),
+    ...conns.flatMap((c) => c.send.mock.calls.map((call) => call[0] as string)),
+    ...[...server.room.storage._data.values()].map((v) => JSON.stringify(v)),
+  ];
+}
+
+describe('room.server — identity on (IDENTITY_MODE=accounts)', () => {
+  it('relays the name the token carries, not the one that was typed', async () => {
+    const server = createServer(fakeStorage(), IDENTITY_ENV);
+    const hostConn = fakeConn('c-host');
+    await admitUser(server, hostConn, 'host-1', 'Alice', { accessToken: accessToken() });
+    server.joinPolicy = 'open';
+    server.room.broadcast.mockClear();
+
+    const memberConn = fakeConn('c-member');
+    await admitUser(server, memberConn, 'member-1', 'Somebody Else', {
+      accessToken: accessToken(),
+    });
+
+    const relayed = broadcast(server).filter((m) => m.type === 'PRESENCE');
+    expect(relayed).toHaveLength(1);
+    expect(relayed[0].payload).toMatchObject({
+      userId: 'member-1',
+      name: 'Alex Chen',
+      guest: false,
+      accountId: ACCOUNT_ID,
+    });
+    // What the roster hands a late joiner is the stored payload, so it has to
+    // be the verified one too.
+    expect(server.participants.get('member-1')?.name).toBe('Alex Chen');
+    expect(server.participants.get('member-1')?.guest).toBe(false);
+  });
+
+  it("shows the host the account's name in the knock prompt", async () => {
+    const server = createServer(fakeStorage(), IDENTITY_ENV);
+    const hostConn = fakeConn('c-host');
+    await admitUser(server, hostConn, 'host-1', 'Alice', { accessToken: accessToken() });
+    hostConn.send.mockClear();
+
+    const knocker = fakeConn('c-knocker');
+    await admitUser(server, knocker, 'knocker-1', 'Not Alex', { accessToken: accessToken() });
+
+    const requests = sent(hostConn).filter((m) => m.type === 'JOIN_REQUESTS').at(-1);
+    expect(requests?.payload.pending).toEqual([
+      { userId: 'knocker-1', name: 'Alex Chen', since: expect.any(Number), guest: false },
+    ]);
+  });
+
+  it('marks a forged token as a guest and drops the account it claimed', async () => {
+    const server = createServer(fakeStorage(), IDENTITY_ENV);
+    const hostConn = fakeConn('c-host');
+    await admitUser(server, hostConn, 'host-1', 'Alice', { accessToken: accessToken() });
+    server.joinPolicy = 'open';
+    server.room.broadcast.mockClear();
+
+    const forger = fakeConn('c-forger');
+    await admitUser(server, forger, 'forger-1', 'Alex Chen', {
+      // Well-formed, correctly shaped claims, signed with the wrong secret.
+      accessToken: accessToken({}, 'a-secret-only-the-forger-knows'),
+      accountId: ACCOUNT_ID,
+    });
+
+    const relayed = broadcast(server).filter((m) => m.type === 'PRESENCE');
+    expect(relayed[0].payload).toMatchObject({
+      userId: 'forger-1',
+      name: 'Alex Chen',
+      guest: true,
+    });
+    expect(relayed[0].payload).not.toHaveProperty('accountId');
+  });
+
+  it('marks an expired token as a guest', async () => {
+    const server = createServer(fakeStorage(), IDENTITY_ENV);
+    server.joinPolicy = 'open';
+    const conn = fakeConn('c-host');
+
+    await admitUser(server, conn, 'host-1', 'Alex Chen', {
+      accessToken: accessToken({ exp: Math.floor(Date.now() / 1000) - 60 }),
+    });
+
+    expect(server.participants.get('host-1')?.guest).toBe(true);
+  });
+
+  it('marks a client that sent no token at all as a guest', async () => {
+    const server = createServer(fakeStorage(), IDENTITY_ENV);
+    server.joinPolicy = 'open';
+    const conn = fakeConn('c-host');
+
+    // The shape a pre-identity client, or a guest on a deployment that allows
+    // them, still sends.
+    await admitUser(server, conn, 'host-1', 'Supplier Sam', { guest: true });
+
+    expect(server.participants.get('host-1')?.guest).toBe(true);
+    expect(server.participants.get('host-1')?.name).toBe('Supplier Sam');
+  });
+
+  it('fails closed, once, when identity is on but no secret was passed', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const server = createServer(fakeStorage(), { IDENTITY_MODE: 'accounts' });
+    server.joinPolicy = 'open';
+    const conn = fakeConn('c-host');
+
+    await admitUser(server, conn, 'host-1', 'Alex Chen', { accessToken: accessToken() });
+    await sendPresence(server, conn, 'host-1', 'Alex Chen', { accessToken: accessToken() });
+
+    expect(server.participants.get('host-1')?.guest).toBe(true);
+    expect(log.mock.calls.filter((c) => String(c[0]).includes('[identity]'))).toHaveLength(1);
+    log.mockRestore();
+  });
+
+  it('never lets a token reach another client, the roster or storage', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage, IDENTITY_ENV);
+    const tokens = [
+      accessToken({ sub: `${ACCOUNT_ID}` }),
+      accessToken({ sub: '6f1a2b3c-0000-4000-8000-000000000002' }),
+      accessToken({ sub: '6f1a2b3c-0000-4000-8000-000000000003' }),
+    ];
+
+    const hostConn = fakeConn('c-host');
+    await admitUser(server, hostConn, 'host-1', 'Alice', { accessToken: tokens[0] });
+    server.joinPolicy = 'open';
+    const memberConn = fakeConn('c-member');
+    await admitUser(server, memberConn, 'member-1', 'Alex', { accessToken: tokens[1] });
+    // A late joiner is handed the whole room state, ROSTER included.
+    const lateConn = fakeConn('c-late');
+    await admitUser(server, lateConn, 'late-1', 'Late', { accessToken: tokens[2] });
+
+    const wires = persistedAndSent(server, [hostConn, memberConn, lateConn]);
+    expect(wires.length).toBeGreaterThan(0);
+    for (const wire of wires) {
+      for (const token of tokens) expect(wire).not.toContain(token);
+      expect(wire).not.toContain('accessToken');
+    }
+
+    // What the room keeps between restarts is ids, and nothing else.
+    expect([...storage._data.keys()]).toEqual(['admitted-user-ids']);
+    expect(storage._data.get('admitted-user-ids')).toEqual(['host-1', 'member-1', 'late-1']);
+
+    // And the roster a late joiner received carries names and account ids.
+    const roster = sent(lateConn)
+      .filter((m) => m.type === 'ROSTER')
+      .at(-1);
+    expect(roster?.payload).toBeDefined();
+    expect(JSON.stringify(roster?.payload)).not.toContain('accessToken');
+  });
+
+  it('verifies a token once per connection, not once per presence frame', async () => {
+    // Presence is sent about ten times a second. Re-checking each frame would
+    // be an HMAC per frame per participant, for an answer that changes when the
+    // token does — an hour apart, when supabase-js refreshes the session.
+    const sign = vi.spyOn(crypto.subtle, 'sign');
+    const server = createServer(fakeStorage(), IDENTITY_ENV);
+    const conn = fakeConn('c-host');
+    const token = accessToken();
+
+    await admitUser(server, conn, 'host-1', 'Alice', { accessToken: token });
+    expect(sign).toHaveBeenCalledTimes(1);
+
+    await sendPresence(server, conn, 'host-1', 'Alice', { accessToken: token });
+    await sendPresence(server, conn, 'host-1', 'Alice', { accessToken: token });
+    expect(sign).toHaveBeenCalledTimes(1);
+
+    // A refreshed session is a different string, so it is checked again — and
+    // a token that has stopped being valid stops being trusted.
+    await sendPresence(server, conn, 'host-1', 'Alice', {
+      accessToken: accessToken({ exp: Math.floor(Date.now() / 1000) - 1 }),
+    });
+    expect(sign).toHaveBeenCalledTimes(2);
+    expect(server.participants.get('host-1')?.guest).toBe(true);
+
+    sign.mockRestore();
+  });
+});
+
+describe('room.server — identity off (the default install)', () => {
+  it('relays a presence exactly as it arrived, apart from what it strips', async () => {
+    // No IDENTITY_MODE anywhere: not in room.env, not in process.env. This is
+    // every install made before identity existed, and the behaviour it must
+    // keep is that the server has no opinion about who anybody is.
+    const server = createServer(fakeStorage());
+    const hostConn = fakeConn('c-host');
+    await admitUser(server, hostConn, 'host-1', 'Alice');
+    server.joinPolicy = 'open';
+    server.room.broadcast.mockClear();
+
+    const token = accessToken();
+    const memberConn = fakeConn('c-member');
+    await admitUser(server, memberConn, 'member-1', 'Whoever I Say', {
+      accessToken: token,
+      guest: true,
+    });
+
+    const relayed = broadcast(server).filter((m) => m.type === 'PRESENCE');
+    expect(relayed[0].payload).toMatchObject({
+      userId: 'member-1',
+      name: 'Whoever I Say',
+      guest: true,
+    });
+    expect(relayed[0].payload).not.toHaveProperty('accessToken');
+    expect(server.room.broadcast.mock.calls[0][0]).not.toContain(token);
+  });
+
+  it('treats an explicit IDENTITY_MODE=none the same way', async () => {
+    // What docker-compose.yml writes for a default install: the variable is
+    // there, and set to the value that means "do not verify anything".
+    const server = createServer(fakeStorage(), { IDENTITY_MODE: 'none', JWT_SECRET });
+    server.joinPolicy = 'open';
+    const conn = fakeConn('c-host');
+
+    await admitUser(server, conn, 'host-1', 'Alice', { accessToken: accessToken() });
+
+    expect(server.participants.get('host-1')?.name).toBe('Alice');
+    // Not marked as a guest: with identity off there is no such thing as one,
+    // and a name stays as self-asserted as it has always been.
+    expect(server.participants.get('host-1')?.guest).toBeUndefined();
+  });
+
+  it('drops an account id a client claimed for itself, in every mode', async () => {
+    // accountId is stamped by the server from a token it verified. A
+    // deployment with identity off has verified nothing, so it relays nothing:
+    // the field is either proven or absent, never asserted.
+    const server = createServer(fakeStorage());
+    server.joinPolicy = 'open';
+    const conn = fakeConn('c-host');
+
+    await admitUser(server, conn, 'host-1', 'Alice', { accountId: ACCOUNT_ID });
+
+    expect(server.participants.get('host-1')?.accountId).toBeUndefined();
+  });
+
+  it('is synchronous, so a room with identity off is not slowed by it', () => {
+    // applyVerifiedIdentity returns null rather than a resolved promise when
+    // there is nothing to check, because awaiting one still defers the rest of
+    // the handler by a microtask. A test that asserts immediately after
+    // onMessage — the way every test above the identity section does — only
+    // passes if the whole handler ran during the call.
+    const server = createServer(fakeStorage());
+    const conn = fakeConn('c-host');
+    admitUser(server, conn, 'host-1', 'Alice');
+
+    expect(server.admitted.has('host-1')).toBe(true);
+    expect(server.participants.has('host-1')).toBe(true);
   });
 });

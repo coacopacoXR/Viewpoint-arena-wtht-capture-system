@@ -28,6 +28,30 @@ if [ -n "$REST_URL" ]; then
   args="$args --var REST_URL=$REST_URL"
 fi
 
+# Identity (docs/plan/13-identity.md batch AZ). With IDENTITY_MODE set to
+# anything but 'none', the room server verifies the access token a signed-in
+# browser sends with its presence and relays the name the ACCOUNT carries
+# instead of the name that was typed. JWT_SECRET is the value GoTrue signed
+# that token with — the same secret PostgREST and Realtime already verify, so
+# there is one trust boundary and no glue code.
+#
+# Passed only when set, like the two above, so an install that configured
+# neither gets the room server's own 'none' behaviour rather than an empty
+# value that looks configured.
+#
+# This does put a secret in the container's process arguments, which is visible
+# to anything that can already read this container's process list. There is no
+# alternative: room code runs in workerd, which inherits nothing from here. The
+# container publishes no port, and the value it is given is the same JWT_SECRET
+# every other service in the stack already holds.
+if [ -n "$IDENTITY_MODE" ]; then
+  args="$args --var IDENTITY_MODE=$IDENTITY_MODE"
+fi
+
+if [ -n "$JWT_SECRET" ]; then
+  args="$args --var JWT_SECRET=$JWT_SECRET"
+fi
+
 # Unquoted on purpose: $args is a list of flags, not one argument. The values
 # it carries (a JWT, a URL) contain no whitespace.
 # shellcheck disable=SC2086

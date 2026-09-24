@@ -1,6 +1,7 @@
 import type * as Party from 'partykit/server';
 import type { InsightCard, SpatialComment, LiveChatMessage, XRParticipantData } from '../types';
 import type { ReviewDraft } from '../lib/reviewSetupStore';
+import { verifyAccessToken, type VerifiedAccount } from './verifyJwt';
 
 export type WebRTCSignalData =
   | { type: 'offer'; sdp: RTCSessionDescriptionInit }
@@ -25,6 +26,19 @@ export interface ParticipantPresence {
   // items, audit rows, transcripts). Optional: an older client sends nothing,
   // which reads as "not a guest" — the only answer possible before identity.
   guest?: boolean;
+  // The signed-in person's access token, sent by the client on the way IN and
+  // deleted by the server before this payload is stored, queued, relayed or
+  // persisted — see applyVerifiedIdentity. It is a bearer credential: anybody
+  // who received it could be that person everywhere in the app, so no code path
+  // may put it back on the wire. Optional, and never sent at all by a client on
+  // a deployment whose identity.mode is 'none'.
+  accessToken?: string;
+  // The account behind this presence, stamped by the server from a token it
+  // verified — the same id RLS's auth.uid() answers for that person. Never
+  // taken from a client: a payload that arrives carrying one without a valid
+  // token has it removed, so what another client reads here is either proven or
+  // absent.
+  accountId?: string;
 }
 
 type RoomMessage =
@@ -118,6 +132,21 @@ export default class RoomServer implements Party.Server {
   // Whether we have already logged that audit is not configured (ANON_KEY
   // empty). Logged once per server instance, not per admission.
   private auditNotConfiguredLogged = false;
+  // Verified access tokens, per connection: the token string that was checked
+  // and the promise that check produced. Presence arrives about ten times a
+  // second and the answer only changes when the token does (a refresh, an hour
+  // apart), so checking every frame would be an HMAC per frame per participant
+  // for nothing. The PROMISE is what is cached, so two frames that arrive while
+  // the first check is still in flight share one verification instead of
+  // starting a second. Dropped in onClose: a closed connection's credential has
+  // no business staying in memory.
+  private verifiedTokens = new Map<
+    string,
+    { token: string; result: Promise<VerifiedAccount | null> }
+  >();
+  // Whether we have already logged that identity is switched on but cannot be
+  // verified (JWT_SECRET empty). Once per server instance, like the audit line.
+  private identityNotConfiguredLogged = false;
 
   constructor(readonly room: Party.Room) {}
 
@@ -306,12 +335,7 @@ export default class RoomServer implements Party.Server {
       detail?: string;
     },
   ): void {
-    // `room.env`, not `process.env`: room code runs inside workerd, which does
-    // not inherit the container's environment. PartyKit puts `--var` values
-    // here (deploy/partykit-entrypoint.sh passes them). process.env stays as a
-    // fallback for tests and for any runtime that does populate it.
-    const env = (this.room as unknown as { env?: Record<string, string | undefined> }).env ?? {};
-    const anonKey = env.ANON_KEY ?? process.env.ANON_KEY;
+    const anonKey = this.envValue('ANON_KEY');
     if (!anonKey) {
       if (!this.auditNotConfiguredLogged) {
         this.auditNotConfiguredLogged = true;
@@ -323,7 +347,7 @@ export default class RoomServer implements Party.Server {
     // nginx-proxy rewrites away for the browser, and posting to it from
     // inside the compose network is a 404 — which a fire-and-forget write
     // would have swallowed for ever (checked against the running container).
-    const restUrl = (env.REST_URL || process.env.REST_URL || 'http://rest:3000').replace(/\/+$/, '');
+    const restUrl = (this.envValue('REST_URL') || 'http://rest:3000').replace(/\/+$/, '');
     try {
       void fetch(`${restUrl}/audit_events`, {
         method: 'POST',
@@ -348,6 +372,119 @@ export default class RoomServer implements Party.Server {
     }
   }
 
+  /**
+   * A variable this room server was started with.
+   *
+   * `room.env`, not `process.env`: room code runs inside workerd, which does
+   * not inherit the container's environment. PartyKit puts `--var` values here
+   * (deploy/partykit-entrypoint.sh passes them). process.env stays as a
+   * fallback for tests and for any runtime that does populate it.
+   */
+  private envValue(name: string): string | undefined {
+    const fromRoom = this.room.env?.[name];
+    return typeof fromRoom === 'string' ? fromRoom : process.env[name];
+  }
+
+  /**
+   * Whether this deployment asks the room server to prove who people are.
+   *
+   * Anything other than 'none' counts as on, including a value this code has
+   * never heard of: a typo in .env should cost an operator a room full of
+   * "(guest)" labels they come and ask about, not silently go back to trusting
+   * typed names. docker-compose.yml defaults the variable to 'none', so a
+   * deployment that never set it gets exactly the pre-identity behaviour.
+   */
+  private identityRequired(): boolean {
+    const mode = this.envValue('IDENTITY_MODE');
+    return Boolean(mode) && mode !== 'none';
+  }
+
+  /**
+   * The verification for one connection's current token, computed at most once
+   * per distinct token string. See `verifiedTokens` for why.
+   */
+  private verifiedToken(
+    connId: string,
+    token: string,
+    secret: string,
+  ): Promise<VerifiedAccount | null> {
+    const cached = this.verifiedTokens.get(connId);
+    if (cached && cached.token === token) return cached.result;
+    const result = verifyAccessToken(token, secret);
+    this.verifiedTokens.set(connId, { token, result });
+    return result;
+  }
+
+  /**
+   * Replace the self-asserted half of a PRESENCE payload with what a verified
+   * access token proves, and remove the token itself.
+   *
+   * Mutates the payload in place, and that is the whole point: this object is
+   * what the handler parsed, and every read of it below — the participants map,
+   * the knock queue, the ROSTER a late joiner is handed, the relay to everyone
+   * else — happens after this returns. There is therefore no path by which the
+   * token reaches another client or the room's persisted storage, and no path
+   * by which a name the server did not vouch for is relayed as though it had.
+   *
+   * The token is deleted on EVERY path, identity 'none' and a payload that
+   * carried no token included: dropping a credential because the server
+   * happens not to need it is how it ends up relayed by the next change to
+   * this file. `accountId` goes the same way, for the same reason — it is
+   * stamped here and only from a token this server verified, so a value a
+   * client claimed for itself is never handed to anybody else.
+   *
+   * Returns null rather than a resolved promise when there is nothing to
+   * check. `await` on an already-resolved promise still defers the rest of the
+   * handler by a microtask, and a room server that relayed every presence of
+   * every default install one tick later than it received it would be paying
+   * for a feature that is switched off.
+   */
+  private applyVerifiedIdentity(
+    connId: string,
+    payload: ParticipantPresence,
+  ): Promise<void> | null {
+    const raw = payload.accessToken;
+    const token = typeof raw === 'string' && raw !== '' ? raw : undefined;
+    delete payload.accessToken;
+    delete payload.accountId;
+
+    if (!this.identityRequired()) return null;
+
+    const secret = this.envValue('JWT_SECRET');
+    if (!secret) {
+      // Fail closed, and say so once: everybody in the room reads as a guest
+      // until the operator wires the secret through, which is visible in the
+      // participant list rather than hidden in a room that looks fine.
+      if (!this.identityNotConfiguredLogged) {
+        this.identityNotConfiguredLogged = true;
+        console.log(
+          '[identity] IDENTITY_MODE is set but JWT_SECRET is not — ' +
+            'no access token can be verified, so every participant is marked as a guest',
+        );
+      }
+      payload.guest = true;
+      return null;
+    }
+
+    if (!token) {
+      payload.guest = true;
+      return null;
+    }
+
+    return this.verifiedToken(connId, token, secret).then((verified) => {
+      if (!verified) {
+        // Expired, forged, or for another audience. The person keeps the name
+        // they typed and is marked as a guest, which is what the host's knock
+        // prompt and the participant list already render as "not proven".
+        payload.guest = true;
+        return;
+      }
+      payload.name = verified.name;
+      payload.guest = false;
+      payload.accountId = verified.sub;
+    });
+  }
+
   onConnect(conn: Party.Connection) {
     this.connections.set(conn.id, conn);
     // Before the connection has identified itself via PRESENCE we can only
@@ -359,7 +496,7 @@ export default class RoomServer implements Party.Server {
     } as RoomMessage));
   }
 
-  onMessage(message: string, sender: Party.Connection) {
+  async onMessage(message: string, sender: Party.Connection): Promise<void> {
     let msg: RoomMessage;
     try {
       msg = JSON.parse(message);
@@ -372,6 +509,13 @@ export default class RoomServer implements Party.Server {
     // needs it for cleanup, and is also allowed through the gate.
     if (msg.type === 'PRESENCE') {
       this.connToUser.set(sender.id, msg.payload.userId);
+      // Who this connection really is, settled BEFORE anything reads the
+      // payload: the knock queue, the roster and every relay below must see a
+      // name the server vouched for, and none of them may ever see the token
+      // that proved it. Awaited only when there was something to verify — see
+      // applyVerifiedIdentity for why every other path stays synchronous.
+      const verification = this.applyVerifiedIdentity(sender.id, msg.payload);
+      if (verification) await verification;
     }
 
     // Knock gate: a connection that has not been admitted may only send
@@ -700,6 +844,9 @@ export default class RoomServer implements Party.Server {
   onClose(conn: Party.Connection) {
     this.connections.delete(conn.id);
     this.stateSent.delete(conn.id);
+    // The connection's access token, and the verdict on it, go with it. A
+    // reconnect arrives with its own token and is verified again.
+    this.verifiedTokens.delete(conn.id);
     const userId = this.connToUser.get(conn.id);
     this.connToUser.delete(conn.id);
 

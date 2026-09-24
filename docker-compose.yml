@@ -291,6 +291,21 @@ services:
       # nothing — the admin screen says so.
       REST_URL: ${REST_URL:-http://rest:3000}
       ANON_KEY: ${ANON_KEY:-}
+      # Identity (docs/plan/13-identity.md batch AZ). With IDENTITY_MODE set to
+      # anything but 'none' the room server verifies the access token a
+      # signed-in browser sends with its presence, and relays the name the
+      # ACCOUNT carries rather than the name that was typed — so a participant
+      # list, a transcript and an audit row all say who was actually there.
+      #
+      # JWT_SECRET is the same value GoTrue signs with (the `auth` service,
+      # below) and PostgREST and Realtime already verify. Server-only: no VITE_
+      # spelling of it exists, so it cannot reach a bundle, and the entrypoint
+      # passes it to workerd because room code sees no other environment.
+      #
+      # 'none' is the default and is what every install had before identity
+      # existed: the room server strips the token and changes nothing else.
+      IDENTITY_MODE: ${IDENTITY_MODE:-none}
+      JWT_SECRET: ${JWT_SECRET:-}
     networks:
       - edge
     healthcheck:

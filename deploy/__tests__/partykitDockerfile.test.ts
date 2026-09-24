@@ -82,11 +82,20 @@ describe('deploy/partykit-entrypoint.sh', () => {
     const script = entrypoint();
     expect(script).toMatch(/--var ANON_KEY=/);
     expect(script).toMatch(/--var REST_URL=/);
+    // Identity (batch AZ): the mode, and the secret the room server verifies a
+    // signed-in person's access token with. Missing either is silent in exactly
+    // the same way — a room that works, with names nobody proved.
+    expect(script).toMatch(/--var IDENTITY_MODE=/);
+    expect(script).toMatch(/--var JWT_SECRET=/);
   });
 
   it('omits a variable that is not set rather than passing an empty one', () => {
     const script = entrypoint();
     expect(script).toMatch(/if \[ -n "\$ANON_KEY" \]/);
     expect(script).toMatch(/if \[ -n "\$REST_URL" \]/);
+    // An empty IDENTITY_MODE would look like a mode to the room server, and an
+    // empty JWT_SECRET would verify nothing while looking configured.
+    expect(script).toMatch(/if \[ -n "\$IDENTITY_MODE" \]/);
+    expect(script).toMatch(/if \[ -n "\$JWT_SECRET" \]/);
   });
 });

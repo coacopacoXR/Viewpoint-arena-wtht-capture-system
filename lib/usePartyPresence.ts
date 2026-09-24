@@ -12,6 +12,9 @@ import { parseModelFile } from '../utils/modelLoader';
 import { modelFileMime } from '../utils/modelFormats';
 import { usePointingTimelineStore } from './pointingTimelineStore';
 import type { PointingSegment } from './pointingTimelineStore';
+import { supabase } from './supabase';
+import { getStoredIdentity } from './identity';
+import type { Session } from '@supabase/supabase-js';
 
 export type { ParticipantPresence };
 
@@ -204,6 +207,21 @@ function getUserInfo(): { userId: string; name: string; color: string; guest: bo
   return { userId, name: user.name || 'Guest', color: user.color || '#4F8EF7', guest: user.guest === true };
 }
 
+/**
+ * Whether this browser is signed in, and therefore has an access token the
+ * room server can be handed.
+ *
+ * Read from vp_user rather than from the deployment's config, which is what
+ * keeps identity.mode 'none' untouched: nothing ever writes an accountId
+ * there, so this answers false and the hook below never calls Supabase at all.
+ * A default install gains no request to an auth service it is not running.
+ */
+function isSignedIn(): boolean {
+  const stored = getStoredIdentity();
+  if (stored?.guest === true) return false;
+  return typeof stored?.accountId === 'string' && stored.accountId !== '';
+}
+
 export interface RemoteLaserState {
   position: [number, number, number] | null;
   targetId: string | null;
@@ -268,6 +286,17 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     position: [0, 0, 0],
     lookAt: [0, 0, 0],
   });
+  // The signed-in person's access token, for the room server to verify and
+  // then drop (party/room.server.ts, party/verifyJwt.ts). A ref rather than
+  // state: presence goes out from a frame loop and from a knock timer, and a
+  // token refresh an hour later must not re-render a room to deliver it.
+  const accessTokenRef = useRef<string | null>(null);
+  // Set by the socket effect below so this one can re-knock the moment a token
+  // arrives. Without it a first knock that beats getSession() — unlikely, since
+  // a websocket handshake is slower than a localStorage read, but not
+  // impossible — would leave a signed-in person in the host's queue marked as a
+  // guest until the next three-second tick.
+  const knockRef = useRef<(() => void) | null>(null);
 
   const {
     addInsightCard, setActiveAgent, setViewMode, setFollowingRemoteUser,
@@ -281,6 +310,41 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       Array.from(remoteParticipants.current.values()).map(({ userId, name, color, sameRoom, followingUserId, followNudged, guest }) => ({ userId, name, color, sameRoom, followingUserId, followNudged, guest })),
     );
   }
+
+  // Declared before the socket effect on purpose: effects run in order, so this
+  // one is already asking for the session while the socket is still
+  // handshaking, and the first knock usually carries the token.
+  useEffect(() => {
+    if (!roomId) return;
+    if (!isSignedIn()) {
+      accessTokenRef.current = null;
+      return;
+    }
+
+    let active = true;
+    const apply = (session: Session | null) => {
+      if (!active) return;
+      accessTokenRef.current = session?.access_token ?? null;
+      if (accessTokenRef.current) knockRef.current?.();
+    };
+
+    supabase.auth.getSession().then(
+      ({ data }) => apply(data.session),
+      () => apply(null),
+    );
+
+    // A token is refreshed hourly, and the room server re-verifies only when
+    // the string changes — so the refresh has to reach the ref, or a meeting
+    // that runs past the expiry would have its name demoted to "(guest)" while
+    // everybody in it carries on talking.
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => apply(session));
+
+    return () => {
+      active = false;
+      accessTokenRef.current = null;
+      data.subscription.unsubscribe();
+    };
+  }, [roomId]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -331,9 +395,15 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
           followingUserId: followingRemoteUserId,
           followNudged,
           guest: userRef.current.guest,
+          // Proof of who this is, when there is an account to prove it with.
+          // The server verifies it and deletes it before the payload is stored
+          // or relayed; JSON.stringify drops the undefined, so a client with no
+          // session sends exactly what it sent before identity existed.
+          accessToken: accessTokenRef.current ?? undefined,
         },
       } as RoomMessage));
     };
+    knockRef.current = knock;
     socket.addEventListener('open', knock);
     const knockTimer = setInterval(knock, 3000);
 
@@ -585,6 +655,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     return () => {
       clearInterval(knockTimer);
       socket.removeEventListener('open', knock);
+      knockRef.current = null;
       socket.close();
       socketRef.current = null;
       partySocketRef.current = null;
@@ -622,6 +693,10 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         followingUserId: followingRemoteUserId,
         followNudged,
         guest: userRef.current.guest,
+        // Sent on every frame, and verified at most once per token string:
+        // the server caches the answer per connection (party/room.server.ts),
+        // so this costs a string comparison rather than an HMAC at 10 fps.
+        accessToken: accessTokenRef.current ?? undefined,
       },
     };
     socket.send(JSON.stringify(msg));
