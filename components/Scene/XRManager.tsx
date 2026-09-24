@@ -6,6 +6,7 @@ import type { XRControllerState } from '@pmndrs/xr/internals';
 import * as THREE from 'three';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
+import { participantLabel } from '../../lib/identity';
 import { remoteXRParticipants } from '../../lib/xrPresenceRef';
 import { mobileLaserRef } from '../../lib/mobileLaserRef';
 import type { XRParticipantData } from '../../types';
@@ -350,8 +351,11 @@ function BoardroomVirtualScreen() {
 
   if (!isBoardroomMode) return null;
 
+  const boardroomLeader = remoteParticipantList.find(p => p.userId === boardroomLeaderId);
   const leaderName = boardroomLeaderId
-    ? remoteParticipantList.find(p => p.userId === boardroomLeaderId)?.name ?? 'Host'
+    ? boardroomLeader
+      ? participantLabel(boardroomLeader.name, boardroomLeader.guest)
+      : 'Host'
     : 'No presenter';
   const mins = String(Math.floor(time / 60)).padStart(2, '0');
   const secs = String(Math.floor(time % 60)).padStart(2, '0');
@@ -410,7 +414,7 @@ function BoardroomVirtualScreen() {
                 background: 'rgba(255,255,255,0.06)', borderRadius: 20, padding: '3px 8px',
               }}>
                 <div style={{ width: 6, height: 6, borderRadius: '50%', background: p.color }} />
-                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.7)' }}>{p.name}</span>
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.7)' }}>{participantLabel(p.name, p.guest)}</span>
               </div>
             ))}
           </div>

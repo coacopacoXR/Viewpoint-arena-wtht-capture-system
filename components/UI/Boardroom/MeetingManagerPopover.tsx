@@ -6,6 +6,7 @@ import {
 import { clsx } from 'clsx';
 import { useStore } from '../../../store';
 import { usePresence } from '../../../lib/PresenceContext';
+import { participantLabel } from '../../../lib/identity';
 import { BoardroomLayout } from '../../../types';
 
 const LAYOUTS: { id: BoardroomLayout; label: string; icon: React.ReactNode; desc: string }[] = [
@@ -36,7 +37,7 @@ const MeetingManagerPopover: React.FC<MeetingManagerPopoverProps> = ({ onClose }
   // All participants: local user + remote
   const allParticipants = [
     { userId: localUserId, name: 'You' },
-    ...remoteParticipantList,
+    ...remoteParticipantList.map(p => ({ ...p, name: participantLabel(p.name, p.guest) })),
   ];
   const activeUserIds = new Set(allParticipants.map(p => p.userId));
 

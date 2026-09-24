@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase, TrackerSession } from '../lib/supabase';
 import { useIdentity, AVATAR_COLORS, UserIdentity } from '../lib/identity';
+import { signOutOfAccount } from '../lib/auth/useAuth';
 import { listRecentCurations, deleteCuration, getCurationSummary, type CurationSummary } from '../lib/curationsRepo';
 import { Camera, MapPin, Layers, Play, Pencil, Trash2 } from 'lucide-react';
 
@@ -39,7 +40,13 @@ const LobbyPage: React.FC = () => {
   const joinRoomId: string | undefined = (location.state as { joinRoomId?: string } | null)?.joinRoomId;
 
   const [identity, setIdentity] = useIdentity();
-  const [name, setName] = useState(joinRoomId ? '' : (identity?.name ?? ''));
+  // An accountId in vp_user means the name came from a signed-in account: this
+  // form does not edit it, it only shows who is signed in. A guest has no
+  // account, and may enter the room they were invited to and nothing else.
+  const accountId = identity?.accountId ?? null;
+  const isGuest = identity?.guest === true;
+  const accountName = accountId ? identity?.name ?? '' : null;
+  const [name, setName] = useState(accountName ?? (joinRoomId ? '' : (identity?.name ?? '')));
   const [color, setColor] = useState(identity?.color ?? AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)]);
   const [role, setRole] = useState(identity?.role ?? '');
   const [joinCode, setJoinCode] = useState(joinRoomId ?? '');
@@ -85,7 +92,13 @@ const LobbyPage: React.FC = () => {
   }
 
   function buildIdentity(): UserIdentity {
-    return { name: name.trim(), color, role: role || undefined };
+    const next: UserIdentity = { name: name.trim(), color, role: role || undefined };
+    // Carry the session's own fields through: this form edits colour and role,
+    // it does not decide who anyone is. Dropping accountId here would sign the
+    // person out of their own lobby the moment they picked a new colour.
+    if (accountId) next.accountId = accountId;
+    if (isGuest) next.guest = true;
+    return next;
   }
 
   function enterRoom(roomId: string) {
@@ -113,6 +126,14 @@ const LobbyPage: React.FC = () => {
     const code = joinCode.trim();
     if (!code) { setError('Enter a room code.'); return; }
     enterRoom(code);
+  }
+
+  async function handleSignOut() {
+    setError('');
+    const failure = await signOutOfAccount();
+    if (failure) { setError(failure); return; }
+    // Nothing to navigate to: the IdentityGate hears the same SIGNED_OUT and
+    // swaps this page for the sign-in page.
   }
 
   const isReturning = !!identity?.name && !joinRoomId;
@@ -242,20 +263,34 @@ const LobbyPage: React.FC = () => {
 
           {/* Identity form */}
           <div className="space-y-4">
-            {/* Name */}
-            <div>
-              <label className="block text-[10px] font-mono font-bold text-gray-600 uppercase tracking-widest mb-2">Your name</label>
-              <input
-                type="text"
-                value={name}
-                onChange={e => { setName(e.target.value); setError(''); }}
-                onKeyDown={e => e.key === 'Enter' && handleNewSession()}
-                placeholder="e.g. Alex Chen"
-                maxLength={40}
-                autoFocus
-                className="w-full bg-white/5 border border-white/10 text-white rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 placeholder:text-gray-700 transition-colors"
-              />
-            </div>
+            {/* Name — typed here, or read from the signed-in account. Colour and
+                role stay either way: they describe how you look in the room,
+                which no identity provider knows. */}
+            {accountId ? (
+              <div className="flex items-center gap-2 text-xs min-w-0">
+                <span className="text-[10px] font-mono font-bold text-gray-600 uppercase tracking-widest shrink-0">Signed in as</span>
+                <span className="text-white font-bold truncate">{name}</span>
+                <span className="text-gray-700 shrink-0">·</span>
+                <button onClick={handleSignOut}
+                  className="text-[10px] font-mono text-gray-500 hover:text-gray-300 uppercase tracking-widest transition-colors shrink-0">
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-[10px] font-mono font-bold text-gray-600 uppercase tracking-widest mb-2">Your name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={e => { setName(e.target.value); setError(''); }}
+                  onKeyDown={e => e.key === 'Enter' && handleNewSession()}
+                  placeholder="e.g. Alex Chen"
+                  maxLength={40}
+                  autoFocus
+                  className="w-full bg-white/5 border border-white/10 text-white rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 placeholder:text-gray-700 transition-colors"
+                />
+              </div>
+            )}
 
             {/* Color */}
             <div>
@@ -288,17 +323,31 @@ const LobbyPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Actions */}
+          {/* Actions. A guest keeps the join row and loses the rest: starting a
+              session and curating a review both need an account, and the
+              IdentityGate sends a guest who tries /tracker or /admin to the
+              sign-in page anyway. */}
           <div className="space-y-3">
-            <button onClick={handleNewSession}
-              className={`w-full text-sm font-bold py-3 rounded-xl transition-colors ${joinCode.trim() ? 'bg-white/10 hover:bg-white/20 text-gray-400 border border-white/10' : 'bg-white hover:bg-gray-100 text-gray-900'}`}>
-              {isReturning ? 'New session' : 'Start new session'}
-            </button>
+            {!isGuest && (
+              <>
+                <button onClick={handleNewSession}
+                  className={`w-full text-sm font-bold py-3 rounded-xl transition-colors ${joinCode.trim() ? 'bg-white/10 hover:bg-white/20 text-gray-400 border border-white/10' : 'bg-white hover:bg-gray-100 text-gray-900'}`}>
+                  {isReturning ? 'New session' : 'Start new session'}
+                </button>
 
-            <button onClick={handleCurateReview}
-              className="w-full text-sm font-bold py-3 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/20 transition-colors">
-              Curate a design review →
-            </button>
+                <button onClick={handleCurateReview}
+                  className="w-full text-sm font-bold py-3 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/20 transition-colors">
+                  Curate a design review →
+                </button>
+              </>
+            )}
+
+            {isGuest && (
+              <p className="text-gray-600 text-[11px] font-mono leading-relaxed">
+                You are here as a guest, so the only session you can open is the
+                one you were invited to.
+              </p>
+            )}
 
             <div className="flex gap-2">
               <input
@@ -318,7 +367,11 @@ const LobbyPage: React.FC = () => {
             {error && <p className="text-red-400 text-xs font-mono">{error}</p>}
           </div>
 
-          {/* Saved curations */}
+          {/* Saved curations, and the tracker link. Neither is a guest's: the
+              list would open rooms they were not invited to, and /tracker needs
+              an account. */}
+          {!isGuest && (
+          <>
           <div className="space-y-2">
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-white/5" />
@@ -394,6 +447,8 @@ const LobbyPage: React.FC = () => {
             </button>
             <div className="flex-1 h-px bg-white/5" />
           </div>
+          </>
+          )}
 
           {/* Mobile stats (shown on small screens) */}
           <div className="flex lg:hidden justify-center gap-6 text-center">

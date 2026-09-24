@@ -5,6 +5,15 @@ export interface UserIdentity {
   color: string;
   team?: string;
   role?: string;
+  /**
+   * True while this browser is in a room WITHOUT an account, on a deployment
+   * whose identity block sets allowGuests. Set by lib/auth/useAuth.ts's
+   * joinAsGuest, carried in presence, and never typed by the person: a name
+   * that says "(guest)" in its text would end up stored in tracker items.
+   */
+  guest?: boolean;
+  /** The signed-in account's id. Present only while a session exists. */
+  accountId?: string;
 }
 
 const KEY = 'vp_user';
@@ -14,24 +23,54 @@ export const AVATAR_COLORS = [
   '#C44FF7', '#F74FA0', '#4FF7F7', '#F7A44F',
 ];
 
-export function getIdentity(): UserIdentity | null {
+/**
+ * The stored record as written, name or not. Signing out clears the name but
+ * keeps the colour, so the identity a signed-out browser holds is real and
+ * getIdentity() — which is about "who is this person" — reports nothing.
+ */
+export function getStoredIdentity(): UserIdentity | null {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.name) return null;
-    return parsed as UserIdentity;
+    const parsed = JSON.parse(raw) as UserIdentity | null;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
   } catch {
     return null;
   }
 }
 
+export function getIdentity(): UserIdentity | null {
+  const stored = getStoredIdentity();
+  return stored?.name ? stored : null;
+}
+
+/**
+ * How a participant's name reads when it comes from presence: guests carry a
+ * suffix so nobody mistakes a self-asserted name for an account's. The flag,
+ * not the string, is what travels — see ParticipantPresence.guest.
+ */
+export function participantLabel(name: string, guest?: boolean): string {
+  return guest ? `${name} (guest)` : name;
+}
+
+// `storage` only fires in OTHER tabs, so a sign-in or sign-out written here
+// (lib/auth/useAuth.ts) would leave every mounted useIdentity() consumer
+// showing the old name until a reload. One custom event closes that gap.
+const CHANGE_EVENT = 'vp_user_change';
+
+function notifyIdentityChanged(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(CHANGE_EVENT));
+}
+
 export function saveIdentity(identity: UserIdentity): void {
   localStorage.setItem(KEY, JSON.stringify(identity));
+  notifyIdentityChanged();
 }
 
 export function clearIdentity(): void {
   localStorage.removeItem(KEY);
+  notifyIdentityChanged();
 }
 
 export function useIdentity(): [UserIdentity | null, (i: UserIdentity) => void] {
@@ -46,8 +85,15 @@ export function useIdentity(): [UserIdentity | null, (i: UserIdentity) => void] 
     function onStorage(e: StorageEvent) {
       if (e.key === KEY) setIdentityState(getIdentity());
     }
+    function onChange() {
+      setIdentityState(getIdentity());
+    }
     window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    window.addEventListener(CHANGE_EVENT, onChange);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener(CHANGE_EVENT, onChange);
+    };
   }, []);
 
   return [identity, setIdentity];

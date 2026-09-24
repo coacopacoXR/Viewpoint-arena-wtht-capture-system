@@ -13,6 +13,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { InsightCard } from '../../../types';
 import type { AgentState } from '../../../types';
 import { usePresence } from '../../../lib/PresenceContext';
+import { participantLabel } from '../../../lib/identity';
 import InsightExplainer from '../InsightExplainer';
 import MeetingManagerPopover from './MeetingManagerPopover';
 import FocusLayout from './layouts/FocusLayout';
@@ -145,9 +146,12 @@ const BoardroomShell: React.FC = () => {
   const isMobile = useIsMobile();
 
   // Presenter label based on the real person driving the camera
+  const boardroomLeader = remoteParticipantList.find(p => p.userId === boardroomLeaderId);
   const leaderName = boardroomLeaderId === localUserId
     ? 'You'
-    : remoteParticipantList.find(p => p.userId === boardroomLeaderId)?.name ?? null;
+    : boardroomLeader
+      ? participantLabel(boardroomLeader.name, boardroomLeader.guest)
+      : null;
 
   const [showManager, setShowManager] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
@@ -215,7 +219,9 @@ const BoardroomShell: React.FC = () => {
 
   const humanParticipants = [
     { userId: localUserId, name: localUserName, color: '#10b981', isYou: true },
-    ...remoteParticipantList.map(p => ({ ...p, isYou: false })),
+    // Named here rather than in the tile so the "(guest)" suffix stays a
+    // display concern: nothing downstream of this list is stored anywhere.
+    ...remoteParticipantList.map(p => ({ ...p, name: participantLabel(p.name, p.guest), isYou: false })),
   ];
 
   const humanTiles = (

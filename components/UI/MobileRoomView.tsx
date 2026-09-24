@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStore } from '../../store';
 import { useShallow } from 'zustand/react/shallow';
 import { usePresence } from '../../lib/PresenceContext';
+import { participantLabel } from '../../lib/identity';
 import { useWebRTCContext } from '../../lib/WebRTCContext';
 import ViewpointCanvas from '../Scene/ViewpointCanvas';
 import BoardroomCountdown from './BoardroomCountdown';
@@ -196,12 +197,15 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
   const leaderName = boardroomLeaderId
     ? (boardroomLeaderId === localUserId
         ? 'You'
-        : remoteParticipantList.find(p => p.userId === boardroomLeaderId)?.name ?? 'Host')
+        : (() => {
+            const leader = remoteParticipantList.find(p => p.userId === boardroomLeaderId);
+            return leader ? participantLabel(leader.name, leader.guest) : 'Host';
+          })())
     : null;
 
   const allParticipants = [
     { userId: localUserId, name: userName, color: '#10b981', isYou: true },
-    ...remoteParticipantList.map(p => ({ ...p, isYou: false })),
+    ...remoteParticipantList.map(p => ({ ...p, name: participantLabel(p.name, p.guest), isYou: false })),
   ];
 
   const sessionBadge = (insightCards.length || 0) + unreadChat || undefined;
@@ -212,7 +216,7 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
     const pipParticipants = [
       { userId: localUserId, name: userName, color: '#10b981', isYou: true, stream: localStream },
       ...remoteParticipantList.slice(0, 2).map(p => ({
-        userId: p.userId, name: p.name, color: p.color, isYou: false,
+        userId: p.userId, name: participantLabel(p.name, p.guest), color: p.color, isYou: false,
         stream: remoteStreams.get(p.userId) ?? null,
       })),
     ];
@@ -366,7 +370,7 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
                   {followingParticipant.name[0]}
                 </div>
                 <span className="text-white text-[11px] font-mono">
-                  Following <span className="font-bold">{followingParticipant.name}</span>
+                  Following <span className="font-bold">{participantLabel(followingParticipant.name, followingParticipant.guest)}</span>
                   {followNudged && (
                     <span className="text-white/60"> — moving on your own · snapping back</span>
                   )}

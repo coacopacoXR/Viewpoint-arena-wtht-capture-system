@@ -105,6 +105,8 @@ export interface JoinRequest {
   userId: string;
   name: string;
   since: number;
+  /** True when the knocker has no account on this deployment. */
+  guest?: boolean;
 }
 const joinStateRef: { current: JoinState } = { current: 'joining' };
 const joinStateSubscribers = new Set<(state: JoinState) => void>();
@@ -189,7 +191,7 @@ export function partykitProtocol(pageProtocol?: string): 'wss' | undefined {
   return proto === 'https:' ? 'wss' : undefined;
 }
 
-function getUserInfo(): { userId: string; name: string; color: string } {
+function getUserInfo(): { userId: string; name: string; color: string; guest: boolean } {
   const stored = localStorage.getItem('vp_user');
   const user = stored ? JSON.parse(stored) : { name: 'Guest', color: '#4F8EF7' };
   let userId = sessionStorage.getItem('vp_userId');
@@ -197,7 +199,9 @@ function getUserInfo(): { userId: string; name: string; color: string } {
     userId = crypto.randomUUID();
     sessionStorage.setItem('vp_userId', userId);
   }
-  return { userId, name: user.name || 'Guest', color: user.color || '#4F8EF7' };
+  // Read here, once, like the name: whoever wrote vp_user — the lobby's form or
+  // a sign-in — did it before this room was entered.
+  return { userId, name: user.name || 'Guest', color: user.color || '#4F8EF7', guest: user.guest === true };
 }
 
 export interface RemoteLaserState {
@@ -216,6 +220,8 @@ export interface RemoteParticipantInfo {
   followingUserId?: string | null;
   /** True while they are dragging their own view without leaving the follow. */
   followNudged?: boolean;
+  /** True when they are here without an account. Render with participantLabel(). */
+  guest?: boolean;
 }
 
 export interface UsePartyPresenceReturn {
@@ -272,7 +278,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
 
   function syncList() {
     setRemoteParticipantList(
-      Array.from(remoteParticipants.current.values()).map(({ userId, name, color, sameRoom, followingUserId, followNudged }) => ({ userId, name, color, sameRoom, followingUserId, followNudged })),
+      Array.from(remoteParticipants.current.values()).map(({ userId, name, color, sameRoom, followingUserId, followNudged, guest }) => ({ userId, name, color, sameRoom, followingUserId, followNudged, guest })),
     );
   }
 
@@ -310,7 +316,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       // Same follow fields broadcastPresence sends: a PartySocket reconnect
       // re-identifies itself through here, and a knock without them would
       // blank the leader's "who is following me" badge until the scene's next
-      // frame broadcast (~100ms later).
+      // frame broadcast (~100ms later). The guest flag travels for the same
+      // reason — it is what the host's knock prompt marks them with.
       const { followingRemoteUserId, followNudged } = useStore.getState();
       s.send(JSON.stringify({
         type: 'PRESENCE',
@@ -323,6 +330,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
           sameRoom: sameRoomRef.current,
           followingUserId: followingRemoteUserId,
           followNudged,
+          guest: userRef.current.guest,
         },
       } as RoomMessage));
     };
@@ -352,11 +360,14 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
           remoteParticipants.current.set(msg.payload.userId, msg.payload);
           // The follow fields drive the leader's "who is following me" badge,
           // so a change in either has to reach the list — not only a new join.
-          // Missing fields (an older client) read as "following nobody".
-          const followChanged =
+          // The guest flag is here for the same reason: it is what a name is
+          // rendered with. Missing fields (an older client) read as "following
+          // nobody" and "not a guest".
+          const listChanged =
             (prev?.followingUserId ?? null) !== (msg.payload.followingUserId ?? null) ||
-            (prev?.followNudged ?? false) !== (msg.payload.followNudged ?? false);
-          if (!prev || followChanged) syncList();
+            (prev?.followNudged ?? false) !== (msg.payload.followNudged ?? false) ||
+            (prev?.guest ?? false) !== (msg.payload.guest ?? false);
+          if (!prev || listChanged) syncList();
         }
       } else if (msg.type === 'LEAVE') {
         const leavingId = msg.payload.userId;
@@ -610,6 +621,7 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         sameRoom: sameRoomRef.current,
         followingUserId: followingRemoteUserId,
         followNudged,
+        guest: userRef.current.guest,
       },
     };
     socket.send(JSON.stringify(msg));

@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { usePresence } from '../../lib/PresenceContext';
 import { ViewMode } from '../../types';
 import { pickDefaultSplitTarget } from '../../lib/splitTarget';
+import { participantLabel } from '../../lib/identity';
 
 // Rendered above the canvas while SPLIT_SCREEN is active. Surfaces three
 // things the user can't otherwise see:
@@ -58,7 +59,8 @@ const SplitViewOverlay: React.FC = () => {
     if (effectiveTarget.kind === 'agent') {
       return agents.find(a => a.id === effectiveTarget.id)?.name ?? null;
     }
-    return remoteParticipantList.find(p => p.userId === effectiveTarget.userId)?.name ?? null;
+    const target = remoteParticipantList.find(p => p.userId === effectiveTarget.userId);
+    return target ? participantLabel(target.name, target.guest) : null;
   }, [effectiveTarget, agents, remoteParticipantList]);
 
   // If the followed user disconnects, gracefully fall back using the same
@@ -178,7 +180,7 @@ const SplitViewOverlay: React.FC = () => {
                           className="w-2 h-2 rounded-full shrink-0"
                           style={{ backgroundColor: p.color }}
                         />
-                        <span className="flex-1 truncate font-mono">{p.name}</span>
+                        <span className="flex-1 truncate font-mono">{participantLabel(p.name, p.guest)}</span>
                       </button>
                     );
                   })}

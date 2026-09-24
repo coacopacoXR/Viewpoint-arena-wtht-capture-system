@@ -1,6 +1,7 @@
 import React from 'react';
 import { UserPlus, X } from 'lucide-react';
 import { useJoinRequests, broadcastAdmit, broadcastDecline } from '../../lib/usePartyPresence';
+import { participantLabel } from '../../lib/identity';
 
 const JoinRequests: React.FC = () => {
   const requests = useJoinRequests();
@@ -27,7 +28,7 @@ const JoinRequests: React.FC = () => {
           className="flex items-center justify-between gap-3 py-1.5"
         >
           <span className="text-xs font-bold text-white truncate">
-            {req.name}
+            {participantLabel(req.name, req.guest)}
           </span>
           <div className="flex items-center gap-1 shrink-0">
             <button

@@ -8,6 +8,7 @@ import React from 'react';
 import { clsx } from 'clsx';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
+import { participantLabel } from '../../lib/identity';
 
 const initial = (name: string) => (name.trim()[0] ?? '?').toUpperCase();
 
@@ -35,7 +36,11 @@ const FollowersBadge: React.FC = () => {
         {followers.map(p => (
           <span
             key={p.userId}
-            title={p.followNudged ? `${p.name} — looking around` : p.name}
+            title={
+              p.followNudged
+                ? `${participantLabel(p.name, p.guest)} — looking around`
+                : participantLabel(p.name, p.guest)
+            }
             className={clsx(
               'w-4 h-4 rounded-full flex items-center justify-center text-white text-[8px] font-bold shrink-0 transition-opacity',
               p.followNudged && 'opacity-30',
@@ -58,7 +63,7 @@ export const FollowingBadge: React.FC<{ onFreeView: () => void }> = ({ onFreeVie
   if (!followingRemoteUserId) return null;
 
   const leader = remoteParticipantList.find(p => p.userId === followingRemoteUserId);
-  const name = leader?.name ?? 'remote user';
+  const name = leader ? participantLabel(leader.name, leader.guest) : 'remote user';
 
   return (
     <div className={pillClass}>

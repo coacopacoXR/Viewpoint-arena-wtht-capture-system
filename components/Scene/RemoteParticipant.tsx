@@ -4,6 +4,7 @@ import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore } from '../../store';
 import { AgentStyle } from '../../types';
+import { participantLabel } from '../../lib/identity';
 
 import type { ParticipantPresence } from '../../lib/usePartyPresence';
 
@@ -106,7 +107,7 @@ function RemoteAvatar({
       <Html position={[0, 1.0, 0]} center distanceFactor={6} style={{ pointerEvents: 'none' }} zIndexRange={[0, 0]}>
         <div className="flex flex-col items-center gap-1 opacity-80">
           <div className="font-mono text-[8px] px-1 rounded border whitespace-nowrap backdrop-blur-md text-white" style={{ background: color, borderColor: color }}>
-            {initialPresence.name}
+            {participantLabel(initialPresence.name, initialPresence.guest)}
           </div>
         </div>
       </Html>

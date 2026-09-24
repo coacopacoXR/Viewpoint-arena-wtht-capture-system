@@ -12,6 +12,7 @@ import XRManager from './XRManager';
 import ReviewArtifacts from './ReviewArtifacts';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
+import { participantLabel } from '../../lib/identity';
 import type { RemoteLaserState } from '../../lib/usePartyPresence';
 import { isLaserEntryFresh } from '../../lib/laserTargetRef';
 import { ViewMode } from '../../types';
@@ -556,7 +557,11 @@ const RemoteLaserDot: React.FC<{
     const pos = state?.position ?? null;
     const participant = remoteParticipants.current.get(userId);
     const color = participant?.color ?? '#ffffff';
-    const name = participant?.name ?? userId.slice(0, 6);
+    // The floating label above the impact dot is a name tag like the avatar's,
+    // so it carries the same guest mark.
+    const name = participant
+      ? participantLabel(participant.name, participant.guest)
+      : userId.slice(0, 6);
 
     // --- Apply color imperatively (handles late-arriving participant data) ---
     if (color !== lastColor.current) {

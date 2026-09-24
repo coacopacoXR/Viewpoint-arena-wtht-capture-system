@@ -2,6 +2,7 @@ import React from 'react';
 import { Mic, MicOff, Video, VideoOff, Power } from 'lucide-react';
 import { clsx } from 'clsx';
 import HumanParticipantTile from '../HumanParticipantTile';
+import { participantLabel } from '../../../../lib/identity';
 import type { RemoteParticipantInfo } from '../../../../lib/usePartyPresence';
 
 interface MobileBoardroomLayoutProps {
@@ -42,7 +43,7 @@ const MobileBoardroomLayout: React.FC<MobileBoardroomLayoutProps> = ({
   const pipParticipants = [
     { userId: localUserId, name: localUserName, color: '#10b981', isYou: true, stream: localStream },
     ...remoteParticipantList.slice(0, 2).map(p => ({
-      userId: p.userId, name: p.name, color: p.color, isYou: false,
+      userId: p.userId, name: participantLabel(p.name, p.guest), color: p.color, isYou: false,
       stream: remoteStreams.get(p.userId) ?? null,
     })),
   ];

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../../store';
 import { InsightCard, SpatialComment } from '../../types';
 import type { UsePartyPresenceReturn } from '../../lib/usePartyPresence';
+import { participantLabel } from '../../lib/identity';
 
 interface MobileParticipantViewProps {
   roomId: string;
@@ -64,7 +65,7 @@ const MobileParticipantView: React.FC<MobileParticipantViewProps> = ({ roomId, u
 
   const allParticipants = [
     { userId: localUserId, name: userName, color: '#10b981', isYou: true },
-    ...remoteParticipantList.map(p => ({ ...p, isYou: false })),
+    ...remoteParticipantList.map(p => ({ ...p, name: participantLabel(p.name, p.guest), isYou: false })),
   ];
 
   return (

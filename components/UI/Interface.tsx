@@ -11,6 +11,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../../store';
 import { ViewMode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
+import { participantLabel } from '../../lib/identity';
 import { useWebRTCContext } from '../../lib/WebRTCContext';
 import { pickDefaultSplitTarget } from '../../lib/splitTarget';
 import { clsx } from 'clsx';
@@ -127,6 +128,11 @@ const Interface: React.FC = () => {
 
   // Real people whose camera is locked to mine (myFollowers above is the agents).
   const humanFollowers = remoteParticipantList.filter(p => p.followingUserId === localUserId);
+  // The person I follow, named once for the three places that show it.
+  const followedParticipant = remoteParticipantList.find(p => p.userId === followingRemoteUserId);
+  const followedName = followedParticipant
+    ? participantLabel(followedParticipant.name, followedParticipant.guest)
+    : null;
   // When the last of them leaves, leading has nothing left to lead.
   const { noteVisible: leaderReleaseNote } = useLeaderAutoRelease();
 
@@ -284,7 +290,7 @@ const Interface: React.FC = () => {
                       <Users size={14} className={(leaderId || followingRemoteUserId) ? "text-white" : "text-gray-400 group-hover:text-gray-600"} />
                       <span className="font-bold">
                         {followingRemoteUserId
-                          ? `FOLLOWING: ${remoteParticipantList.find(p => p.userId === followingRemoteUserId)?.name ?? '...'}`
+                          ? `FOLLOWING: ${followedName ?? '...'}`
                           : leaderId ? "SYNC ACTIVE: LEADING" : "SYNC INACTIVE"}
                       </span>
                   </div>
@@ -297,13 +303,13 @@ const Interface: React.FC = () => {
                   <div className="w-64 mt-1 px-2 py-1.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] text-indigo-800 leading-tight">
                       You are the session leader.{' '}
                       {humanFollowers.length > 0
-                          ? `${humanFollowers.map(p => p.name).join(', ')} ${humanFollowers.length === 1 ? 'is' : 'are'} following your view.`
+                          ? `${humanFollowers.map(p => participantLabel(p.name, p.guest)).join(', ')} ${humanFollowers.length === 1 ? 'is' : 'are'} following your view.`
                           : 'Nobody is following yet.'}
                   </div>
               )}
               {followingRemoteUserId && (
                   <div className="w-64 mt-1 px-2 py-1.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] text-indigo-800 leading-tight">
-                      Following {remoteParticipantList.find(p => p.userId === followingRemoteUserId)?.name ?? 'remote user'}. Click again to detach.
+                      Following {followedName ?? 'remote user'}. Click again to detach.
                   </div>
               )}
             </div>
@@ -495,7 +501,7 @@ const Interface: React.FC = () => {
                           {remoteParticipantList.some(p => p.sameRoom) && (
                               <div className="px-2 py-1 mb-1 text-[8px] font-mono text-indigo-600 bg-indigo-50 rounded flex items-center gap-1">
                                   <Home size={8} />
-                                  {remoteParticipantList.filter(p => p.sameRoom).map(p => p.name).join(', ')} in same room
+                                  {remoteParticipantList.filter(p => p.sameRoom).map(p => participantLabel(p.name, p.guest)).join(', ')} in same room
                               </div>
                           )}
                           {remoteParticipantList.map(p => {
@@ -529,7 +535,7 @@ const Interface: React.FC = () => {
                                       </div>
                                       <div className="flex-1 min-w-0">
                                           <div className="font-mono text-[10px] font-bold truncate flex items-center gap-1">
-                                              {p.name}
+                                              {participantLabel(p.name, p.guest)}
                                               {p.sameRoom && <Home size={7} className="text-indigo-500 shrink-0" />}
                                           </div>
                                           <div className={clsx("text-[8px]", isFollowing ? "text-gray-300" : "text-gray-400")}>human</div>

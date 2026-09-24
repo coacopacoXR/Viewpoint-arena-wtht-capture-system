@@ -19,6 +19,12 @@ export interface ParticipantPresence {
   // older client's payload stays valid — a missing field means "not following".
   followingUserId?: string | null;
   followNudged?: boolean;
+  // True when this person is in the room without an account, on a deployment
+  // whose identity block allows guests. Carried as a flag rather than baked
+  // into `name`, so the suffix a UI adds never reaches stored data (tracker
+  // items, audit rows, transcripts). Optional: an older client sends nothing,
+  // which reads as "not a guest" — the only answer possible before identity.
+  guest?: boolean;
 }
 
 type RoomMessage =
@@ -61,7 +67,7 @@ type RoomMessage =
   | { type: 'JOIN_PENDING'; payload: Record<string, never> }
   | { type: 'JOIN_ADMITTED'; payload: Record<string, never> }
   | { type: 'JOIN_DECLINED'; payload: Record<string, never> }
-  | { type: 'JOIN_REQUESTS'; payload: { pending: Array<{ userId: string; name: string; since: number }> } }
+  | { type: 'JOIN_REQUESTS'; payload: { pending: Array<{ userId: string; name: string; since: number; guest?: boolean }> } }
   | { type: 'JOIN_POLICY'; payload: { policy: 'open' | 'ask' } };
 
 const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between presenter changes
@@ -102,7 +108,7 @@ export default class RoomServer implements Party.Server {
   // UserIds that have been admitted through the knock gate.
   admitted = new Set<string>();
   // Pending knock queue: userId → { userId, name, since }.
-  pending = new Map<string, { userId: string; name: string; since: number }>();
+  pending = new Map<string, { userId: string; name: string; since: number; guest?: boolean }>();
   // Live connection objects keyed by connection id, for targeted sends.
   connections = new Map<string, Party.Connection>();
   // Connection ids that have already been told they are in and handed the
@@ -448,10 +454,11 @@ export default class RoomServer implements Party.Server {
       }
 
       // Rule 3: park in pending. Idempotent — only notify the host when the
-      // entry is new or the name changed.
+      // entry is new or what the knock prompt shows them changed.
+      const guest = msg.payload.guest === true;
       const existing = this.pending.get(userId);
-      if (!existing || existing.name !== name) {
-        this.pending.set(userId, { userId, name, since: existing?.since ?? now });
+      if (!existing || existing.name !== name || (existing.guest ?? false) !== guest) {
+        this.pending.set(userId, { userId, name, since: existing?.since ?? now, guest });
         this.sendToUser(userId, { type: 'JOIN_PENDING', payload: {} });
         this.broadcastJoinRequests();
       }
