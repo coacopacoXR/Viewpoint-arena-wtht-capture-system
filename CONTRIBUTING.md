@@ -71,3 +71,6 @@ This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By particip
 ## License
 
 Viewpoint Arena is licensed under the [Apache License, Version 2.0](LICENSE).
+
+Third-party components that ship in a build, and the obligations that come with
+them, are listed in [THIRD_PARTY.md](THIRD_PARTY.md).

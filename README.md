@@ -122,3 +122,4 @@ limit rule for `/api/capture/` in the project's Firewall settings as well.
 *   **Zustand** (State Management)
 *   **Tailwind CSS**
 *   **Lucide React** (Icons)
+*   **occt-import-js** (OpenCascade, WebAssembly) — STEP, IGES and BREP import; see [THIRD_PARTY.md](THIRD_PARTY.md)

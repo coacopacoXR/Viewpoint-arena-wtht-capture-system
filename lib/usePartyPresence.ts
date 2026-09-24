@@ -9,6 +9,7 @@ import type { ReviewDraft } from './reviewSetupStore';
 import { useStore } from '../store';
 import { ViewMode } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
+import { modelFileMime } from '../utils/modelFormats';
 import { usePointingTimelineStore } from './pointingTimelineStore';
 import type { PointingSegment } from './pointingTimelineStore';
 
@@ -444,14 +445,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         if (modelType === 'synth' || modelType === 'bicycle') {
           setActiveModelType(modelType);
         } else if (modelType === 'imported' && fileBase64 && fileName) {
-          const ext = fileName.split('.').pop()?.toLowerCase() || 'glb';
-          const mimeMap: Record<string, string> = {
-            glb: 'model/gltf-binary', gltf: 'model/gltf+json',
-            obj: 'text/plain', fbx: 'application/octet-stream', stl: 'application/octet-stream',
-          };
-          const mime = mimeMap[ext] || 'application/octet-stream';
           const bytes = Uint8Array.from(atob(fileBase64), c => c.charCodeAt(0));
-          const file = new File([bytes], fileName, { type: mime });
+          const file = new File([bytes], fileName, { type: modelFileMime(fileName) });
           parseModelFile(file)
             .then(result => setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition))
             .catch(err => console.error('[MODEL_CHANGE] Parse error:', err));

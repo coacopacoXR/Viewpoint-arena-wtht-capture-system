@@ -44,6 +44,13 @@ export default defineConfig({
       '@': path.resolve(__dirname, '.'),
     }
   },
+  optimizeDeps: {
+    // occt-import-js is CommonJS and is only ever imported from utils/cadWorker.ts,
+    // which the dependency scanner never reaches (a worker is created with
+    // `new URL(...)`, not imported). Pre-bundling it by hand is what lets that
+    // worker do `import occtimportjs from 'occt-import-js'` under `npm run dev`.
+    include: ['occt-import-js'],
+  },
   build: {
     rollupOptions: {
       output: {

@@ -2,6 +2,21 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useStore } from '../../store';
 
+/**
+ * Scale the imported model and put it centred on the origin, resting on the
+ * floor. basePosition is -centre in the model's OWN units; the group is scaled,
+ * so the offset is scaled with it. Unscaled, a model far from its origin (a CAD
+ * part in millimetres, 100 mm out) was pushed ~100 scene units away and never
+ * appeared.
+ */
+export function placeImportedGroup(group: THREE.Object3D, scale: number, basePosition: THREE.Vector3 | null): void {
+    group.scale.setScalar(scale);
+    if (basePosition) group.position.copy(basePosition).multiplyScalar(scale);
+    group.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(group);
+    group.position.y -= box.min.y;
+}
+
 const ImportedModel: React.FC = () => {
     const importedMeshes = useStore(state => state.importedMeshes);
     const importedScale = useStore(state => state.importedScale);
@@ -15,12 +30,7 @@ const ImportedModel: React.FC = () => {
     useEffect(() => {
         if (!importedMeshes || !groupRef.current) return;
         const group = groupRef.current;
-        group.scale.setScalar(importedScale * importedBaseScale);
-        if (importedBasePosition) {
-            group.position.copy(importedBasePosition);
-        }
-        const box = new THREE.Box3().setFromObject(group);
-        group.position.y -= box.min.y;
+        placeImportedGroup(group, importedScale * importedBaseScale, importedBasePosition);
     }, [importedScale, importedBaseScale, importedBasePosition, importedMeshes]);
 
     useEffect(() => {

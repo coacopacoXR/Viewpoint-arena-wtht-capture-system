@@ -4,6 +4,7 @@ import { SceneNode } from '../../types';
 import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { parseModelFile, validateModelFile } from '../../utils/modelLoader';
+import { MODEL_FILE_ACCEPT } from '../../utils/modelFormats';
 import { usePresence } from '../../lib/PresenceContext';
 
 // Find all ancestor ids of a node in the tree (excluding the node itself)
@@ -280,7 +281,7 @@ const SceneTree: React.FC = () => {
                 <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".glb,.gltf,.obj,.fbx,.stl,.GLB,.GLTF,.OBJ,.FBX,.STL"
+                    accept={MODEL_FILE_ACCEPT}
                     onChange={handleFileChange}
                     className="hidden"
                 />

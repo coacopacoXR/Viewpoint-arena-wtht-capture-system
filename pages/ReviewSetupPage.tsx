@@ -19,6 +19,7 @@ import {
 import { useStore } from '../store';
 import type { ModelType, Requirement } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
+import { MODEL_FILE_ACCEPT, modelFileMime } from '../utils/modelFormats';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, listUsedLabelValues, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import { getIdentity } from '../lib/identity';
@@ -223,14 +224,8 @@ const ReviewSetupPage: React.FC = () => {
     if (!modelType) return;
     if (modelType === 'imported') {
       if (importedFileBase64 && importedFileName) {
-        const ext = importedFileName.split('.').pop()?.toLowerCase() || 'glb';
-        const mimeMap: Record<string, string> = {
-          glb: 'model/gltf-binary', gltf: 'model/gltf+json',
-          obj: 'text/plain', fbx: 'application/octet-stream', stl: 'application/octet-stream',
-        };
-        const mime = mimeMap[ext] || 'application/octet-stream';
         const bytes = Uint8Array.from(atob(importedFileBase64), (c) => c.charCodeAt(0));
-        const file = new File([bytes], importedFileName, { type: mime });
+        const file = new File([bytes], importedFileName, { type: modelFileMime(importedFileName) });
         parseModelFile(file)
           .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
           .catch((err) => console.error('[ReviewSetup] failed to parse imported model:', err));
@@ -666,7 +661,7 @@ const AssetTab: React.FC = () => {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".glb,.gltf,.obj,.fbx,.stl"
+            accept={MODEL_FILE_ACCEPT}
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
@@ -685,7 +680,7 @@ const AssetTab: React.FC = () => {
           >
             <FileBox size={16} />
             <span className="text-xs font-bold">
-              {draft.asset.importedFileName ? `Imported: ${draft.asset.importedFileName}` : 'Upload your own (.glb, .obj, .fbx)'}
+              {draft.asset.importedFileName ? `Imported: ${draft.asset.importedFileName}` : 'Upload your own 3D model or CAD file'}
             </span>
           </button>
           {modelImport === 'onshape' && (

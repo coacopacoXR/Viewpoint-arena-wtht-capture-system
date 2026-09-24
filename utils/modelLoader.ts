@@ -1,9 +1,22 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { SceneNode, ObjectState } from '../types';
+import { cadResultToGroup } from './cadToThree';
+import { CAD_READER_BY_EXTENSION, readCadFile } from './cadImport';
+import {
+    INVALID_FILE_TYPE_MESSAGE,
+    NATIVE_CAD_MESSAGE,
+    SUPPORTED_EXTENSIONS,
+    isNativeCadExtension,
+    maxFileSizeFor,
+    maxFileSizeMessage,
+    modelFileExtension,
+    upAxisFor
+} from './modelFormats';
 
 export interface ModelImportResult {
     root: THREE.Group;
@@ -13,7 +26,10 @@ export interface ModelImportResult {
     basePosition: THREE.Vector3;
 }
 
-const SUPPORTED_EXTENSIONS = ['.glb', '.gltf', '.obj', '.fbx', '.stl'];
+/** Tips a Z-up CAD model onto three.js's Y-up frame. See UP_AXIS_BY_EXTENSION. */
+const Z_UP_TO_Y_UP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+
+const baseNameOf = (file: File): string => file.name.replace(/\.[^/.]+$/, '');
 
 const convertToStandardMaterial = (material: THREE.Material): THREE.MeshStandardMaterial => {
     // If already a MeshStandardMaterial or MeshPhysicalMaterial, just ensure proper settings
@@ -177,6 +193,10 @@ const centerModel = (root: THREE.Group): { baseScale: number; basePosition: THRE
 
 const loadGLTF = async (file: File): Promise<THREE.Object3D> => {
     const loader = new GLTFLoader();
+    // Meshopt-compressed GLBs (EXT_meshopt_compression, e.g. gltfpack output and
+    // the bundled bicycle) fail outright without a decoder. The built-in models
+    // get one from drei's useGLTF; imports have to wire it themselves.
+    loader.setMeshoptDecoder(MeshoptDecoder);
     const arrayBuffer = await file.arrayBuffer();
 
     return new Promise((resolve, reject) => {
@@ -201,10 +221,8 @@ const loadFBX = async (file: File): Promise<THREE.Object3D> => {
     return loader.parse(arrayBuffer, '');
 };
 
-const loadSTL = async (file: File): Promise<THREE.Object3D> => {
-    const loader = new STLLoader();
-    const arrayBuffer = await file.arrayBuffer();
-    const geometry = loader.parse(arrayBuffer);
+/** Geometry-only formats (STL, PLY) carry no material: give them the neutral grey. */
+const meshFromGeometry = (geometry: THREE.BufferGeometry, name: string): THREE.Mesh => {
     const material = new THREE.MeshStandardMaterial({
         color: new THREE.Color(0.7, 0.7, 0.75),
         metalness: 0.2,
@@ -212,27 +230,80 @@ const loadSTL = async (file: File): Promise<THREE.Object3D> => {
         side: THREE.DoubleSide
     });
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = file.name.replace(/\.[^/.]+$/, '');
+    mesh.name = name;
     return mesh;
 };
 
-export const validateModelFile = (file: File): string | null => {
-    const maxSize = 50 * 1024 * 1024;
-    const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
+const loadSTL = async (file: File): Promise<THREE.Object3D> => {
+    const loader = new STLLoader();
+    const arrayBuffer = await file.arrayBuffer();
+    return meshFromGeometry(loader.parse(arrayBuffer), baseNameOf(file));
+};
 
-    if (!SUPPORTED_EXTENSIONS.includes(extension)) {
-        return 'Invalid file type. Please select a .glb, .gltf, .obj, .fbx, or .stl file.';
+// Imported on demand, not at module scope: none of these are needed until a
+// file of that format is opened, and VRMLLoader alone pulls in a parser
+// generator (chevrotain) that has no business sitting in the main bundle.
+const load3MF = async (file: File): Promise<THREE.Object3D> => {
+    const { ThreeMFLoader } = await import('three/examples/jsm/loaders/3MFLoader.js');
+    return new ThreeMFLoader().parse(await file.arrayBuffer());
+};
+
+const loadPLY = async (file: File): Promise<THREE.Object3D> => {
+    const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js');
+    return meshFromGeometry(new PLYLoader().parse(await file.arrayBuffer()), baseNameOf(file));
+};
+
+const loadDAE = async (file: File): Promise<THREE.Object3D> => {
+    const { ColladaLoader } = await import('three/examples/jsm/loaders/ColladaLoader.js');
+    // Textures would be sibling files; an uploaded .dae carries only what is in
+    // the XML, so the empty path leaves them unresolved rather than fetching.
+    return new ColladaLoader().parse(await file.text(), '').scene;
+};
+
+const load3DS = async (file: File): Promise<THREE.Object3D> => {
+    const { TDSLoader } = await import('three/examples/jsm/loaders/TDSLoader.js');
+    // Same as .dae: material colours and geometry survive, external textures
+    // referenced by the file cannot be resolved from a single upload.
+    return new TDSLoader().parse(await file.arrayBuffer(), '');
+};
+
+const loadVRML = async (file: File): Promise<THREE.Object3D> => {
+    const { VRMLLoader } = await import('three/examples/jsm/loaders/VRMLLoader.js');
+    return new VRMLLoader().parse(await file.text(), '');
+};
+
+const loadAMF = async (file: File): Promise<THREE.Object3D> => {
+    const { AMFLoader } = await import('three/examples/jsm/loaders/AMFLoader.js');
+    return new AMFLoader().parse(await file.arrayBuffer());
+};
+
+/** STEP / IGES / BREP: tessellated by OpenCascade in a Web Worker, then rebuilt as an assembly. */
+const loadCAD = async (file: File, extension: string): Promise<THREE.Object3D> => {
+    const result = await readCadFile(file, CAD_READER_BY_EXTENSION[extension]);
+    return cadResultToGroup(result, baseNameOf(file));
+};
+
+export const validateModelFile = (file: File): string | null => {
+    const extension = modelFileExtension(file.name);
+
+    // Recognised only to say what to do: there is no open-source reader for these.
+    if (isNativeCadExtension(extension)) {
+        return NATIVE_CAD_MESSAGE;
     }
 
-    if (file.size > maxSize) {
-        return `File too large. Maximum size is ${maxSize / (1024 * 1024)}MB.`;
+    if (!SUPPORTED_EXTENSIONS.includes(extension)) {
+        return INVALID_FILE_TYPE_MESSAGE;
+    }
+
+    if (file.size > maxFileSizeFor(extension)) {
+        return maxFileSizeMessage(extension);
     }
 
     return null;
 };
 
 export async function parseModelFile(file: File): Promise<ModelImportResult> {
-    const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
+    const extension = modelFileExtension(file.name);
 
     let loadedObject: THREE.Object3D;
 
@@ -250,12 +321,47 @@ export async function parseModelFile(file: File): Promise<ModelImportResult> {
         case '.stl':
             loadedObject = await loadSTL(file);
             break;
+        case '.3mf':
+            loadedObject = await load3MF(file);
+            break;
+        case '.ply':
+            loadedObject = await loadPLY(file);
+            break;
+        case '.dae':
+            loadedObject = await loadDAE(file);
+            break;
+        case '.3ds':
+            loadedObject = await load3DS(file);
+            break;
+        case '.wrl':
+        case '.vrml':
+            loadedObject = await loadVRML(file);
+            break;
+        case '.amf':
+            loadedObject = await loadAMF(file);
+            break;
+        case '.step':
+        case '.stp':
+        case '.iges':
+        case '.igs':
+        case '.brep':
+        case '.brp':
+            loadedObject = await loadCAD(file, extension);
+            break;
         default:
-            throw new Error('Unsupported file type.');
+            // Remote clients land here straight from the socket bytes, without
+            // having gone through validateModelFile, so say the useful thing.
+            throw new Error(isNativeCadExtension(extension) ? NATIVE_CAD_MESSAGE : INVALID_FILE_TYPE_MESSAGE);
+    }
+
+    if (upAxisFor(extension) === 'z') {
+        // CAD kernels are Z-up, three.js is Y-up. Applied in the parent frame,
+        // before centring, so the bounding box matches what the user sees.
+        loadedObject.applyQuaternion(Z_UP_TO_Y_UP);
     }
 
     const rootGroup = new THREE.Group();
-    rootGroup.name = file.name.replace(/\.[^/.]+$/, '');
+    rootGroup.name = baseNameOf(file);
     // A cast, not @ts-expect-error: @pmndrs/pointer-events augments Object3D via
     // `declare module 'three'`, giving a dual identity with src/core/Object3D under
     // @types/three's dual entry points, and the polymorphic `this` on applyQuaternion
