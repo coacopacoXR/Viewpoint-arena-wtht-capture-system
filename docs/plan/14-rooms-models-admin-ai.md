@@ -156,7 +156,7 @@ screen shows "key set · ends in …7f2a"). Settings made here override
   thing; if the user confirms "design review" as the name, the screens use
   that and "room" is kept only for the live space.
 
-## Preparing a review inside its room (proposed 2026-09-24, awaiting the user's go)
+## Preparing a review inside its room (approved by the user 2026-09-24)
 
 The user: "we should merge the curate room and the room itself ... and think
 through who can do what and how the functionality of curating is presented to
