@@ -8,6 +8,38 @@ export type WebRTCSignalData =
   | { type: 'answer'; sdp: RTCSessionDescriptionInit }
   | { type: 'ice'; candidate?: RTCIceCandidateInit };
 
+/**
+ * What is on screen, by reference — and nothing else.
+ *
+ * `hash` is the SHA-256 the file was stored under (POST /api/models). Clients
+ * fetch the bytes from /api/models/<hash> instead of receiving them here, which
+ * is what removes the size limit a websocket imposes on a shared model: a room
+ * used to carry up to 50 MB of base64 through this payload, held in the server's
+ * memory and replayed to every connection that joined. `fileName` travels with
+ * the hash because utils/modelLoader.ts dispatches on the extension, and `size`
+ * is what a client shows while the download runs.
+ *
+ * Both are absent for the built-in models, which ship with the app and have
+ * nothing to fetch.
+ */
+export interface ModelReference {
+  modelType: 'synth' | 'bicycle' | 'imported';
+  hash?: string;
+  fileName?: string;
+  size?: number;
+}
+
+/**
+ * A MODEL_CHANGE as it arrives, which may still carry bytes.
+ *
+ * `fileBase64` is declared only so the handler can recognise a payload from a
+ * client that has not been updated and DROP it. Nothing stores that field and
+ * nothing relays it.
+ */
+export interface IncomingModelChange extends ModelReference {
+  fileBase64?: string;
+}
+
 export interface ParticipantPresence {
   userId: string;
   name: string;
@@ -54,7 +86,7 @@ type RoomMessage =
   | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null; targetId?: string | null; targetMeshName?: string | null; targetPartName?: string | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
-  | { type: 'MODEL_CHANGE'; payload: { modelType: 'synth' | 'bicycle' | 'imported'; fileBase64?: string; fileName?: string } }
+  | { type: 'MODEL_CHANGE'; payload: IncomingModelChange }
   | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
@@ -91,6 +123,41 @@ const PRESENTER_COOLDOWN = 1500; // ms — server-authoritative cooldown between
 const ADMITTED_KEY = 'admitted-user-ids';
 const MAX_PERSISTED_ADMISSIONS = 200;
 
+// Where the on-screen model is kept between restarts. See persistCurrentModel
+// for why this one is persisted when almost nothing else here is.
+const MODEL_KEY = 'current-model';
+
+/**
+ * A persisted or received model reference, or null when it is not one.
+ *
+ * Strict in one deliberate direction: a room server that stored its model
+ * BEFORE models were synced by reference wrote the base64 bytes into room
+ * storage along with it. Restoring that record would replay up to 50 MB to
+ * every connection that joins — the exact thing the reference shape exists to
+ * stop — so a record carrying `fileBase64` is dropped rather than rescued. The
+ * room comes back with no model and the next import puts one up, which is
+ * recoverable; a partykit container that runs out of memory on restart is not.
+ *
+ * An 'imported' record with no hash is refused for the same reason: there would
+ * be nothing for a client to fetch, so replaying it would tell every joiner to
+ * render a model that does not exist.
+ */
+function asModelReference(value: unknown): ModelReference | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.fileBase64 === 'string') return null;
+  const modelType = record.modelType;
+  if (modelType !== 'synth' && modelType !== 'bicycle' && modelType !== 'imported') return null;
+  const hash = typeof record.hash === 'string' && record.hash !== '' ? record.hash : undefined;
+  if (modelType === 'imported' && !hash) return null;
+  return {
+    modelType,
+    hash,
+    fileName: typeof record.fileName === 'string' ? record.fileName : undefined,
+    size: typeof record.size === 'number' && Number.isFinite(record.size) ? record.size : undefined,
+  };
+}
+
 export default class RoomServer implements Party.Server {
   participants = new Map<string, ParticipantPresence>();
   // Ordered by first PRESENCE — index 0 is always the session host
@@ -103,8 +170,11 @@ export default class RoomServer implements Party.Server {
   // Takeover-mode policy — held server-side so late joiners get a consistent view
   takeoverModeEnabled = false;
   takeoverApprovedUserIds: string[] = [];
-  // Persisted model state for late joiners
-  currentModel: { modelType: string; fileBase64?: string; fileName?: string } | null = null;
+  // The model on screen, by reference: a hash, the name it was imported under
+  // and its size. Persisted to room storage (MODEL_KEY) so a restart does not
+  // drop it, and replayed to each new connection. Never the bytes — see
+  // ModelReference.
+  currentModel: ModelReference | null = null;
   // Persisted curated review config (viewpoints, pins, agenda…)
   reviewConfig: ReviewDraft | null = null;
   // Persisted spatial comments for late joiners
@@ -147,6 +217,10 @@ export default class RoomServer implements Party.Server {
   // Whether we have already logged that identity is switched on but cannot be
   // verified (JWT_SECRET empty). Once per server instance, like the audit line.
   private identityNotConfiguredLogged = false;
+  // Whether we have already logged that a MODEL_CHANGE was dropped. Once per
+  // server instance: an un-updated client sends one per import, and a room that
+  // retries would otherwise fill the container's log with the same line.
+  private modelChangeDropLogged = false;
 
   constructor(readonly room: Party.Room) {}
 
@@ -169,6 +243,15 @@ export default class RoomServer implements Party.Server {
    *
    * The join policy is NOT restored: it goes back to 'ask', which is the safe
    * direction, and a host who wanted an open link can say so again.
+   *
+   * The model on screen IS restored, for the same reason as the admitted set:
+   * an upgrade restarts this container during a meeting, and a room that came
+   * back with nobody's model in it would leave every reconnecting participant
+   * staring at the default headphones while the review carries on about a
+   * bracket. What is restored is a hash, a name and a length — restoring it
+   * costs one small read, and the bytes stay in the store they were uploaded
+   * to. A record written before models were synced by reference carries those
+   * bytes inline and is dropped instead; see asModelReference.
    */
   async onStart() {
     try {
@@ -180,6 +263,12 @@ export default class RoomServer implements Party.Server {
       }
     } catch {
       // No storage on this runtime — carry on with an empty set.
+    }
+    try {
+      this.currentModel = asModelReference(await this.room.storage.get(MODEL_KEY));
+    } catch {
+      // No storage on this runtime — the room comes back with no model, which is
+      // what it did before, and the next import puts one up.
     }
   }
 
@@ -196,6 +285,39 @@ export default class RoomServer implements Party.Server {
     } catch {
       // No storage on this runtime.
     }
+  }
+
+  /**
+   * Write the on-screen model back, the way persistAdmitted does.
+   *
+   * Fire-and-forget for the same reason: a model change must not wait on a disk
+   * write, and a failed write costs a late joiner the model until somebody
+   * imports again, not a broken room. There is no cap to apply because there is
+   * nothing to grow — this is a hash, a name and a length, which is the whole
+   * benefit of syncing by reference rather than by payload.
+   */
+  private persistCurrentModel(): void {
+    const model = this.currentModel;
+    if (!model) return;
+    try {
+      void this.room.storage.put(MODEL_KEY, model).catch(() => {});
+    } catch {
+      // No storage on this runtime.
+    }
+  }
+
+  /**
+   * Drop a MODEL_CHANGE this room cannot use, and say why once.
+   *
+   * Once per server instance rather than once per message: an un-updated client
+   * sends one of these per import, and a room where three people have not
+   * reloaded would otherwise write the same line to the container's log every
+   * time any of them touched the model button.
+   */
+  private dropModelChange(reason: string): void {
+    if (this.modelChangeDropLogged) return;
+    this.modelChangeDropLogged = true;
+    console.log(`[room] dropped a MODEL_CHANGE: ${reason}`);
   }
 
   private computeHost(): string | null {
@@ -747,8 +869,30 @@ export default class RoomServer implements Party.Server {
       } as RoomMessage));
 
     } else if (msg.type === 'MODEL_CHANGE') {
-      this.currentModel = msg.payload;
-      this.relay(JSON.stringify(msg), [sender.id]);
+      // A client that has not been updated still sends the file itself. Dropped
+      // rather than relayed or stored: this server keeps currentModel in memory
+      // and replays it to every connection that joins, so accepting it would put
+      // up to 50 MB per import back on exactly the path the reference shape
+      // removed. Nothing the sender can see breaks — their own screen already
+      // shows the model they imported — and the line in the log names the cause.
+      if (typeof msg.payload.fileBase64 === 'string') {
+        this.dropModelChange(
+          'it carried fileBase64, which means that client has not been updated. ' +
+            'Models travel as a hash now (docs/plan/14-rooms-models-admin-ai.md).',
+        );
+        return;
+      }
+      // Validated, and then rebuilt rather than stored as received: a field this
+      // handler has never heard of must not be able to ride into room state,
+      // into persisted storage, or out to every other connection.
+      const reference = asModelReference(msg.payload);
+      if (!reference) {
+        this.dropModelChange('it was not a model reference this server could read.');
+        return;
+      }
+      this.currentModel = reference;
+      this.persistCurrentModel();
+      this.relay(JSON.stringify({ type: 'MODEL_CHANGE', payload: reference } as RoomMessage), [sender.id]);
 
     } else if (msg.type === 'REVIEW_CONFIG') {
       this.reviewConfig = msg.payload.config;

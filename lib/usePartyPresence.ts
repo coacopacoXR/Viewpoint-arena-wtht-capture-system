@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import PartySocket from 'partysocket';
-import type { ParticipantPresence, WebRTCSignalData } from '../party/room.server';
+import type { ParticipantPresence, WebRTCSignalData, ModelReference } from '../party/room.server';
 import type { InsightCard, LiveChatMessage, XRParticipantData, SpatialComment } from '../types';
 import { remoteXRParticipants } from './xrPresenceRef';
 import { remoteLaserTargets, remoteLaserColors, remoteLaserMeshNames, remoteLaserPartNames, remoteLaserLastUpdate } from './laserTargetRef';
@@ -9,7 +9,7 @@ import type { ReviewDraft } from './reviewSetupStore';
 import { useStore } from '../store';
 import { ViewMode } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
-import { modelFileMime } from '../utils/modelFormats';
+import { clearModelFileCache, fetchModelFile } from './modelsClient';
 import { usePointingTimelineStore } from './pointingTimelineStore';
 import type { PointingSegment } from './pointingTimelineStore';
 import { supabase } from './supabase';
@@ -31,7 +31,7 @@ type RoomMessage =
   | { type: 'LASER_MOVE'; payload: { userId: string; position: [number, number, number] | null; targetId?: string | null; targetMeshName?: string | null; targetPartName?: string | null } }
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
-  | { type: 'MODEL_CHANGE'; payload: { modelType: 'synth' | 'bicycle' | 'imported'; fileBase64?: string; fileName?: string } }
+  | { type: 'MODEL_CHANGE'; payload: ModelReference }
   | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
@@ -176,6 +176,18 @@ export function useJoinPolicy(): 'open' | 'ask' {
 // cleared when the hook unmounts (room change).
 const seenTranscriptIds = new Set<string>();
 
+// Which MODEL_CHANGE this client is currently working on.
+//
+// Loading a shared model became asynchronous when it stopped arriving inline:
+// the payload is a hash and the bytes come from /api/models/<hash>. Two
+// references that arrive close together — the room server's replay to a new
+// connection and a live change a moment later, or two people importing in quick
+// succession — can therefore finish out of order, and the slower one would win
+// and put the wrong model on screen. Every handler stamps itself with the
+// counter as it starts and only applies its result if nothing newer has started
+// since.
+let modelChangeSeq = 0;
+
 const PARTYKIT_HOST: string =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
 
@@ -257,7 +269,7 @@ export interface UsePartyPresenceReturn {
   broadcastLaserMove: (position: [number, number, number] | null, targetId?: string | null, targetMeshName?: string | null, targetPartName?: string | null) => void;
   broadcastPrivacyMode: (enabled: boolean) => void;
   broadcastLeaderTakeover: (userId: string) => void;
-  broadcastModelChange: (modelType: 'synth' | 'bicycle' | 'imported', fileBase64?: string, fileName?: string) => void;
+  broadcastModelChange: (reference: ModelReference) => void;
   broadcastReviewConfig: (config: ReviewDraft) => boolean;
   broadcastMeetingEnd: () => void;
   broadcastTakeoverSync: (enabled: boolean, approvedUserIds: string[]) => void;
@@ -358,6 +370,13 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     notifyJoinStateSubscribers();
     joinRequestsRef.current = [];
     notifyJoinRequestsSubscribers();
+
+    // The previous room's models are of no use here and can be hundreds of
+    // megabytes, so they go rather than waiting to be evicted. Bumping the
+    // sequence at the same time stops a download that was still in flight for
+    // the old room from landing on the new one's scene.
+    clearModelFileCache();
+    modelChangeSeq += 1;
 
     // Knock. PRESENCE is how a connection tells the server who it is, and the
     // server's knock gate answers it (admitted, or parked in the host's
@@ -521,16 +540,31 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
           setPresenterRequestStatus(null);
         }
       } else if (msg.type === 'MODEL_CHANGE') {
-        const { modelType, fileBase64, fileName } = msg.payload;
+        // A reference, not a file. The built-ins ship with the app and need
+        // nothing fetched; an imported model is downloaded by its hash from
+        // /api/models, which the browser keeps for a year because the response
+        // is content-addressed and immutable — so switching back to a revision
+        // the room has already seen costs a cache lookup, not another 200 MB.
+        const reference = msg.payload;
+        const started = ++modelChangeSeq;
         const { setActiveModelType, setImportedModel } = useStore.getState();
-        if (modelType === 'synth' || modelType === 'bicycle') {
-          setActiveModelType(modelType);
-        } else if (modelType === 'imported' && fileBase64 && fileName) {
-          const bytes = Uint8Array.from(atob(fileBase64), c => c.charCodeAt(0));
-          const file = new File([bytes], fileName, { type: modelFileMime(fileName) });
-          parseModelFile(file)
-            .then(result => setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition))
-            .catch(err => console.error('[MODEL_CHANGE] Parse error:', err));
+        if (reference.modelType === 'synth' || reference.modelType === 'bicycle') {
+          setActiveModelType(reference.modelType);
+        } else if (reference.modelType === 'imported' && reference.hash && reference.fileName) {
+          const { hash, fileName } = reference;
+          void (async () => {
+            try {
+              const file = await fetchModelFile(hash, fileName);
+              // Checked at every await: a newer reference may have arrived
+              // while this one was downloading, or while it was being parsed.
+              if (started !== modelChangeSeq) return;
+              const result = await parseModelFile(file);
+              if (started !== modelChangeSeq) return;
+              setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition);
+            } catch (err) {
+              console.error('[MODEL_CHANGE] could not load the shared model:', err);
+            }
+          })();
         }
       } else if (msg.type === 'REVIEW_CONFIG') {
         // Store the curated review config — setConfig syncs the main store's
@@ -777,10 +811,20 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     return true;
   }
 
-  function broadcastModelChange(modelType: 'synth' | 'bicycle' | 'imported', fileBase64?: string, fileName?: string) {
+  /**
+   * Tell the room what is on screen, by reference.
+   *
+   * The payload is a hash, a name and a length — never the file. That is what
+   * lets a 200 MB assembly be shared at all: it goes to the store once over
+   * HTTP and every client, including one who joins an hour later, fetches it by
+   * its content address. The server refuses and logs a payload that still
+   * carries bytes, so an un-updated client cannot put that size back on the
+   * socket.
+   */
+  function broadcastModelChange(reference: ModelReference) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({ type: 'MODEL_CHANGE', payload: { modelType, fileBase64, fileName } }));
+    socket.send(JSON.stringify({ type: 'MODEL_CHANGE', payload: reference } as RoomMessage));
   }
 
   function broadcastMeetingEnd() {

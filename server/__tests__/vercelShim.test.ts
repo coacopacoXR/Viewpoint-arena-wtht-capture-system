@@ -17,6 +17,7 @@ import {
   parseCookieHeader,
   parseQuery,
   resolveHandlerPath,
+  resolveRoute,
   type ShimRequest,
   type ShimResponse,
 } from '../vercelShim.ts';
@@ -56,6 +57,13 @@ const HANDLERS: Record<string, Mod> = {
     },
   },
   '_private.ts': { default: (_req, res) => res.status(200).send('leak') },
+  // A literal file and a dynamic sibling in the same folder, which is the shape
+  // /api/models has: POST /api/models is api/models.ts, GET /api/models/<hash>
+  // is api/models/[hash].ts.
+  'models.ts': { default: (_req, res) => res.status(200).send('literal') },
+  'models/[hash].ts': {
+    default: (req, res) => res.status(200).json({ query: req.query }),
+  },
 };
 
 let dir: string;
@@ -67,6 +75,7 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'vp-shim-'));
   mkdirSync(join(dir, 'nested'));
   mkdirSync(join(dir, '_lib'));
+  mkdirSync(join(dir, 'models'));
   for (const name of Object.keys(HANDLERS)) writeFileSync(join(dir, name), '');
   writeFileSync(join(dir, '_lib', 'helper.ts'), '');
   writeFileSync(join(dir, 'noexport.ts'), '');
@@ -126,6 +135,88 @@ describe('routing', () => {
   it('passes non-/api requests on untouched', async () => {
     expect(await (await fetch(`${base}/room/abc`)).text()).toBe('NOT-API');
     expect(await (await fetch(`${base}/apix`)).text()).toBe('NOT-API');
+  });
+});
+
+// ─── Dynamic routes ─────────────────────────────────────────────────────────
+//
+// /api/models/<hash> is the first path in this app whose last segment is not a
+// file name. Vercel matches it with a `[param].ts` sibling; if the shim does
+// not, the route works in one deployment shape and 404s in the other, and the
+// failure is invisible until somebody imports a model on a self-hosted install.
+
+describe('dynamic routes', () => {
+  const HASH = 'a'.repeat(64);
+
+  it('routes a trailing segment to a [param].ts sibling and passes it in query', async () => {
+    const res = await fetch(`${base}/api/models/${HASH}`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ query: { hash: HASH } });
+  });
+
+  it('prefers a literal file over a dynamic sibling', async () => {
+    // api/models.ts and api/models/[hash].ts both exist, so POST /api/models
+    // must reach the literal one — Vercel's own precedence, and the reason a
+    // collection route and its item route can live side by side.
+    expect(await (await fetch(`${base}/api/models`)).text()).toBe('literal');
+    expect(resolveRoute(dir, '/api/models')).toEqual({
+      file: join(dir, 'models.ts'),
+      params: {},
+    });
+  });
+
+  it('reports the resolved file and parameter for a dynamic match', () => {
+    expect(resolveRoute(dir, `/api/models/${HASH}`)).toEqual({
+      file: join(dir, 'models', '[hash].ts'),
+      params: { hash: HASH },
+    });
+    expect(resolveHandlerPath(dir, `/api/models/${HASH}`)).toBe(
+      join(dir, 'models', '[hash].ts'),
+    );
+  });
+
+  it('lets the path parameter win over a query string of the same name', async () => {
+    const res = await fetch(`${base}/api/models/${HASH}?hash=${'b'.repeat(64)}`);
+    const body = (await res.json()) as { query: Record<string, string> };
+    // The router matched on the path, so the path is the part worth believing;
+    // a query string is caller-supplied and unexamined.
+    expect(body.query.hash).toBe(HASH);
+  });
+
+  it('keeps other query parameters', async () => {
+    const res = await fetch(`${base}/api/models/${HASH}?v=2`);
+    const body = (await res.json()) as { query: Record<string, string> };
+    expect(body.query).toEqual({ hash: HASH, v: '2' });
+  });
+
+  it('does not match a dynamic segment in the middle of a path', async () => {
+    // Only the LAST segment is a parameter. Anything deeper has no handler, and
+    // inventing one would mean guessing which folder a `[param].ts` belongs to.
+    expect((await fetch(`${base}/api/models/${HASH}/extra`)).status).toBe(404);
+    expect(resolveRoute(dir, `/api/models/${HASH}/extra`)).toBeNull();
+  });
+
+  it('still refuses traversal and anything a segment may not contain', () => {
+    // The segment rule runs BEFORE the directory scan, so no value that reaches
+    // a `[param].ts` handler can carry a separator, a dot or a percent sign —
+    // which is what makes `<dir>/<hash>` in the local store unreachable by a
+    // path an attacker chose.
+    for (const path of [
+      '/api/models/..%2Fsecret',
+      '/api/models/%2e%2e',
+      '/api/models/a%5Cb',
+      '/api/models/.hidden',
+      '/api/models/UPPER',
+      '/api/_lib/helper',
+      '/api/nested/..%2Fmodels',
+    ]) {
+      expect(resolveRoute(dir, path), path).toBeNull();
+    }
+    expect(resolveHandlerPath(dir, '/api/models/../echo')).toBeNull();
+  });
+
+  it('does not route a private file even through a dynamic match', async () => {
+    expect((await fetch(`${base}/api/_private`)).status).toBe(404);
   });
 });
 

@@ -67,4 +67,26 @@ export default defineConfig({
   // fails with a redirect_uri mismatch until the provider has it registered.
   notifications: [{ provider: 'teams', webhookUrlEnv: 'TEAMS_WEBHOOK_URL' }],
   modelImport: { provider: 'onshape' },
+  // Where imported 3D model FILES live — docs/plan/14-rooms-models-admin-ai.md
+  // §"File storage". Optional: absent means exactly the block below, which is
+  // the `models-data` volume docker-compose.yml mounts on the api service. A
+  // model is stored under its own SHA-256 and everything else (the room socket,
+  // a curated review, the URL that serves it) refers to that hash, never to the
+  // bytes.
+  modelStorage: { provider: 'local', dir: '/data/models' },
+  //
+  // A hosted deployment with no volume to write to uses a Supabase Storage
+  // bucket instead. The key is the SERVICE-ROLE one, which bypasses Row Level
+  // Security, so it is read by the api only and must never carry a VITE_
+  // prefix — the schema refuses one:
+  //
+  //   modelStorage: {
+  //     provider: 'supabase',
+  //     bucket: 'review-models',
+  //     serviceRoleKeyEnv: 'MODEL_STORAGE_SERVICE_ROLE_KEY',
+  //   },
+  //
+  // The project URL comes from SUPABASE_URL, or VITE_SUPABASE_URL when that is
+  // not set; neither is named here because both are already in every Supabase
+  // deployment's environment.
 });

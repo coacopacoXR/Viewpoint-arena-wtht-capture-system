@@ -4,6 +4,8 @@ import type { SpatialComment, Requirement } from '../types';
 import type { TeamMember } from './people';
 import { useStore } from '../store';
 import { parseModelFile } from '../utils/modelLoader';
+import { modelFileMime } from '../utils/modelFormats';
+import { fetchModelFile } from './modelsClient';
 
 // Build a live SpatialComment from a curated pin at commit time. The comment
 // is authored by whoever presses the button (not the curator), attached to the
@@ -126,27 +128,38 @@ function syncMainModel(config: ReviewDraft | null) {
   setModelTransform(a?.transform ?? { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
   if (!a?.modelType) return;
   if (a.modelType === 'imported') {
-    if (!a.importedFileBase64 || !a.importedFileName) {
-      // Cloud-hydrated curations strip the base64 blob (see curationsRepo).
-      // We can't render the import — leave whatever model was already there
-      // so the scene isn't empty, and warn so the issue is visible.
-      console.warn('[activeReviewStore] curation uses imported model but the file is not in this payload — keeping current model');
+    if (a.modelHash && a.importedFileName) {
+      // Stored by hash: downloaded from /api/models and parsed. The response is
+      // immutable and content-addressed, so a participant who has this revision
+      // already gets it from the browser cache rather than the network.
+      const fileName = a.importedFileName;
+      fetchModelFile(a.modelHash, fileName)
+        .then((file) => parseModelFile(file))
+        .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
+        .catch((err) => console.error('[activeReviewStore] could not load the curated model:', err));
       return;
     }
-    const ext = a.importedFileName.split('.').pop()?.toLowerCase() || 'glb';
-    const mimeMap: Record<string, string> = {
-      glb: 'model/gltf-binary', gltf: 'model/gltf+json',
-      obj: 'text/plain', fbx: 'application/octet-stream', stl: 'application/octet-stream',
-    };
-    const mime = mimeMap[ext] || 'application/octet-stream';
-    const bytes = Uint8Array.from(atob(a.importedFileBase64), (c) => c.charCodeAt(0));
-    const file = new File([bytes], a.importedFileName, { type: mime });
-    parseModelFile(file)
-      .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
-      .catch((err) => console.error('[activeReviewStore] failed to parse imported model:', err));
-  } else {
-    setActiveModelType(a.modelType);
+    if (a.importedFileBase64 && a.importedFileName) {
+      // LEGACY: a draft that has not been migrated yet (lib/migrateCurationAsset
+      // runs on the load path, and a failed upload leaves the bytes in place so
+      // the review still opens with its model). Same parse, no download.
+      const file = new File(
+        [Uint8Array.from(atob(a.importedFileBase64), (c) => c.charCodeAt(0))],
+        a.importedFileName,
+        { type: modelFileMime(a.importedFileName) },
+      );
+      parseModelFile(file)
+        .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
+        .catch((err) => console.error('[activeReviewStore] failed to parse imported model:', err));
+      return;
+    }
+    // Neither a hash nor bytes: a curation recorded as 'imported' whose file is
+    // not in this payload. Leave whatever model was already there so the scene
+    // isn't empty, and warn so the issue is visible.
+    console.warn('[activeReviewStore] curation uses an imported model but this payload has neither its hash nor its file — keeping the current model');
+    return;
   }
+  setActiveModelType(a.modelType);
 }
 
 interface ActiveReviewState {

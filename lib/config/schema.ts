@@ -199,6 +199,12 @@ const identityEnabled = z.object({
   // bundled GoTrue service on the compose network (DEFAULT_AUTH_PROBE_URL in
   // lib/health/probes.ts). Not a secret, and never sent to the browser.
   probeUrl: z.string().url('identity.probeUrl must be a URL').optional(),
+  // Optional: the GoTrue admin base URL as the SERVER reaches it, for the
+  // People endpoints in /admin (batch BD). The api container calls GoTrue's
+  // /admin/users with a service-role token. Absent means the bundled GoTrue
+  // service on the compose network (http://auth:9999). Not a secret — it is a
+  // Docker-internal address — and never sent to the browser.
+  adminUrl: z.string().url('identity.adminUrl must be a URL').optional(),
 });
 
 /** The providers that need a sub-block naming their env vars. 'saml' does not. */
@@ -259,6 +265,46 @@ const modelImportSchema = z.discriminatedUnion('provider', [
   z.object({ provider: z.literal('genericGltf') }),
 ]);
 
+// ── Model file storage ───────────────────────────────────────────────────────
+//
+// docs/plan/14-rooms-models-admin-ai.md §"File storage". A model file is
+// content-addressed: its SHA-256 is that file's identity in the room socket, in
+// a curation's asset and in the URL that serves it. Nothing outside
+// lib/storage/ knows where the bytes live, which is what lets the same app run
+// off a volume on the api container (the Docker install) or off a Supabase
+// Storage bucket (a hosted one).
+//
+// The block is OPTIONAL and absent means the local default below, so every
+// config written before storage existed still validates unchanged. Readers call
+// modelStorageOf() rather than repeating the fallback at each use site, exactly
+// as identityOf() does for the identity block.
+
+/**
+ * Where the local provider writes, and the path docker-compose.yml mounts the
+ * `models-data` volume at. Spelled out here because deploy/api.Dockerfile has
+ * to pre-create the same directory: a fresh named volume inherits the owner of
+ * the image's directory at the mount point, and the api container runs as
+ * `node`, not root.
+ */
+export const DEFAULT_MODEL_STORAGE_DIR = '/data/models';
+
+const modelStorageSchema = z.discriminatedUnion('provider', [
+  z.object({
+    provider: z.literal('local'),
+    dir: z.string().min(1, 'modelStorage.dir is required'),
+  }),
+  z.object({
+    provider: z.literal('supabase'),
+    bucket: z.string().min(1, 'modelStorage.bucket is required'),
+    // envVarName, not publicEnvVarName: a service-role key bypasses Row Level
+    // Security entirely. Only the api reads it, and a VITE_ spelling would
+    // inline it into the bundle every visitor downloads.
+    serviceRoleKeyEnv: envVarName,
+  }),
+]);
+
+export type ModelStorageConfig = z.infer<typeof modelStorageSchema>;
+
 // The absolute origin browsers use to reach this deployment
 // (e.g. 'https://arena.acme.com', 'https://192.168.1.134'). SharePanel uses it
 // to build room URLs so a phone on the same network gets a scannable link
@@ -289,6 +335,7 @@ export const configSchema = z.object({
   identity: identitySchema.optional(),
   notifications: notificationsSchema,
   modelImport: modelImportSchema,
+  modelStorage: modelStorageSchema.optional(),
 });
 
 export type ViewpointConfig = z.infer<typeof configSchema>;
@@ -306,6 +353,18 @@ export type IdentityConfig = ViewpointConfig['identity'];
  */
 export function identityOf(config: ViewpointConfig): NonNullable<IdentityConfig> {
   return config.identity ?? { mode: 'none' };
+}
+
+/**
+ * The model-storage block with its default applied.
+ *
+ * "Absent" and "{ provider: 'local', dir: '/data/models' }" describe the same
+ * deployment: the volume docker-compose.yml already mounts on the api service.
+ * A fresh object rather than a shared constant, so a caller that mutates what
+ * it got back cannot change what the next caller sees.
+ */
+export function modelStorageOf(config: ViewpointConfig): ModelStorageConfig {
+  return config.modelStorage ?? { provider: 'local', dir: DEFAULT_MODEL_STORAGE_DIR };
 }
 
 export function defineConfig(config: ViewpointConfig): ViewpointConfig {

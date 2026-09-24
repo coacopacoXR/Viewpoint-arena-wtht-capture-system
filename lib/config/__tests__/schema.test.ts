@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { configSchema, defineConfig, identityOf } from '../schema.ts';
+import { configSchema, defineConfig, identityOf, modelStorageOf, DEFAULT_MODEL_STORAGE_DIR } from '../schema.ts';
 import type { ViewpointConfig } from '../schema.ts';
 
 const validOnshapeConfig: ViewpointConfig = {
@@ -619,5 +619,120 @@ describe('configSchema — identity', () => {
       },
     };
     expect(() => defineConfig(config as ViewpointConfig)).not.toThrow();
+  });
+});
+
+describe('configSchema — modelStorage', () => {
+  it('is optional, so a config written before storage existed still validates', () => {
+    const parsed = configSchema.parse(validOnshapeConfig);
+    expect(parsed.modelStorage).toBeUndefined();
+  });
+
+  it('accepts the local provider with a directory', () => {
+    const result = configSchema.safeParse({
+      ...validOnshapeConfig,
+      modelStorage: { provider: 'local', dir: '/srv/viewpoint/models' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts the supabase provider with a bucket and a key env var', () => {
+    const result = configSchema.safeParse({
+      ...validOnshapeConfig,
+      modelStorage: {
+        provider: 'supabase',
+        bucket: 'review-models',
+        serviceRoleKeyEnv: 'MODEL_STORAGE_SERVICE_ROLE_KEY',
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a local provider with no directory', () => {
+    const result = configSchema.safeParse({
+      ...validOnshapeConfig,
+      modelStorage: { provider: 'local' },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toContain('"modelStorage","dir"');
+    }
+  });
+
+  it('rejects a local provider with an empty directory', () => {
+    const result = configSchema.safeParse({
+      ...validOnshapeConfig,
+      modelStorage: { provider: 'local', dir: '' },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toMatch(/modelStorage\.dir is required/);
+    }
+  });
+
+  it('rejects a supabase provider with no bucket', () => {
+    const result = configSchema.safeParse({
+      ...validOnshapeConfig,
+      modelStorage: { provider: 'supabase', serviceRoleKeyEnv: 'MODEL_STORAGE_KEY' },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toMatch(/bucket/);
+    }
+  });
+
+  it('rejects a VITE_-prefixed service-role key name', () => {
+    // The service-role key bypasses Row Level Security entirely. A VITE_
+    // spelling would be inlined into the bundle every visitor downloads, which
+    // is the one thing the db block's deliberate exception must not become an
+    // argument for.
+    const result = configSchema.safeParse({
+      ...validOnshapeConfig,
+      modelStorage: {
+        provider: 'supabase',
+        bucket: 'review-models',
+        serviceRoleKeyEnv: 'VITE_MODEL_STORAGE_KEY',
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toMatch(/VITE_/);
+    }
+  });
+
+  it('rejects a provider that is neither local nor supabase', () => {
+    const result = configSchema.safeParse({
+      ...validOnshapeConfig,
+      modelStorage: { provider: 's3', bucket: 'b' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('modelStorageOf defaults an absent block to the compose volume path', () => {
+    const config = configSchema.parse(validOnshapeConfig);
+    expect(modelStorageOf(config)).toEqual({
+      provider: 'local',
+      dir: DEFAULT_MODEL_STORAGE_DIR,
+    });
+    // deploy/api.Dockerfile pre-creates this directory so the fresh named
+    // volume inherits an owner the `node` user can write to; docker-compose.yml
+    // mounts models-data at exactly the same path.
+    expect(DEFAULT_MODEL_STORAGE_DIR).toBe('/data/models');
+  });
+
+  it('modelStorageOf hands back the configured block untouched', () => {
+    const config = configSchema.parse({
+      ...validOnshapeConfig,
+      modelStorage: { provider: 'local', dir: '/mnt/models' },
+    });
+    expect(modelStorageOf(config)).toEqual({ provider: 'local', dir: '/mnt/models' });
+  });
+
+  it('modelStorageOf returns a fresh default each call, not a shared object', () => {
+    const config = configSchema.parse(validOnshapeConfig);
+    const first = modelStorageOf(config);
+    const second = modelStorageOf(config);
+    expect(first).not.toBe(second);
+    expect(first).toEqual(second);
   });
 });

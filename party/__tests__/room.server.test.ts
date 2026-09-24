@@ -962,6 +962,225 @@ describe('room.server — admissions survive a restart', () => {
   });
 });
 
+// ─── The model on screen, by reference ──────────────────────────────────────
+//
+// docs/plan/14-rooms-models-admin-ai.md batch BA. MODEL_CHANGE used to carry the
+// file: up to 50 MB of base64, held in this server's memory and replayed to
+// every connection that joined. It now carries a hash, and the bytes are fetched
+// from /api/models/<hash>. Two things follow, and both are worth a red test:
+//
+//   * the reference is PERSISTED, so an upgrade that restarts the container
+//     during a meeting does not leave everybody looking at the default model;
+//   * a payload that still carries bytes is DROPPED, so a client that has not
+//     been updated cannot put that size back on the socket.
+
+describe('room.server — MODEL_CHANGE by reference', () => {
+  const MODEL_KEY = 'current-model';
+  const HASH = 'a1'.repeat(32);
+  const REFERENCE = { modelType: 'imported', hash: HASH, fileName: 'bracket.step', size: 2048 };
+
+  function admittedHost(server: ReturnType<typeof createServer>) {
+    const conn = fakeConn('c-host');
+    admitUser(server, conn, 'host-1', 'Alice');
+    conn.send.mockClear();
+    server.room.broadcast.mockClear();
+    return conn;
+  }
+
+  function sendModel(server: ReturnType<typeof createServer>, conn: FakeConnection, payload: unknown) {
+    return server.onMessage(
+      JSON.stringify({ type: 'MODEL_CHANGE', payload }),
+      conn as unknown as Party.Connection,
+    );
+  }
+
+  it('stores the reference, persists it, and relays it to the others', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = admittedHost(server);
+
+    await sendModel(server, hostConn, REFERENCE);
+
+    expect(server.currentModel).toEqual(REFERENCE);
+    expect(storage._data.get(MODEL_KEY)).toEqual(REFERENCE);
+    expect(server.room.broadcast).toHaveBeenCalled();
+    const relayed = JSON.parse(server.room.broadcast.mock.calls[0]?.[0] as string);
+    expect(relayed).toEqual({ type: 'MODEL_CHANGE', payload: REFERENCE });
+  });
+
+  it('relays only the fields it knows, so an unknown one cannot ride along', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = admittedHost(server);
+
+    await sendModel(server, hostConn, { ...REFERENCE, admin: true, note: 'injected' });
+
+    // What is stored and what is relayed is built field by field, not copied
+    // from the payload: this object goes into room state, into persisted
+    // storage, and out to every other connection.
+    expect(server.currentModel).toEqual(REFERENCE);
+    expect(storage._data.get(MODEL_KEY)).toEqual(REFERENCE);
+    const relayed = JSON.parse(server.room.broadcast.mock.calls[0]?.[0] as string);
+    expect(relayed.payload).toEqual(REFERENCE);
+  });
+
+  it('stores a built-in preset with no hash, which has nothing to fetch', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = admittedHost(server);
+
+    await sendModel(server, hostConn, { modelType: 'bicycle' });
+
+    expect(server.currentModel).toEqual({
+      modelType: 'bicycle',
+      hash: undefined,
+      fileName: undefined,
+      size: undefined,
+    });
+    expect(storage._data.get(MODEL_KEY)).toBeTruthy();
+  });
+
+  it('replays the model to a new connection after a restart', async () => {
+    // The container is recreated for an upgrade while a meeting is running.
+    const storage = fakeStorage();
+    const before = createServer(storage);
+    await before.onStart();
+    await sendModel(before, admittedHost(before), REFERENCE);
+    expect(storage._data.get(MODEL_KEY)).toEqual(REFERENCE);
+
+    // A new server instance over the SAME storage is the restart.
+    const after = createServer(storage);
+    await after.onStart();
+    expect(after.currentModel).toEqual(REFERENCE);
+
+    const conn = fakeConn('c-late');
+    admitUser(after, conn, 'late-1', 'Carol');
+    const modelMessages = conn.send.mock.calls
+      .map((c) => JSON.parse(c[0] as string))
+      .filter((m) => m.type === 'MODEL_CHANGE');
+    expect(modelMessages).toHaveLength(1);
+    expect(modelMessages[0].payload).toEqual(REFERENCE);
+  });
+
+  it('drops a payload that still carries the file, and says so once', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = admittedHost(server);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // A client that has not been updated: same message shape as before, with the
+    // bytes in it. Accepting it would put up to 50 MB back into room state and
+    // into every replay, which is exactly what the reference shape removed.
+    await sendModel(server, hostConn, { modelType: 'imported', fileName: 'b.glb', fileBase64: 'Zm9v' });
+    await sendModel(server, hostConn, { modelType: 'imported', fileName: 'b.glb', fileBase64: 'YmFy' });
+
+    expect(server.currentModel).toBeNull();
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    expect(storage._data.has(MODEL_KEY)).toBe(false);
+    const drops = log.mock.calls.filter((c) => String(c[0]).includes('dropped a MODEL_CHANGE'));
+    expect(drops).toHaveLength(1);
+    expect(String(drops[0]?.[0])).toMatch(/fileBase64/);
+    log.mockRestore();
+  });
+
+  it('drops an imported reference with no hash, which there is nothing to fetch for', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = admittedHost(server);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await sendModel(server, hostConn, { modelType: 'imported', fileName: 'b.glb' });
+
+    expect(server.currentModel).toBeNull();
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('drops a modelType it has never heard of', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = admittedHost(server);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await sendModel(server, hostConn, { modelType: 'rev-c', hash: HASH });
+
+    expect(server.currentModel).toBeNull();
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('does not restore a model an older server persisted with the bytes in it', async () => {
+    // The shape written before this change. Restoring it would replay up to
+    // 50 MB to every connection that joins, so it is dropped: the room comes
+    // back with no model and the next import puts one up.
+    const storage = fakeStorage({
+      [MODEL_KEY]: { modelType: 'imported', fileName: 'b.glb', fileBase64: 'Zm9v' },
+    });
+    const server = createServer(storage);
+    await server.onStart();
+    expect(server.currentModel).toBeNull();
+  });
+
+  it('restores a persisted preset even though it has no hash', async () => {
+    const storage = fakeStorage({ [MODEL_KEY]: { modelType: 'synth' } });
+    const server = createServer(storage);
+    await server.onStart();
+    expect(server.currentModel?.modelType).toBe('synth');
+  });
+
+  it('ignores a persisted record that is not an object at all', async () => {
+    for (const junk of ['bracket.glb', 42, null, [HASH]]) {
+      const storage = fakeStorage({ [MODEL_KEY]: junk });
+      const server = createServer(storage);
+      await server.onStart();
+      expect(server.currentModel, JSON.stringify(junk)).toBeNull();
+    }
+  });
+
+  it('carries on when the runtime has no storage', async () => {
+    // The model is still shared with everybody currently in the room; only the
+    // across-a-restart half is lost, which is the pre-existing behaviour.
+    const broken = {
+      get: vi.fn(async () => { throw new Error('no storage'); }),
+      put: vi.fn(async () => { throw new Error('no storage'); }),
+      _data: new Map<string, unknown>(),
+    };
+    const server = createServer(broken as unknown as ReturnType<typeof fakeStorage>);
+    await expect(server.onStart()).resolves.toBeUndefined();
+
+    const hostConn = admittedHost(server);
+    await sendModel(server, hostConn, REFERENCE);
+    expect(server.currentModel).toEqual(REFERENCE);
+    expect(server.room.broadcast).toHaveBeenCalled();
+  });
+
+  it('still drops a model change from a connection that has not been admitted', async () => {
+    // Unchanged by the reference shape: the knock gate decides what leaves the
+    // server, and the model is the room's subject matter.
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    admittedHost(server);
+
+    const guestConn = fakeConn('c-guest');
+    server.onConnect(guestConn as unknown as Party.Connection);
+    sendPresence(server, guestConn, 'guest-1', 'Bob');
+    server.room.broadcast.mockClear();
+
+    await sendModel(server, guestConn, REFERENCE);
+
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    expect(server.currentModel).toBeNull();
+    expect(storage._data.has(MODEL_KEY)).toBe(false);
+  });
+});
+
 // ─── Identity: signed names, and the token that proves them ─────────────────
 //
 // docs/plan/13-identity.md batch AZ. A presence name is whatever the client

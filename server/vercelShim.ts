@@ -14,7 +14,7 @@
 // never routable here either.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
 /** Vercel's default body limit for parsed bodies. */
@@ -22,6 +22,16 @@ const MAX_PARSED_BODY_BYTES = 4.5 * 1024 * 1024;
 
 /** One path segment of a routable handler: lowercase words and dashes only. */
 const SEGMENT_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * A Vercel dynamic-route file: `[param].ts`.
+ *
+ * The only routing this app needs beyond literal paths is `/api/models/<hash>`,
+ * where the last segment is a SHA-256 the filesystem has no file for. Vercel
+ * matches that with a sibling named `[hash].ts`; the shim has to match it the
+ * same way or the route works in one deployment shape and 404s in the other.
+ */
+const DYNAMIC_FILE_RE = /^\[([A-Za-z_][A-Za-z0-9_]*)\]\.ts$/;
 
 type Handler = (req: unknown, res: unknown) => unknown;
 
@@ -53,19 +63,65 @@ export type ShimResponse = ServerResponse & {
   redirect: (statusOrUrl: number | string, url?: string) => ShimResponse;
 };
 
+/** A handler file plus the path parameters its `[name].ts` segments captured. */
+export interface ResolvedRoute {
+  file: string;
+  params: Record<string, string>;
+}
+
 /**
- * The handler file for a URL path, or null when the path is not a routable
- * handler. Never resolves outside apiDir: every segment must match
- * SEGMENT_RE, which excludes `..`, `_private`, dots and encoded separators.
+ * The route for a URL path, or null when the path is not routable.
+ *
+ * Never resolves outside apiDir: every segment must match SEGMENT_RE, which
+ * excludes `..`, `_private`, dots, percent signs and encoded separators — so
+ * the segments are safe to hand to `resolve` before any filesystem check, and
+ * a path parameter can never carry a separator into a filename.
+ *
+ * A file named for the exact path wins over a `[param].ts` sibling, which is
+ * Vercel's own precedence and what lets `api/models.ts` answer POST /api/models
+ * while `api/models/[hash].ts` answers GET /api/models/<hash>.
  */
-export function resolveHandlerPath(apiDir: string, pathname: string): string | null {
+export function resolveRoute(apiDir: string, pathname: string): ResolvedRoute | null {
   if (!pathname.startsWith('/api/')) return null;
   const segments = pathname.slice('/api/'.length).split('/');
   if (segments.length === 0 || !segments.every((s) => SEGMENT_RE.test(s))) return null;
   const root = resolve(apiDir);
-  const file = resolve(root, ...segments) + '.ts';
-  if (!file.startsWith(root + sep)) return null;
-  return existsSync(file) ? file : null;
+
+  const literal = resolve(root, ...segments) + '.ts';
+  if (literal.startsWith(root + sep) && existsSync(literal)) {
+    return { file: literal, params: {} };
+  }
+
+  // The trailing segment may be a path parameter. Only the last one, and only
+  // one level deep: that is all this app routes on, and supporting Vercel's
+  // full grammar (optional, catch-all, nested dynamics) here would be code
+  // nothing calls.
+  const parent = segments.length > 1 ? resolve(root, ...segments.slice(0, -1)) : root;
+  if (!parent.startsWith(root)) return null;
+  let entries: string[];
+  try {
+    entries = readdirSync(parent);
+  } catch {
+    // No such directory (or it is a file, not a directory): nothing to match.
+    return null;
+  }
+  const value = segments[segments.length - 1];
+  // Sorted so two dynamic siblings in one folder resolve the same way every
+  // time rather than in whatever order the filesystem lists them.
+  for (const entry of entries.sort()) {
+    const match = DYNAMIC_FILE_RE.exec(entry);
+    if (!match) continue;
+    return { file: resolve(parent, entry), params: { [match[1]]: value } };
+  }
+  return null;
+}
+
+/**
+ * The handler file for a URL path, or null when the path is not a routable
+ * handler. The path parameters are dropped — use resolveRoute when they matter.
+ */
+export function resolveHandlerPath(apiDir: string, pathname: string): string | null {
+  return resolveRoute(apiDir, pathname)?.file ?? null;
 }
 
 export function parseQuery(search: URLSearchParams): Record<string, string | string[]> {
@@ -191,11 +247,12 @@ export function createApiShim(options: ApiShimOptions) {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname !== '/api' && !url.pathname.startsWith('/api/')) return false;
 
-    const file = resolveHandlerPath(options.apiDir, url.pathname);
-    if (!file) {
+    const route = resolveRoute(options.apiDir, url.pathname);
+    if (!route) {
       sendError(res, 404, 'not_found');
       return true;
     }
+    const file = route.file;
 
     let mod: HandlerModule;
     try {
@@ -215,7 +272,11 @@ export function createApiShim(options: ApiShimOptions) {
     }
 
     const shimReq = req as ShimRequest;
-    shimReq.query = parseQuery(url.searchParams);
+    // Path parameters last, so `/api/models/<hash>?hash=something-else` serves
+    // what the PATH named. Vercel puts both in req.query and leaves a collision
+    // undefined; the path is the part the router already matched on, so it is
+    // the one worth believing.
+    shimReq.query = { ...parseQuery(url.searchParams), ...route.params };
     shimReq.cookies = parseCookieHeader(req.headers.cookie);
     shimReq.body = undefined;
 

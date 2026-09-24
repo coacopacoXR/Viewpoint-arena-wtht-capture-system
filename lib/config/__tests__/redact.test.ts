@@ -301,3 +301,54 @@ describe('redactConfig — identity', () => {
     expect(config.identity).toMatchObject({ methods: ['password'] });
   });
 });
+
+describe('redactConfig — modelStorage', () => {
+  it('exposes the provider and nothing else', () => {
+    const result = redactConfig({
+      ...fullSecretConfig,
+      modelStorage: {
+        provider: 'supabase',
+        bucket: 'review-models',
+        serviceRoleKeyEnv: 'MODEL_STORAGE_SERVICE_ROLE_KEY',
+      },
+    });
+    expect(result.modelStorage).toEqual({ provider: 'supabase' });
+  });
+
+  it('never leaks the bucket, the key, or the NAME of the variable holding it', () => {
+    const json = JSON.stringify(
+      redactConfig({
+        ...fullSecretConfig,
+        modelStorage: {
+          provider: 'supabase',
+          bucket: 'review-models',
+          serviceRoleKeyEnv: 'MODEL_STORAGE_SERVICE_ROLE_KEY',
+        },
+      }),
+    );
+    expect(json).not.toContain('review-models');
+    expect(json).not.toContain('serviceRoleKeyEnv');
+    expect(json).not.toContain('MODEL_STORAGE_SERVICE_ROLE_KEY');
+    // A service-role key bypasses Row Level Security entirely; its env var name
+    // is the one an operator would grep for, so it is worth pinning separately
+    // from the generic "no *Env key survives" assertion above.
+    expect(json).not.toMatch(/"[A-Za-z]*Env"/);
+  });
+
+  it('never leaks the local directory, which is a path inside the api container', () => {
+    const json = JSON.stringify(
+      redactConfig({
+        ...fullSecretConfig,
+        modelStorage: { provider: 'local', dir: '/data/models' },
+      }),
+    );
+    expect(json).not.toContain('/data/models');
+    expect(json).toContain('"modelStorage":{"provider":"local"}');
+  });
+
+  it('reports the default provider when the config has no modelStorage block', () => {
+    // An absent block means the local volume, so a client that renders storage
+    // state has one answer rather than two shapes to handle.
+    expect(redactConfig(fullSecretConfig).modelStorage).toEqual({ provider: 'local' });
+  });
+});

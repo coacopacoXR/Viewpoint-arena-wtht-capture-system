@@ -186,3 +186,35 @@ describe('verifyAccessToken — what it refuses', () => {
     expect(await verifyAccessToken(token(), '')).toBeNull();
   });
 });
+
+describe('verifyAccessToken — role from app_metadata', () => {
+  it('extracts the admin role when present', async () => {
+    const verified = await verifyAccessToken(
+      token({ claims: { app_metadata: { role: 'admin' } } }),
+      SECRET,
+    );
+
+    expect(verified).not.toBeNull();
+    expect(verified?.role).toBe('admin');
+  });
+
+  it('omits the role when app_metadata has no role', async () => {
+    const verified = await verifyAccessToken(
+      token({ claims: { app_metadata: {} } }),
+      SECRET,
+    );
+
+    expect(verified).not.toBeNull();
+    expect(verified?.role).toBeUndefined();
+  });
+
+  it('omits the role when app_metadata is absent', async () => {
+    const verified = await verifyAccessToken(
+      token({ claims: { app_metadata: undefined } }),
+      SECRET,
+    );
+
+    expect(verified).not.toBeNull();
+    expect(verified?.role).toBeUndefined();
+  });
+});

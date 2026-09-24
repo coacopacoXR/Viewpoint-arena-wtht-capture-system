@@ -20,6 +20,8 @@ import { useStore } from '../store';
 import type { ModelType, Requirement } from '../types';
 import { parseModelFile } from '../utils/modelLoader';
 import { MODEL_FILE_ACCEPT, modelFileMime } from '../utils/modelFormats';
+import { fetchModelFile, uploadModelFile } from '../lib/modelsClient';
+import { migrateCurationAsset } from '../lib/migrateCurationAsset';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, listUsedLabelValues, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import { getIdentity } from '../lib/identity';
@@ -65,6 +67,7 @@ const ReviewSetupPage: React.FC = () => {
   const startNewDraft = useReviewSetupStore((s) => s.startNewDraft);
   const hydrateDraft = useReviewSetupStore((s) => s.hydrateDraft);
   const setTitle = useReviewSetupStore((s) => s.setTitle);
+  const setImportedFile = useReviewSetupStore((s) => s.setImportedFile);
 
   const setActiveModelType = useStore((s) => s.setActiveModelType);
   const setImportedModel = useStore((s) => s.setImportedModel);
@@ -208,6 +211,7 @@ const ReviewSetupPage: React.FC = () => {
   }, []);
 
   // ─── Apply draft asset to the main store so World renders it ───────────────
+  const modelHash = draft?.asset.modelHash;
   const importedFileBase64 = draft?.asset.importedFileBase64;
   const importedFileName = draft?.asset.importedFileName;
   const modelType = draft?.asset.modelType;
@@ -222,18 +226,61 @@ const ReviewSetupPage: React.FC = () => {
 
   useEffect(() => {
     if (!modelType) return;
-    if (modelType === 'imported') {
-      if (importedFileBase64 && importedFileName) {
-        const bytes = Uint8Array.from(atob(importedFileBase64), (c) => c.charCodeAt(0));
-        const file = new File([bytes], importedFileName, { type: modelFileMime(importedFileName) });
-        parseModelFile(file)
-          .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
-          .catch((err) => console.error('[ReviewSetup] failed to parse imported model:', err));
-      }
-    } else {
+    if (modelType !== 'imported') {
       setActiveModelType(modelType);
+      return;
     }
-  }, [modelType, importedFileBase64, importedFileName, setActiveModelType, setImportedModel]);
+    if (modelHash && importedFileName) {
+      // Stored by hash: fetched from /api/models and parsed. The response is
+      // content-addressed and immutable, so re-opening a review that this
+      // browser has already loaded costs a cache hit rather than a download.
+      fetchModelFile(modelHash, importedFileName)
+        .then((file) => parseModelFile(file))
+        .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
+        .catch((err) => console.error('[ReviewSetup] could not load the curated model:', err));
+      return;
+    }
+    if (importedFileBase64 && importedFileName) {
+      // LEGACY, and only until the migration effect below runs: a draft this
+      // browser persisted before models were stored by hash. It still renders,
+      // so a curator mid-review is not interrupted by the move.
+      const bytes = Uint8Array.from(atob(importedFileBase64), (c) => c.charCodeAt(0));
+      const file = new File([bytes], importedFileName, { type: modelFileMime(importedFileName) });
+      parseModelFile(file)
+        .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
+        .catch((err) => console.error('[ReviewSetup] failed to parse imported model:', err));
+    }
+  }, [modelType, modelHash, importedFileBase64, importedFileName, setActiveModelType, setImportedModel]);
+
+  // ─── Move a legacy inline model into storage ───────────────────────────────
+  // A draft this browser persisted before models were stored by hash still
+  // carries the file as base64, and hydrateDraft deliberately keeps it (the
+  // cloud row it met has neither the bytes nor a hash, because the blob was
+  // stripped on every save). Upload it once and replace it with the hash; the
+  // auto-save below then writes the hash to the row and the blob is gone from
+  // here too, so the next load has nothing to do.
+  //
+  // A failure is logged and left alone: the model still renders from the inline
+  // copy, which is exactly what it did before this existed.
+  const migratingRef = useRef(false);
+  useEffect(() => {
+    if (!hydrated || !draft || draft.reviewId !== reviewId) return;
+    if (draft.asset.modelHash || !draft.asset.importedFileBase64) return;
+    if (migratingRef.current) return;
+    migratingRef.current = true;
+    const asset = draft.asset;
+    void (async () => {
+      const result = await migrateCurationAsset(asset);
+      migratingRef.current = false;
+      if (!result.migrated) {
+        if (result.error) console.warn('[ReviewSetup] model migration deferred:', result.error);
+        return;
+      }
+      const { modelHash: hash, importedFileName: name } = result.asset;
+      if (!hash || !name) return;
+      setImportedFile(name, hash);
+    })();
+  }, [hydrated, draft, reviewId, setImportedFile]);
 
   // Wait for THIS review's draft, not just any draft. The store persists the
   // last draft in localStorage, so before hydration finishes `draft` can be a
@@ -533,6 +580,11 @@ const AssetTab: React.FC = () => {
   const navigate = useNavigate();
   const plmLaunch = (location.state as { plmLaunch?: PLMLaunch } | null)?.plmLaunch;
   const [launchNote, setLaunchNote] = useState<string | null>(null);
+  // Upload state for the file picker. A model can be 200 MB and the button gave
+  // no feedback at all between the click and the model appearing, which reads as
+  // a picker that did nothing.
+  const [uploading, setUploading] = useState(false);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
   const [launchDocument, setLaunchDocument] = useState<OnshapeLaunchDocument | undefined>(undefined);
   const [launchElementId, setLaunchElementId] = useState<string | undefined>(undefined);
   const [launchReturnTo, setLaunchReturnTo] = useState<string | undefined>(undefined);
@@ -571,16 +623,22 @@ const AssetTab: React.FC = () => {
     setLaunchNote(LAUNCH_NOTES[source]);
   }, [plmLaunch, navigate, location.pathname, addReference, draft.reviewId, reviewId]);
 
+  // Stored on the server first, then recorded by hash. The base64 this used to
+  // put straight into the draft is what made a curated review a tens-of-
+  // megabytes jsonb row that no other browser could be given; the hash is a few
+  // dozen bytes and everybody fetches the same file from /api/models.
   const handleFile = async (file: File) => {
-    const buf = await file.arrayBuffer();
-    let binary = '';
-    const bytes = new Uint8Array(buf);
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+    setUploadNote(null);
+    setUploading(true);
+    try {
+      const stored = await uploadModelFile(file);
+      setImportedFile(stored.fileName, stored.hash);
+    } catch (err) {
+      console.error('[ReviewSetup] model upload failed:', err);
+      setUploadNote(err instanceof Error ? err.message : 'The model could not be uploaded.');
+    } finally {
+      setUploading(false);
     }
-    const base64 = btoa(binary);
-    setImportedFile(file.name, base64);
   };
 
   return (
@@ -671,18 +729,31 @@ const AssetTab: React.FC = () => {
           />
           <button
             onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
             className={clsx(
               'w-full flex items-center justify-center gap-2 p-3 rounded border-2 border-dashed transition-colors',
-              draft.asset.modelType === 'imported'
-                ? 'border-emerald-400/50 bg-emerald-500/5 text-emerald-200'
-                : 'border-white/15 hover:border-white/30 text-gray-400'
+              uploading
+                ? 'border-white/10 bg-white/5 text-gray-500 cursor-not-allowed'
+                : draft.asset.modelType === 'imported'
+                  ? 'border-emerald-400/50 bg-emerald-500/5 text-emerald-200'
+                  : 'border-white/15 hover:border-white/30 text-gray-400'
             )}
           >
             <FileBox size={16} />
             <span className="text-xs font-bold">
-              {draft.asset.importedFileName ? `Imported: ${draft.asset.importedFileName}` : 'Upload your own 3D model or CAD file'}
+              {uploading
+                ? 'Uploading…'
+                : draft.asset.importedFileName
+                  ? `Imported: ${draft.asset.importedFileName}`
+                  : 'Upload your own 3D model or CAD file'}
             </span>
           </button>
+          {uploadNote && (
+            <div className="mt-2 flex gap-2 rounded border border-red-500/30 bg-red-500/5 p-2.5">
+              <AlertTriangle size={13} className="text-red-400 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-red-100/90 leading-relaxed">{uploadNote}</p>
+            </div>
+          )}
           {modelImport === 'onshape' && (
             <button
               onClick={() => setShowOnshapeBrowser(true)}
@@ -1775,15 +1846,21 @@ const OnshapeStatusPill: React.FC = () => {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Same path as the file picker: stored on the server, recorded by hash. An
+  // Onshape translation is the largest file this page ever handles, which is
+  // exactly the case that could not travel as base64 in a jsonb column.
   const handleImported = async (file: File) => {
-    const buf = await file.arrayBuffer();
-    let binary = '';
-    const bytes = new Uint8Array(buf);
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+    setDiag(null);
+    try {
+      const stored = await uploadModelFile(file);
+      setImportedFile(stored.fileName, stored.hash);
+    } catch (err) {
+      console.error('[ReviewSetup] Onshape model upload failed:', err);
+      setDiag({
+        status: 0,
+        error: err instanceof Error ? err.message : 'The model could not be uploaded.',
+      });
     }
-    setImportedFile(file.name, btoa(binary));
   };
 
   const onClose = () => { setOpen(false); refresh(); };

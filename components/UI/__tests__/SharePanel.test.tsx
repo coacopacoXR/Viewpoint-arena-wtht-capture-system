@@ -19,6 +19,7 @@ const baseConfig: ConfigContext.ConnectorConfig = {
     identity: { mode: 'none', methods: [], allowGuests: false },
     notifications: [],
     modelImport: { provider: 'genericGltf' },
+    modelStorage: { provider: 'local' },
   },
   loading: false,
   error: null,

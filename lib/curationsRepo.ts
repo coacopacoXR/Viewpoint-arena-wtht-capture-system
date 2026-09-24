@@ -3,15 +3,18 @@
 // id IS the reviewId, which IS the roomId — so /review/:id/setup and
 // /room/:id refer to the same curation across browsers and devices.
 //
-// NOTE: imported GLB/OBJ files are NOT persisted server-side in v1 — we
-// strip `importedFileBase64` before writing. TODO: move uploaded files into
-// a Supabase Storage bucket ('review-models', public read) and persist the
-// URL instead. Until then, a re-opened curation that previously used an
-// uploaded file will fall back to the recorded `modelType` (which is set
-// to 'imported' but the file is gone, so ImportedModel renders nothing).
-// Consider also writing back the previous preset on strip.
+// The MODEL is not in the row. `asset.modelHash` is the SHA-256 of a file that
+// lives in model storage (POST /api/models), and `asset.importedFileName` is the
+// name it was imported under, which is what the loaders dispatch on. Together
+// they are a few dozen bytes and they outlive the browser that uploaded them,
+// which is what lets a review be opened on a phone that has never seen the file.
+//
+// `importedFileBase64` is the shape this had BEFORE that: the file itself,
+// base64-encoded, in the jsonb column. It is stripped on every write below, and
+// a row that still carries one is migrated on load — see migrateCurationAsset.
 
 import { supabase, supabaseConfigured } from './supabase';
+import { migrateCurationAsset } from './migrateCurationAsset';
 import type { ReviewDraft } from './reviewSetupStore';
 
 export interface CurationSummary {
@@ -61,7 +64,11 @@ function rowToDraft(row: CurationRow): ReviewDraft {
 }
 
 function draftToRow(draft: ReviewDraft) {
-  // Strip the large base64 blob — see file header for why.
+  // The inline blob never reaches the database, even from a draft that has not
+  // been migrated yet: the file it names belongs in model storage, and a row
+  // that carried it would be tens of megabytes of jsonb read back by every
+  // browser that opens the review. `modelHash` and `importedFileName` are kept,
+  // and they are what a migrated draft has instead.
   const { importedFileBase64: _stripped, ...assetSansBlob } = draft.asset;
   return {
     id: draft.reviewId,
@@ -88,7 +95,45 @@ export async function loadCuration(id: string): Promise<ReviewDraft | null> {
     console.error('[curationsRepo] loadCuration failed:', error);
     return null;
   }
-  return data ? rowToDraft(data as CurationRow) : null;
+  return data ? migrateOnLoad(id, rowToDraft(data as CurationRow)) : null;
+}
+
+/**
+ * A loaded curation with its model in storage rather than inline.
+ *
+ * A row written since the migration has `asset.modelHash` and there is nothing
+ * to do — migrateCurationAsset answers immediately, so this costs one property
+ * test on every load. A row that still carries the base64 blob is uploaded once
+ * and the row is rewritten with the hash and without the blob, so the next load
+ * takes the fast path and the database stops holding the file.
+ *
+ * A failed upload leaves the draft exactly as it was loaded: the review still
+ * opens with its model on screen, from the inline copy, and the next load tries
+ * again. Failing to migrate is not a reason to refuse somebody their review.
+ */
+async function migrateOnLoad(id: string, draft: ReviewDraft): Promise<ReviewDraft> {
+  const result = await migrateCurationAsset(draft.asset);
+  if (!result.migrated) {
+    if (result.error) {
+      console.warn('[curationsRepo] model migration deferred:', result.error);
+    }
+    return draft;
+  }
+
+  // Stripped again on the way out, so no path through this function can write a
+  // blob into the column it exists to keep out of.
+  const { importedFileBase64: _never, ...assetToSave } = result.asset;
+  const { error } = await supabase
+    .from('review_curations')
+    .update({ asset: assetToSave })
+    .eq('id', id);
+  if (error) {
+    // This browser has the migrated asset in hand, so it is fine; the row is
+    // simply migrated again by whoever loads it next. Worth a line, not a
+    // failure — the alternative is refusing to open the review.
+    console.error('[curationsRepo] could not write the migrated asset back:', error);
+  }
+  return { ...draft, asset: result.asset };
 }
 
 export async function saveCuration(draft: ReviewDraft): Promise<{ ok: boolean; error?: string }> {

@@ -71,6 +71,7 @@ function configWith(identity: PublicIdentity | undefined, loading = false) {
           identity,
           notifications: [],
           modelImport: { provider: 'genericGltf' },
+          modelStorage: { provider: 'local' },
         }
       : null,
     loading,

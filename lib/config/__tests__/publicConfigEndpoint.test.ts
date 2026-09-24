@@ -46,6 +46,10 @@ describe('public-config endpoint', () => {
       identity: { mode: 'none', methods: [], allowGuests: false },
       notifications: [{ provider: 'teams' }],
       modelImport: { provider: 'onshape' },
+      // mockConfig has no modelStorage block either, and the endpoint answers
+      // with the default provider rather than an absence — same reasoning as
+      // identity above.
+      modelStorage: { provider: 'local' },
     });
 
     // No *Env key name in the output.

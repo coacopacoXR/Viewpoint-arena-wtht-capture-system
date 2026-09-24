@@ -67,8 +67,30 @@ export const IDENTITY_TRANSFORM: ModelTransform = {
 
 export interface ReviewAsset {
   modelType: ModelType;
-  importedFileBase64?: string;
+  /**
+   * The SHA-256 of the imported file, as POST /api/models stored it. This — not
+   * the file — is what a curation records, so a review keeps pointing at the
+   * same bytes however many times it is opened and however many people open it,
+   * and the row stays a few hundred bytes instead of a base64 blob in a jsonb
+   * column.
+   */
+  modelHash?: string;
+  /**
+   * The name it was imported under. Not cosmetic: utils/modelLoader.ts
+   * dispatches on the extension, so a hash alone cannot be parsed.
+   */
   importedFileName?: string;
+  /**
+   * LEGACY, and read-only from here on.
+   *
+   * A curation saved before models were stored by hash carried the file inline.
+   * lib/migrateCurationAsset.ts uploads those bytes once, records `modelHash`
+   * and drops this. Nothing writes it any more, and curationsRepo strips it
+   * before a row is saved, so the only way it can still arrive is from a
+   * browser's own persisted draft — which is exactly the case the migration
+   * exists for.
+   */
+  importedFileBase64?: string;
   references: ReviewAssetReference[];
   transform?: ModelTransform;
 }
@@ -108,7 +130,12 @@ interface ReviewSetupState {
 
   // Asset
   setModelType: (modelType: ModelType) => void;
-  setImportedFile: (fileName: string, base64: string) => void;
+  /**
+   * Record an uploaded model by its content address. The file itself is already
+   * on the server (lib/modelsClient.ts uploadModelFile) by the time this is
+   * called; what a curation keeps is the hash and the name it was picked under.
+   */
+  setImportedFile: (fileName: string, modelHash: string) => void;
   clearImportedFile: () => void;
   addReference: (ref: Omit<ReviewAssetReference, 'id'>) => void;
   removeReference: (id: string) => void;
@@ -192,12 +219,21 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         return false;
       },
 
-      // Adopt a draft loaded from the cloud. Preserves any local
-      // importedFileBase64 if the same id is already in memory (the cloud
-      // copy strips the blob — see curationsRepo for context).
+      // Adopt a draft loaded from the cloud. A cloud row carries `modelHash`,
+      // which is small enough that curationsRepo saves it, so there is normally
+      // nothing to preserve.
+      //
+      // The fallback below is for one specific case: a browser whose OWN
+      // persisted draft still holds the legacy inline base64, meeting a cloud
+      // row that has no model in it at all — because curationsRepo stripped the
+      // blob before saving it, so every row written before the migration has
+      // neither a hash nor bytes. Dropping the local copy there would lose the
+      // curator's model on their next page load; keeping it is what lets
+      // lib/migrateCurationAsset.ts upload those bytes once and replace them
+      // with a hash.
       hydrateDraft: (incoming) => set((s) => {
         const local = s.draft && s.draft.reviewId === incoming.reviewId ? s.draft : null;
-        const preservedAsset = local?.asset.importedFileBase64
+        const preservedAsset = local?.asset.importedFileBase64 && !incoming.asset.modelHash
           ? { ...incoming.asset, importedFileBase64: local.asset.importedFileBase64, importedFileName: local.asset.importedFileName }
           : incoming.asset;
         return { draft: { ...incoming, asset: preservedAsset } };
@@ -218,15 +254,20 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         return { draft: touch(next) };
       }),
 
-      setImportedFile: (importedFileName, importedFileBase64) => set((s) => {
+      setImportedFile: (importedFileName, modelHash) => set((s) => {
         if (!s.draft) return s;
+        // Any legacy inline copy goes at the same moment the hash arrives. The
+        // two must never both be present: a later reader could not tell which
+        // one described the model on screen, and the base64 one is the copy
+        // that would be saved into a jsonb column.
+        const { importedFileBase64: _legacy, ...asset } = s.draft.asset;
         const next: ReviewDraft = {
           ...s.draft,
           asset: {
-            ...s.draft.asset,
+            ...asset,
             modelType: 'imported',
             importedFileName,
-            importedFileBase64,
+            modelHash,
           },
         };
         return { draft: touch(next) };

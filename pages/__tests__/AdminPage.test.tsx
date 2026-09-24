@@ -122,11 +122,12 @@ describe('AdminPage', () => {
     renderAdmin();
 
     await vi.waitFor(() => {
-      expect(screen.getByText('Reviews')).toBeTruthy();
+      expect(screen.getByText('No reviews yet.')).toBeTruthy();
     });
-    expect(screen.getByText('Label fields')).toBeTruthy();
+    // The sidebar shows all section names; the content area shows the
+    // selected section (Reviews by default in mode 'none').
+    expect(screen.getByText('Labels')).toBeTruthy();
     expect(screen.getByText('Access')).toBeTruthy();
-    expect(screen.getByText('No reviews yet.')).toBeTruthy();
   });
 
   it('delete requires two clicks before deleteCuration is called', async () => {

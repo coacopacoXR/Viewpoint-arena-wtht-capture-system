@@ -5,6 +5,7 @@ import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload,
 import { clsx } from 'clsx';
 import { parseModelFile, validateModelFile } from '../../utils/modelLoader';
 import { MODEL_FILE_ACCEPT } from '../../utils/modelFormats';
+import { MODEL_UPLOAD_NETWORK_MESSAGE, uploadModelFile } from '../../lib/modelsClient';
 import { usePresence } from '../../lib/PresenceContext';
 
 // Find all ancestor ids of a node in the tree (excluding the node itself)
@@ -143,6 +144,10 @@ const SceneTree: React.FC = () => {
 
     const { broadcastModelChange } = usePresence();
     const [importError, setImportError] = useState<string | null>(null);
+    // Fraction of the file that has reached the server, or null when nothing is
+    // being shared. Kept out of the zustand store: it changes many times a
+    // second during an upload and only this panel renders it.
+    const [shareProgress, setShareProgress] = useState<number | null>(null);
 
     const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree, bicycleSceneTree, headphonesSceneTree);
     const objectStates = useStore(state => state.objectStates);
@@ -194,6 +199,7 @@ const SceneTree: React.FC = () => {
 
         setIsImporting(true);
         setImportError(null);
+        setShareProgress(null);
 
         try {
             // Parse the uploaded model file
@@ -201,24 +207,39 @@ const SceneTree: React.FC = () => {
 
             // Set the imported model in the store
             setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition);
-
-            // Broadcast to remote participants (cap at 50MB for local use; production would need blob storage)
-            if (file.size <= 50 * 1024 * 1024) {
-                const buffer = await file.arrayBuffer();
-                const bytes = new Uint8Array(buffer);
-                let binary = '';
-                const chunkSize = 8192;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
-                }
-                broadcastModelChange('imported', btoa(binary), file.name);
-            } else {
-                setImportError('Model loaded locally but is too large to share with other participants (max 50MB).');
-            }
         } catch (error) {
             console.error('Model import error:', error);
             setImportError(error instanceof Error ? error.message : 'Failed to import model file');
             setIsImporting(false);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+            return;
+        }
+
+        // Stored on the server, then shared with the room BY HASH. Two steps on
+        // purpose: the parse above already put the model on this screen, so a
+        // failure here means "nobody else can see it", not "the import failed" —
+        // and the message says exactly that.
+        //
+        // There is no sharing cap any more. The old 50 MB one existed because
+        // the file travelled through the room socket as base64, which the server
+        // then held in memory and replayed to every connection; the ceiling now
+        // is the 200 MB the picker already enforces and the api enforces again.
+        try {
+            setShareProgress(0);
+            const stored = await uploadModelFile(file, setShareProgress);
+            broadcastModelChange({
+                modelType: 'imported',
+                hash: stored.hash,
+                fileName: stored.fileName,
+                size: stored.size,
+            });
+        } catch (error) {
+            console.error('Model sharing error:', error);
+            setImportError(error instanceof Error ? error.message : MODEL_UPLOAD_NETWORK_MESSAGE);
+        } finally {
+            setShareProgress(null);
         }
 
         // Clear input for re-selection
@@ -311,6 +332,23 @@ const SceneTree: React.FC = () => {
                 )}
 
                 {/* Import Status Messages */}
+                {shareProgress !== null && (
+                    <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-[10px] text-blue-700">
+                        <div className="flex items-center gap-2">
+                            <Loader2 size={12} className="animate-spin text-blue-500 shrink-0" />
+                            <span className="flex-1">
+                                Sharing with the room… {Math.round(shareProgress * 100)}%
+                            </span>
+                        </div>
+                        <div className="mt-1.5 h-1 bg-blue-100 rounded overflow-hidden">
+                            <div
+                                className="h-full bg-blue-500 transition-all duration-150"
+                                style={{ width: `${Math.round(shareProgress * 100)}%` }}
+                            />
+                        </div>
+                    </div>
+                )}
+
                 {importSuccess && (
                     <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-[10px] text-green-700 flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
                         <CheckCircle2 size={14} className="text-green-500 shrink-0 mt-0.5" />

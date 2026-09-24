@@ -18,7 +18,23 @@ RUN npm ci && npm cache clean --force
 COPY api ./api
 COPY lib ./lib
 COPY server ./server
+# utils/modelFormats.ts is the one list of extensions the app accepts, and
+# api/models.ts refuses an upload that is not on it. Nothing else under utils/
+# is ever loaded: modelLoader.ts and the CAD worker stay on the browser side.
+COPY utils ./utils
 COPY types.ts tsconfig.json ./
+
+# Where model files are stored — DEFAULT_MODEL_STORAGE_DIR in
+# lib/config/schema.ts, and the path docker-compose.yml mounts the `models-data`
+# volume at.
+#
+# Created here, and owned by the user this container runs as, because a FRESH
+# named volume inherits the ownership and mode of the image's directory at the
+# mount point. Without this the volume arrives root-owned and every upload dies
+# with EACCES — visible only as a 500 from /api/models on the first import after
+# an install. An existing volume keeps whatever it already has, so this costs
+# nothing on an upgrade.
+RUN mkdir -p /data/models && chown -R node:node /data
 
 # viewpoint.config.ts is NOT baked in: it is per-deployment, and compose mounts
 # it read-only at /app/viewpoint.config.ts. Secrets arrive via env_file.

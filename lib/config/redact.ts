@@ -1,4 +1,4 @@
-import { identityOf, type IdentityMethod, type ViewpointConfig } from './schema.ts';
+import { identityOf, modelStorageOf, type IdentityMethod, type ViewpointConfig } from './schema.ts';
 
 export interface PublicConfig {
   /** The absolute origin browsers use to reach this deployment, or absent. */
@@ -27,6 +27,14 @@ export interface PublicConfig {
   };
   notifications: { provider: string }[];
   modelImport: { provider: string };
+  /**
+   * Only the provider. Where model bytes live — a directory on the api
+   * container's volume, a Supabase bucket name — is deployment internals, and
+   * the browser reaches them through this deployment's own /api/models/<hash>
+   * rather than by calling the store itself. The service-role key env name
+   * never appears here either, for the same reason no other *Env field does.
+   */
+  modelStorage: { provider: string };
 }
 
 // Allowlist-based redactor: only fields explicitly listed below survive into
@@ -78,6 +86,7 @@ export function redactConfig(config: ViewpointConfig): PublicConfig {
     identity: publicIdentity,
     notifications: config.notifications.map((n) => ({ provider: n.provider })),
     modelImport: { provider: config.modelImport.provider },
+    modelStorage: { provider: modelStorageOf(config).provider },
   };
   if (config.publicUrl) result.publicUrl = config.publicUrl;
   return result;

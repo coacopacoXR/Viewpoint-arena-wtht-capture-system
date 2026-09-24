@@ -45,6 +45,7 @@ const publicConfig: PublicConfig = {
   identity: { mode: 'none', methods: [], allowGuests: false },
   notifications: [{ provider: 'teams' }],
   modelImport: { provider: 'onshape' },
+  modelStorage: { provider: 'local' },
 };
 
 interface CapturedRequest {

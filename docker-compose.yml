@@ -156,6 +156,13 @@ volumes:
   whisper-models:
   partykit-state:
   n8n-data:
+  # Imported 3D model files, content-addressed by their SHA-256 and mounted on
+  # the `api` service at /data/models (DEFAULT_MODEL_STORAGE_DIR in
+  # lib/config/schema.ts). This is what makes a model outlive the container that
+  # stored it: an upgrade recreates `api`, and without a volume every room's
+  # geometry — and every curated review's — would go with it, leaving hashes
+  # that point at nothing.
+  models-data:
 
 services:
   # ── The only public entry point ──────────────────────────────────────────
@@ -262,6 +269,16 @@ services:
       # The per-deployment master config, written by install.sh. Read-only: the
       # API reads it, nothing in the stack may change it.
       - ./viewpoint.config.ts:/app/viewpoint.config.ts:ro
+      # Imported model files (POST /api/models writes, GET /api/models/<hash>
+      # reads). Read-write, and the only writable path this container has: a
+      # model is stored under its own SHA-256 and served by that hash for ever
+      # after, so the room socket, a curated review and a late joiner all refer
+      # to the same bytes without any of them carrying them.
+      #
+      # deploy/api.Dockerfile creates /data/models owned by `node` BEFORE this
+      # mount, because a fresh named volume inherits the ownership of the
+      # image's directory at the mount point.
+      - models-data:/data/models
 
   # ── Realtime room server ─────────────────────────────────────────────────
   partykit:
