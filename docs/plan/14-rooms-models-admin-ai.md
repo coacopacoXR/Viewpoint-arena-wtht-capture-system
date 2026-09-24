@@ -122,6 +122,40 @@ encrypted at rest with a key the installer generates
 screen shows "key set · ends in …7f2a"). Settings made here override
 `viewpoint.config.ts`, which stays valid for people who manage config as code.
 
+## Added 2026-09-24 (afternoon), from the user
+
+- **Bug: the Import 3D Model button disappears after importing.** Not
+  reproduced yet on the install: a STEP assembly and a 27-part GLB were
+  imported by a signed-in host, then parts pointed at and the tree scrolled,
+  and the button stayed visible and in place each time. Waiting on the exact
+  path (host or guest, which page, window size).
+- **Hand-made cards.** "It should be possible for users to add decision cards
+  themselves in case they do not want to use AI." The tracker page already
+  has Add item after a meeting; the gap is DURING the meeting. A "+ Card"
+  action in the room's Capture panel: type (risk / action / rationale),
+  title, description, priority, optionally anchored to the part currently
+  selected or pointed at. It is broadcast and saved exactly like an AI card,
+  marked "added by <name>" rather than by an agent, and editable afterwards.
+  Batch **BG**, small.
+- **How things are organised.** The user asked what a design review is, what
+  a room is, and whether the 3D models or the decision cards are the thing.
+  Proposed answer, recorded with the user's naming decision still open:
+  - **Design review** is the lasting thing, one per product question. It
+    holds what is reviewed (a model line and its revisions), who takes part,
+    and the plan (agenda, viewpoints, pins, requirements). It has one link.
+  - **Meeting** is one dated occurrence inside a design review. It records
+    who attended, which revision was on screen, the transcript, the summary,
+    and the cards raised.
+  - **Cards** (risks, actions, rationale) belong to the design review. Each
+    is raised in a meeting, by AI or by hand, on a revision and optionally a
+    part. It stays open across meetings and revisions until it is closed.
+  - **The tracker** is every card from every design review, filterable.
+  - **Room** is not a separate object: it is the live 3D space where a
+    design review's meeting happens (the "Open room" button).
+  BC implements this model. Plan wording above uses "room" for the lasting
+  thing; if the user confirms "design review" as the name, the screens use
+  that and "room" is kept only for the live space.
+
 ## Batches, in order
 
 | Batch | Work |
@@ -132,5 +166,6 @@ screen shows "key set · ends in …7f2a"). Settings made here override
 | BD | Admin foundation: service-role access for the api, admin role, first-account-is-admin; People section. |
 | BE | Rooms and Models sections. |
 | BF | Settings store (encrypted), AI section, provider routing for the three jobs, Test connection, OpenAI-compatible and your-own-service contracts. |
+| BG | Hand-made cards in the room's Capture panel. |
 
 Each lands verified on the running install, as before.
