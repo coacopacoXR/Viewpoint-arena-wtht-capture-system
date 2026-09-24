@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Eye, EyeOff,
   User, Sparkles, Users,
@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronRight, PanelRightClose, PanelRight,
   Home, Headphones
 } from 'lucide-react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../../store';
 import { ViewMode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
@@ -35,6 +35,10 @@ import FollowersBadge, { FollowingBadge } from './FollowersBadge';
 import TopBar from './room/TopBar';
 import CallBar from './room/CallBar';
 import ManageButton from './room/ManageButton';
+import EditingStrip from '../review/EditingStrip';
+import ReviewEditPanel from '../review/ReviewEditPanel';
+import ReviewEditingNotice from '../review/ReviewEditingNotice';
+import { useReviewRole } from '../../lib/reviews/useReviewRole';
 import { useLeaderAutoRelease } from '../../lib/useLeaderAutoRelease';
 
 // The side panel owns the right edge, so every bar that centres on the *free*
@@ -75,7 +79,7 @@ const Interface: React.FC = () => {
     toggleHideAgents,
   } = useStore();
 
-  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, setSameRoom } = usePresence();
+  const { localUserId, remoteParticipantList, broadcastPresenterChange, broadcastLeaderChange, setSameRoom, requestReviewEdit, endReviewEdit } = usePresence();
   const { isSameRoom } = useWebRTCContext();
   const sessionHostId = useStore(state => state.sessionHostId);
   const isHost = sessionHostId === localUserId || sessionHostId === null; // null = solo session, treat as host
@@ -113,6 +117,75 @@ const Interface: React.FC = () => {
   // redundant (its tabs are absorbed into the workspace). Hide it entirely.
   const managerMode = useActiveReviewStore((s) => s.managerMode);
   const canvasRightClass = canvasRight(managerMode, isRightPanelCollapsed);
+
+  // ─── Editing the review (batch BH) ─────────────────────────────────────────
+  // `can` answers from what lib/reviews/roles.ts says about me in THIS review: the
+  // deployment's identity mode, my account, the review's owner and roster, whether
+  // I administer the install, and whether I am the meeting's host. The role itself
+  // is not read here — every control this screen gates is an ACTION, and asking
+  // `can('editReview')` rather than `role === 'owner' || role === 'editor'` is what
+  // keeps the table in roles.ts the only place the answer is written down.
+  // The Edit button is hidden rather than disabled for somebody who may not: it is
+  // not a tool this meeting has, and the room server would refuse it anyway.
+  const { can, loading: roleLoading, refresh: refreshRole } = useReviewRole({
+    reviewId: roomId,
+    sessionHostId,
+    localUserId,
+  });
+  const mayEditReview = can('editReview');
+
+  const reviewEditing = useStore((s) => s.reviewEditing);
+  // MINE, not "somebody is". The strip, the panel swap and the gizmo are all
+  // gated on this; everybody else in the room gets the banner instead.
+  const iAmEditing = reviewEditing !== null && reviewEditing.userId === localUserId;
+
+  // ?edit=1 — where the lobby's "New design review" and a saved review's Edit both
+  // land. Retried until the room answers rather than fired once: RoomPage navigates
+  // before the presence socket has connected, and a single attempt would be dropped
+  // silently, leaving the room open without the edit mode its own link promised.
+  // Bails on either answer — granted or refused — so a person who does not have the
+  // right is not asking sixteen times over eight seconds.
+  //
+  // The sender is read through a ref, and the effect depends on the QUERY alone.
+  // usePartyPresence builds a fresh object every render, so listing the function
+  // here would re-run this effect on every presence update — and, worse, would
+  // re-run it after Done: reviewEditing back to null and no refusal on screen is
+  // indistinguishable from "just arrived, not answered yet", so the room would be
+  // asked again and Edit would turn straight back on. ?edit=1 is an arrival, and
+  // an arrival happens once.
+  const requestReviewEditRef = useRef(requestReviewEdit);
+  useEffect(() => {
+    requestReviewEditRef.current = requestReviewEdit;
+  });
+  const [searchParams] = useSearchParams();
+  const wantsEditOnArrival = searchParams.get('edit') === '1';
+  useEffect(() => {
+    if (!wantsEditOnArrival) return;
+    let settled = false;
+    const ask = () => {
+      const s = useStore.getState();
+      if (s.reviewEditing || s.reviewEditRefusal) {
+        settled = true;
+        return;
+      }
+      requestReviewEditRef.current();
+    };
+    ask();
+    const retry = setInterval(() => {
+      ask();
+      if (settled) clearInterval(retry);
+    }, 500);
+    const stop = setTimeout(() => clearInterval(retry), 8000);
+    return () => { clearInterval(retry); clearTimeout(stop); };
+  }, [wantsEditOnArrival]);
+
+  // The collapse toggle has no meaning while the review's own tabs are up, and the
+  // panel is the only place they are. Expanded, and not collapsible, for the length
+  // of the edit — which also means the free canvas keeps the same inset either side
+  // of the strip, so nothing jumps when Done is pressed.
+  useEffect(() => {
+    if (iAmEditing) setIsRightPanelCollapsed(false);
+  }, [iAmEditing]);
 
   const unresolvedComments = comments.filter(c => !c.resolved).length;
   const liveChat = useStore(state => state.liveChat);
@@ -350,20 +423,29 @@ const Interface: React.FC = () => {
 
       {/* TOP BAR: pointing (Highlight granularity + Pointer ▾) and the room
           controls that used to be a row in the top-right corner. Centred on the
-          free canvas, not on the window, so it never runs under the side panel. */}
+          free canvas, not on the window, so it never runs under the side panel.
+          While THIS person has Edit on the bar is the amber strip instead: the
+          meeting's controls are not what they are here to use, and swapping them
+          out is what makes that obvious to everybody watching the shared screen. */}
       <div className={clsx(
         "absolute top-6 left-[300px] flex justify-center pointer-events-none z-[45]",
         canvasRightClass
       )}>
-        <TopBar
-          isHost={isHost}
-          roomId={roomId}
-          showShare={showShare}
-          onToggleShare={() => setShowShare(v => !v)}
-          showParticipants={showParticipants}
-          onToggleParticipants={() => setShowParticipants(v => !v)}
-          onOpenDeicticExplainer={() => setShowDeicticExplainer(true)}
-        />
+        {iAmEditing ? (
+          <EditingStrip onDone={endReviewEdit} />
+        ) : (
+          <TopBar
+            isHost={isHost}
+            roomId={roomId}
+            showShare={showShare}
+            onToggleShare={() => setShowShare(v => !v)}
+            showParticipants={showParticipants}
+            onToggleParticipants={() => setShowParticipants(v => !v)}
+            onOpenDeicticExplainer={() => setShowDeicticExplainer(true)}
+            canEditReview={mayEditReview && !roleLoading && roomId !== undefined}
+            onEditReview={() => requestReviewEdit()}
+          />
+        )}
       </div>
 
       {/* Status indicators — top right of the canvas, below the bar and clear
@@ -562,7 +644,10 @@ const Interface: React.FC = () => {
         "absolute right-0 top-0 bottom-0 flex flex-col pointer-events-none z-[40] bg-white border-l border-gray-200 transition-all duration-300",
         isRightPanelCollapsed ? "w-12" : "w-[340px]"
       )}>
-        {/* Collapse Toggle Button */}
+        {/* Collapse Toggle Button. Not offered while editing: the panel is the only
+            place the review's tabs are, so collapsing it would leave the amber strip
+            editing something the editor cannot see. */}
+        {!iAmEditing && (
         <button
           onClick={() => setIsRightPanelCollapsed(!isRightPanelCollapsed)}
           className="pointer-events-auto m-2 shrink-0 w-10 h-10 bg-white rounded-lg border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-100 transition-all self-end"
@@ -574,9 +659,18 @@ const Interface: React.FC = () => {
             <PanelRightClose size={16} className="text-gray-600" />
           )}
         </button>
+        )}
 
-        {/* Panel Content - Hidden when collapsed */}
-        {!isRightPanelCollapsed && (
+        {/* Panel Content - Hidden when collapsed. Swapped wholesale while Edit is
+            on: the review's own tabs, in the order the user approved, rather than
+            the meeting's. The call keeps running — this is a change of what the
+            panel holds, not of what the room is doing. */}
+        {!isRightPanelCollapsed && iAmEditing && (
+          <div className="flex-1 min-h-0 flex flex-col px-2 pb-2 pointer-events-auto">
+            <ReviewEditPanel reviewId={roomId ?? ''} onRosterChanged={refreshRole} />
+          </div>
+        )}
+        {!isRightPanelCollapsed && !iAmEditing && (
           <div className="flex-1 min-h-0 flex flex-col gap-2 px-2 pb-2">
             {/* Panel Mode Toggle */}
             <div className="flex shrink-0 pointer-events-auto bg-white rounded-lg border border-gray-200 shadow-sm p-1 gap-0.5">
@@ -833,6 +927,17 @@ const Interface: React.FC = () => {
           ? "top-8 left-0 right-0"
           : clsx("top-[76px] left-[300px]", canvasRightClass)
       )}>
+          {/* EDITING THE REVIEW: who is, what the room said to me when I asked, and
+              who took it away. In this stack rather than in the bar, because it is
+              for the people who are NOT editing — the editor has the amber strip —
+              and the stack is where the room already puts "something is happening
+              that you should know about". */}
+          {!isBoardroomMode && (
+            <div className="pointer-events-auto">
+              <ReviewEditingNotice localUserId={localUserId} onTakeOver={() => requestReviewEdit(true)} />
+            </div>
+          )}
+
           {/* REQUEST TOAST */}
           {!isBoardroomMode && followRequest && (
               <div className="pointer-events-auto animate-in slide-in-from-top-4 fade-in">

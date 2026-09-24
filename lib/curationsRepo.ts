@@ -15,6 +15,8 @@
 
 import { supabase, supabaseConfigured } from './supabase';
 import { migrateCurationAsset } from './migrateCurationAsset';
+import { ensureReviewOwner } from './reviews/membersRepo';
+import { createReviewDraft, NEW_REVIEW_TITLE } from './reviewSetupStore';
 import type { ReviewDraft } from './reviewSetupStore';
 
 export interface CurationSummary {
@@ -145,6 +147,39 @@ export async function saveCuration(draft: ReviewDraft): Promise<{ ok: boolean; e
     return { ok: false, error: error.message };
   }
   return { ok: true };
+}
+
+/**
+ * Bring a design review into existence.
+ *
+ * Batch BH moved the birth of a review out of the curate page: the lobby's "New
+ * design review" writes the row and then opens the ROOM with Edit on, because
+ * there is no separate curation screen to prepare it in any more. The row has to
+ * exist first — RoomPage seeds the room from loadCuration, and a room with no row
+ * opens with nothing to edit.
+ *
+ * The owner is claimed in the same breath, and only for a browser this
+ * deployment signed in: ensureReviewOwner does nothing at all for a guest or for
+ * an install on identity.mode 'none', which leaves the review ownerless exactly
+ * as every review created before accounts existed is. An admin can claim one
+ * later from the People tab.
+ *
+ * @returns the draft that was written, or null when the row could not be saved.
+ *          A review that could not be written is a room that would open empty,
+ *          so the lobby says so and stays put rather than navigating.
+ */
+export async function createReview(
+  reviewId: string,
+  title: string = NEW_REVIEW_TITLE,
+): Promise<ReviewDraft | null> {
+  const draft = createReviewDraft(reviewId, title);
+  const saved = await saveCuration(draft);
+  if (!saved.ok) return null;
+  // Not awaited into the result: a review whose owner row failed to write is
+  // still a review, and the person standing in it can still edit it this
+  // session. ensureReviewOwner logs why it could not.
+  void ensureReviewOwner(reviewId);
+  return draft;
 }
 
 // The shape the three read paths share. Written out rather than inferred,

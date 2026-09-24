@@ -10,12 +10,14 @@ import MobileLaser from './MobileLaser';
 import SpatialComments from './SpatialComments';
 import XRManager from './XRManager';
 import ReviewArtifacts from './ReviewArtifacts';
+import ReviewModelGizmo from './ReviewModelGizmo';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
 import { participantLabel } from '../../lib/identity';
 import type { RemoteLaserState } from '../../lib/usePartyPresence';
 import { isLaserEntryFresh } from '../../lib/laserTargetRef';
 import { ViewMode } from '../../types';
+import type { ViewCapture } from '../../types';
 import { xrStore } from '../../lib/xrStore';
 import { computeOrbitPivot, getModelCenter } from '../../lib/orbitPivot';
 import { FOLLOW_RESUME_DELAY_MS } from '../../lib/followTiming';
@@ -194,6 +196,40 @@ const SceneRenderer = () => {
       if (followResumeTimerRef.current) clearTimeout(followResumeTimerRef.current);
     };
   }, []);
+
+  /**
+   * Publish where the camera is, so "Save this view" can read it.
+   *
+   * A function on the store rather than a value, for the same reason the drawing
+   * overlay publishes its screenshot that way: the button lives in the amber strip,
+   * which is an overlay in another React tree, and the camera's pose is only
+   * readable from inside R3F. Reading it at call time instead of closing over it is
+   * what stops a view saved after an hour of orbiting from being the camera's
+   * arrival position.
+   */
+  useEffect(() => {
+    const { setViewCapture } = useStore.getState();
+    setViewCapture((): ViewCapture | null => {
+      const cam = defaultCamera as THREE.PerspectiveCamera;
+      const controls = controlsRef.current;
+      const target = controls?.target as THREE.Vector3 | undefined;
+      const captured: ViewCapture = {
+        position: [cam.position.x, cam.position.y, cam.position.z],
+        lookAt: target ? [target.x, target.y, target.z] : [0, 0, 0],
+      };
+      try {
+        // One fresh frame first: the renderer has autoClear off for the split and
+        // boardroom views, so whatever is in the drawing buffer may be half of one.
+        gl.render(scene, cam);
+        captured.thumbnail = gl.domElement.toDataURL('image/jpeg', 0.55);
+      } catch {
+        // A canvas that will not give up its pixels still gives up its pose, and
+        // a viewpoint without a thumbnail is a viewpoint that still works.
+      }
+      return captured;
+    });
+    return () => setViewCapture(null);
+  }, [gl, scene, defaultCamera]);
 
   // Move the orbit pivot out to the model's depth *along the current line of
   // sight*. Every driven camera mode parks the target one unit in front of the
@@ -515,6 +551,10 @@ const SceneRenderer = () => {
         onStart={handleCanvasInteractionStart}
         onEnd={handleCanvasInteractionEnd}
       />
+      {/* The amber strip's Move / Rotate / Scale, attached to the selected scene
+          model. Renders nothing unless this person has Edit on and a model is
+          selected, so it costs the room nothing while a meeting is running. */}
+      <ReviewModelGizmo controlsRef={controlsRef} />
       {/* Curated review artifacts (pins, camera-jump animator). Shares this
           renderer's controlsRef so jumps update orbit controls in lockstep. */}
       <ReviewArtifacts controlsRef={controlsRef} />

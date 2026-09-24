@@ -1,9 +1,10 @@
 import { create } from 'zustand';
-import type { ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore';
+import type { AgendaItem, NewAgendaItem, ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore';
 import type { SpatialComment, Requirement } from '../types';
 import type { TeamMember } from './people';
 import { useStore } from '../store';
 import { forgetReviewScene, showReviewScene } from './scene/showCurationModel';
+import { forgetLocalEdit, markLocalEdit } from './reviewLocalEdit';
 
 // Build a live SpatialComment from a curated pin at commit time. The comment
 // is authored by whoever presses the button (not the curator), attached to the
@@ -43,6 +44,68 @@ export function pinToLiveComment(
 
 const PRE_VP_PREFIX = 'pre-vp-';
 const PRE_PIN_PREFIX = 'pre-pin-';
+
+function newId(): string {
+  return (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
+}
+
+/**
+ * A new draft with one field replaced, and the timestamp every write carries.
+ *
+ * Batch BH moved the curation tabs into the room, which brought eleven writes
+ * with them that this store did not have. Each is the same three steps as the
+ * ones above it — take the config, produce a new draft, put it back — so the
+ * repetition lives here once rather than eleven times, and each caller still
+ * names the field it changed and the sync that follows it.
+ */
+function edited(cfg: ReviewDraft, change: Partial<ReviewDraft>): ReviewDraft {
+  return { ...cfg, ...change, updatedAt: Date.now() };
+}
+
+/**
+ * Put an edited review in the store, and say that THIS browser is the one that
+ * edited it.
+ *
+ * Every write to `config` below goes through here, and `setConfig` — the copy
+ * that arrives from the room server, from the database, or from the lobby —
+ * deliberately does not. That mark is the only thing that makes pages/RoomPage
+ * write the review back: a change on its own says nothing about whose change it
+ * was, and saving somebody else's (or an older) copy is what batch BH3 fixed.
+ * See lib/reviewLocalEdit.
+ */
+function applyEdit(set: (partial: Partial<ActiveReviewState>) => void, next: ReviewDraft): void {
+  markLocalEdit();
+  set({ config: next });
+}
+
+/**
+ * Move one element of a list, the way dragging a card onto another means it.
+ *
+ * An index outside the list — a stale drag, a card somebody else removed a moment
+ * ago — answers with the list it was given, unchanged and by identity, so the
+ * caller's "nothing happened" test works the same way the scene reducer's does.
+ */
+function moved<T>(list: T[], fromIdx: number, toIdx: number): T[] {
+  if (fromIdx === toIdx) return list;
+  if (fromIdx < 0 || toIdx < 0 || fromIdx >= list.length || toIdx >= list.length) return list;
+  const next = [...list];
+  const removed = next.splice(fromIdx, 1);
+  next.splice(toIdx, 0, removed[0]);
+  return next;
+}
+
+/** One agenda slide with one of its two link lists replaced. */
+function withAgendaLinks(
+  cfg: ReviewDraft,
+  itemId: string,
+  change: (item: AgendaItem) => Pick<AgendaItem, 'viewpointIds' | 'pinIds'>,
+): ReviewDraft {
+  return edited(cfg, {
+    agenda: cfg.agenda.map((item) => (item.id === itemId ? { ...item, ...change(item) } : item)),
+  });
+}
 
 function viewpointToComment(v: ReviewViewpoint): SpatialComment {
   return {
@@ -161,6 +224,28 @@ interface ActiveReviewState {
 
   updateViewpoint: (id: string, patch: Partial<ReviewViewpoint>) => ReviewDraft | null;
   updatePin: (id: string, patch: Partial<ReviewPin>) => ReviewDraft | null;
+  /**
+   * The writes the curation tabs need, which batch BH moved into the room.
+   *
+   * The room read this review before and could rename a viewpoint or a pin in it,
+   * but it could not add a slide, delete a pin, reorder a requirement or tag the
+   * review — those were the curate page's, against its own draft store. They are
+   * here now because the tabs are here now, and each one answers with the draft it
+   * produced so the caller can broadcast exactly that and nothing else.
+   */
+  addViewpoint: (vp: Omit<ReviewViewpoint, 'id' | 'createdAt'>) => ReviewDraft | null;
+  removeViewpoint: (id: string) => ReviewDraft | null;
+  removePin: (id: string) => ReviewDraft | null;
+  addAgendaItem: (item: NewAgendaItem) => ReviewDraft | null;
+  removeAgendaItem: (id: string) => ReviewDraft | null;
+  reorderAgenda: (fromIdx: number, toIdx: number) => ReviewDraft | null;
+  attachViewpointToAgendaItem: (itemId: string, viewpointId: string) => ReviewDraft | null;
+  detachViewpointFromAgendaItem: (itemId: string, viewpointId: string) => ReviewDraft | null;
+  attachPinToAgendaItem: (itemId: string, pinId: string) => ReviewDraft | null;
+  detachPinFromAgendaItem: (itemId: string, pinId: string) => ReviewDraft | null;
+  reorderRequirements: (fromIdx: number, toIdx: number) => ReviewDraft | null;
+  setLabel: (fieldId: string, value: string) => ReviewDraft | null;
+  clearLabel: (fieldId: string) => ReviewDraft | null;
   updateAgendaItem: (id: string, patch: Partial<import('./reviewSetupStore').AgendaItem>) => ReviewDraft | null;
 
   addRequirement: (req: Omit<Requirement, 'id'>) => ReviewDraft | null;
@@ -213,6 +298,12 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     if (previous && previous.reviewId !== config?.reviewId) {
       forgetReviewScene(previous.reviewId);
     }
+    // Adopting a copy of the review is not editing it, whichever way the copy
+    // arrived — a REVIEW_CONFIG off the socket, the row read on entry, the lobby's
+    // handover draft. Any mark still standing was raised by a change no writer was
+    // listening for (a viewer who renamed something while nobody had Edit), and it
+    // must not licence this copy, or the next one, to be written to the database.
+    forgetLocalEdit();
     set({
       config,
       activeViewpointIdx: Math.min(get().activeViewpointIdx, Math.max(0, (config?.viewpoints.length ?? 1) - 1)),
@@ -261,7 +352,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       viewpoints: cfg.viewpoints.map((v) => v.id === id ? { ...v, ...patch } : v),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     syncMainComments(next);
     return next;
   },
@@ -273,8 +364,170 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       pins: cfg.pins.map((p) => p.id === id ? { ...p, ...patch } : p),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     syncMainComments(next);
+    return next;
+  },
+
+  // ─── The curation tabs' writes ──────────────────────────────────────────────
+  // Batch BH. Each answers with the draft it produced, or null when there is no
+  // review open — which is what "the room has nothing to edit yet" looks like from
+  // here, and the reason the caller can broadcast without re-reading the store.
+
+  addViewpoint: (vp) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = edited(cfg, {
+      viewpoints: [...cfg.viewpoints, { ...vp, id: newId(), createdAt: Date.now() }],
+    });
+    applyEdit(set, next);
+    // A viewpoint is also a pre-curated comment in the room's comment list, so the
+    // mirror has to be rebuilt — the same step updateViewpoint takes.
+    syncMainComments(next);
+    return next;
+  },
+
+  removeViewpoint: (id) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = edited(cfg, {
+      viewpoints: cfg.viewpoints.filter((v) => v.id !== id),
+      // A slide that linked the removed viewpoint would otherwise keep an id that
+      // resolves to nothing, and render as a gap where a camera chip was.
+      agenda: cfg.agenda.map((item) => (
+        item.viewpointIds.includes(id)
+          ? { ...item, viewpointIds: item.viewpointIds.filter((v) => v !== id) }
+          : item
+      )),
+    });
+    applyEdit(set, next);
+    syncMainComments(next);
+    return next;
+  },
+
+  removePin: (id) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = edited(cfg, {
+      pins: cfg.pins.filter((p) => p.id !== id),
+      agenda: cfg.agenda.map((item) => (
+        item.pinIds.includes(id)
+          ? { ...item, pinIds: item.pinIds.filter((p) => p !== id) }
+          : item
+      )),
+    });
+    applyEdit(set, next);
+    syncMainComments(next);
+    return next;
+  },
+
+  addAgendaItem: (item) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = edited(cfg, {
+      agenda: [...cfg.agenda, {
+        ...item,
+        id: newId(),
+        viewpointIds: item.viewpointIds ?? [],
+        pinIds: item.pinIds ?? [],
+      }],
+    });
+    applyEdit(set, next);
+    return next;
+  },
+
+  removeAgendaItem: (id) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = edited(cfg, { agenda: cfg.agenda.filter((a) => a.id !== id) });
+    applyEdit(set, next);
+    return next;
+  },
+
+  reorderAgenda: (fromIdx, toIdx) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const agenda = moved(cfg.agenda, fromIdx, toIdx);
+    if (agenda === cfg.agenda) return null;
+    const next = edited(cfg, { agenda });
+    applyEdit(set, next);
+    return next;
+  },
+
+  attachViewpointToAgendaItem: (itemId, viewpointId) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = withAgendaLinks(cfg, itemId, (item) => ({
+      viewpointIds: item.viewpointIds.includes(viewpointId)
+        ? item.viewpointIds
+        : [...item.viewpointIds, viewpointId],
+      pinIds: item.pinIds,
+    }));
+    applyEdit(set, next);
+    return next;
+  },
+
+  detachViewpointFromAgendaItem: (itemId, viewpointId) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = withAgendaLinks(cfg, itemId, (item) => ({
+      viewpointIds: item.viewpointIds.filter((v) => v !== viewpointId),
+      pinIds: item.pinIds,
+    }));
+    applyEdit(set, next);
+    return next;
+  },
+
+  attachPinToAgendaItem: (itemId, pinId) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = withAgendaLinks(cfg, itemId, (item) => ({
+      viewpointIds: item.viewpointIds,
+      pinIds: item.pinIds.includes(pinId) ? item.pinIds : [...item.pinIds, pinId],
+    }));
+    applyEdit(set, next);
+    return next;
+  },
+
+  detachPinFromAgendaItem: (itemId, pinId) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = withAgendaLinks(cfg, itemId, (item) => ({
+      viewpointIds: item.viewpointIds,
+      pinIds: item.pinIds.filter((p) => p !== pinId),
+    }));
+    applyEdit(set, next);
+    return next;
+  },
+
+  reorderRequirements: (fromIdx, toIdx) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const requirements = moved(cfg.requirements, fromIdx, toIdx);
+    if (requirements === cfg.requirements) return null;
+    const next = edited(cfg, { requirements });
+    applyEdit(set, next);
+    syncMainRequirements(next);
+    return next;
+  },
+
+  setLabel: (fieldId, value) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    if (cfg.labels[fieldId] === value) return null;
+    const next = edited(cfg, { labels: { ...cfg.labels, [fieldId]: value } });
+    applyEdit(set, next);
+    return next;
+  },
+
+  clearLabel: (fieldId) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    if (!(fieldId in cfg.labels)) return null;
+    const labels = { ...cfg.labels };
+    delete labels[fieldId];
+    const next = edited(cfg, { labels });
+    applyEdit(set, next);
     return next;
   },
 
@@ -316,7 +569,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       pins: cfg.pins.map((p) => p.id === pinId ? { ...p, committedCommentId: comment.id } : p),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     // The live comment is added to the main store by the caller (alongside
     // broadcastCommentAdd), so every client sees it. We only update the
     // config here — the caller owns the comment side-effect.
@@ -333,7 +586,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       pins: cfg.pins.map((p) => p.id === pin.id ? { ...p, committedCommentId: undefined } : p),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     return next;
   },
 
@@ -369,7 +622,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       agenda: cfg.agenda.map((a) => a.id === id ? { ...a, ...patch } : a),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     return next;
   },
 
@@ -385,7 +638,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       requirements: [...cfg.requirements, { ...req, id, code }],
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     syncMainRequirements(next);
     return next;
   },
@@ -401,7 +654,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       requirements: cfg.requirements.map((r) => r.id === id ? { ...r, ...cleaned } : r),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     syncMainRequirements(next);
     return next;
   },
@@ -414,7 +667,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       requirements: cfg.requirements.filter((r) => r.id !== id),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     syncMainRequirements(next);
     return next;
   },
@@ -430,7 +683,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       team: [...cfg.team, { ...member, id }],
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     return next;
   },
 
@@ -442,7 +695,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       team: cfg.team.map((m) => m.id === id ? { ...m, ...patch } : m),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     return next;
   },
 
@@ -454,7 +707,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       team: cfg.team.filter((m) => m.id !== id),
       updatedAt: Date.now(),
     };
-    set({ config: next });
+    applyEdit(set, next);
     return next;
   },
 
@@ -466,7 +719,7 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     const [moved] = arr.splice(fromIdx, 1);
     arr.splice(toIdx, 0, moved);
     const next: ReviewDraft = { ...cfg, team: arr, updatedAt: Date.now() };
-    set({ config: next });
+    applyEdit(set, next);
     return next;
   },
 

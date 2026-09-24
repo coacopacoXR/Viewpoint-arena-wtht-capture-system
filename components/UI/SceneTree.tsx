@@ -16,13 +16,14 @@ import { MODEL_UPLOAD_NETWORK_MESSAGE, uploadModelFile } from '../../lib/modelsC
 import { usePresence } from '../../lib/PresenceContext';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { useReviewSetupStore } from '../../lib/reviewSetupStore';
+import { useReviewRole } from '../../lib/reviews/useReviewRole';
 import { recordModelRevision } from '../../lib/reviews/revisionsRepo';
 import {
     describeSceneRefusal,
     FIRST_REVISION,
     lineFromFileName,
     revisionTargets,
-    mayChangeModels,
+    scenePermissions,
     nextRevisionFor,
     sceneModelId,
     sceneModelLabel,
@@ -62,20 +63,42 @@ function findAncestorIds(root: SceneNode, targetId: string): string[] {
  * reading the same setting here is what lets the button say so BEFORE the click
  * rather than after it. A disabled control with a reason beats one that appears
  * to do nothing.
+ *
+ * "The same" is literal. lib/scene/roomScene.scenePermissions is ONE function and
+ * party/room.server.ts calls it too, out of the four facts gathered here — the
+ * review's roster via lib/reviews/useReviewRole, the "who may change models"
+ * setting, this person, and the meeting host. It used to be two rules: batch BC
+ * moved the server to deciding by ROLE when identities are on, and this hook went
+ * on asking only "am I the meeting host", so an owner who made a colleague an
+ * editor, reloaded, and let that colleague arrive first was shown "Import locked"
+ * in their own review while the server would have allowed the import.
  */
 function useScenePermissions() {
     const modelEditors = useStore(state => state.modelEditors);
     const sessionHostId = useStore(state => state.sessionHostId);
+    // The room's review, which is the room's own id — the same string the room
+    // server passes to party/reviewRoles. Null in an ad-hoc session, where there
+    // is no roster and a signed-in person is a participant, which is what the
+    // server resolves for that room too.
+    const reviewId = useActiveReviewStore(state => state.config?.reviewId ?? null);
     const { localUserId } = usePresence();
-    const isHost = sessionHostId === localUserId || sessionHostId === null;
-    const canChangeModels = mayChangeModels(modelEditors, localUserId || null, sessionHostId);
-    return {
-        isHost,
-        canChangeModels,
+    const { role, rolesApply } = useReviewRole({ reviewId, sessionHostId, localUserId });
+    const permissions = scenePermissions({
+        // Null on identity.mode 'none' — the room server's own spelling of "this
+        // deployment resolves no roles". There the meeting host is the authority
+        // and the "who may change models" setting widens it, exactly as before.
+        role: rolesApply ? role : null,
         modelEditors,
-        reason: canChangeModels
+        userId: localUserId || null,
+        hostId: sessionHostId,
+    });
+    return {
+        canChangeModels: permissions.mayChangeModels,
+        maySetModelEditors: permissions.maySetModelEditors,
+        modelEditors,
+        reason: permissions.changeRefusal === null
             ? null
-            : describeSceneRefusal(modelEditors === 'host' ? 'host-only' : 'not-an-editor'),
+            : describeSceneRefusal(permissions.changeRefusal),
     };
 }
 
@@ -446,11 +469,14 @@ const ComparePicker: React.FC<{ line: string; onClose: () => void }> = ({ line, 
 };
 
 /**
- * Host-only: who may change the models in this room.
+ * Who may change the models in this room.
  *
- * Enforced by the room server, not by this control — a person who is not the
- * host does not see it, and if they sent the message anyway the server would
- * refuse it. What is here is the honest label for a rule that already applies.
+ * Shown to whoever lib/scene/roomScene.scenePermissions says may set it — the
+ * meeting host on a deployment with no identities, the review's owners and
+ * editors on one with accounts — and enforced by the room server, which asks that
+ * same function. Somebody it refuses does not see this control, and if they sent
+ * the message anyway they would get a SCENE_REFUSED back. What is here is the
+ * honest label for a rule that already applies.
  */
 const ModelEditorsControl: React.FC = () => {
     const modelEditors = useStore(state => state.modelEditors);
@@ -466,9 +492,10 @@ const ModelEditorsControl: React.FC = () => {
     ];
 
     const choose = (editors: ModelEditors) => {
-        // Sent, then applied locally: the server only takes this from the host and
-        // relays the whole scene back, so the local step is what makes the button
-        // feel like it did something. Outside a room it is all there is.
+        // Sent, then applied locally: the server takes this only from somebody
+        // scenePermissions says may set it, and relays the whole scene back, so the
+        // local step is what makes the button feel like it did something. Outside a
+        // room it is all there is.
         broadcastSetModelEditors(editors);
         setModelEditors(editors);
     };
@@ -588,8 +615,8 @@ const SceneTree: React.FC = () => {
     const setImportStatus = useStore(state => state.setImportStatus);
     const clearImportStatus = useStore(state => state.clearImportStatus);
 
-    const { broadcastSceneUpdate } = usePresence();
-    const { canChangeModels, isHost, reason: cannotChangeReason } = useScenePermissions();
+    const { broadcastSceneUpdate, localUserId } = usePresence();
+    const { canChangeModels, maySetModelEditors, reason: cannotChangeReason } = useScenePermissions();
 
     const [importError, setImportError] = useState<string | null>(null);
     const [pending, setPending] = useState<PendingImport | null>(null);
@@ -598,6 +625,21 @@ const SceneTree: React.FC = () => {
     // being shared. Kept out of the zustand store: it changes many times a
     // second during an upload and only this panel renders it.
     const [shareProgress, setShareProgress] = useState<number | null>(null);
+
+    // Whether the import was started from "+ Revision" rather than from "Import".
+    //
+    // Both open the same picker and end at the same chooser — batch BB already put
+    // "New revision of …" in it, and this reuses that flow rather than growing a
+    // second one. What the intent changes is which answer the chooser marks as the
+    // expected one, because a curator who pressed "+ Revision" has already told the
+    // room what they meant and should not have to pick it again from three options.
+    const [revisionIntent, setRevisionIntent] = useState(false);
+
+    // Whether THIS person has the review's Edit switch on. "+ Revision" is a
+    // curation act — it changes the review's model list for everybody — so it
+    // belongs to the amber strip's session and not to the meeting.
+    const reviewEditing = useStore(state => state.reviewEditing);
+    const iAmEditing = reviewEditing !== null && reviewEditing.userId === localUserId;
 
     const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree, bicycleSceneTree, headphonesSceneTree);
     const objectStates = useStore(state => state.objectStates);
@@ -668,7 +710,8 @@ const SceneTree: React.FC = () => {
         });
     };
 
-    const handleImportClick = () => {
+    const handleImportClick = (asRevision = false) => {
+        setRevisionIntent(asRevision);
         fileInputRef.current?.click();
     };
 
@@ -882,7 +925,7 @@ const SceneTree: React.FC = () => {
 
                 {/* Import Model Button */}
                 <button
-                    onClick={handleImportClick}
+                    onClick={() => handleImportClick()}
                     disabled={isImporting || !canChangeModels}
                     title={cannotChangeReason ?? 'Import a 3D model into this room'}
                     className={clsx(
@@ -904,6 +947,28 @@ const SceneTree: React.FC = () => {
                         </>
                     )}
                 </button>
+
+                {/* + Revision — only while this person is editing the review, and
+                    only when there is a line to continue. Same picker and same
+                    chooser as Import; see revisionIntent. */}
+                {iAmEditing && canChangeModels && scene.models.length > 0 && (
+                    <button
+                        onClick={() => handleImportClick(true)}
+                        disabled={isImporting}
+                        title={activeLine
+                            ? `Import a new revision of ${activeLine}`
+                            : 'Import a file, then choose which line it revises'}
+                        className={clsx(
+                            "mt-1 w-full px-3 py-1.5 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all",
+                            isImporting
+                                ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                : "bg-amber-400 text-black hover:bg-amber-300"
+                        )}
+                    >
+                        <Upload size={11} />
+                        + Revision{activeLine ? ` of ${activeLine}` : ''}
+                    </button>
+                )}
 
                 <input
                     ref={fileInputRef}
@@ -927,20 +992,38 @@ const SceneTree: React.FC = () => {
                             </button>
                         </div>
                         <div className="flex flex-col gap-1">
-                            {revisionTargets(scene.models, pending.fileName, activeLine).map(line => (
+                            {revisionTargets(scene.models, pending.fileName, activeLine).map(line => {
+                                // Marked, not chosen for them: the picker cannot know
+                                // whether the file really is the next revision of the
+                                // line the tree was pointing at, and silently applying
+                                // "hides the one before it" to the wrong line is the
+                                // kind of undo nobody expects to need.
+                                const suggested = revisionIntent && line === activeLine;
+                                return (
                                 <button
                                     key={line}
                                     onClick={() => finishImport(pending, 'revision', line)}
-                                    className="px-2 py-1 rounded border border-gray-200 hover:bg-blue-50 hover:border-blue-300 text-left"
+                                    className={clsx(
+                                        "px-2 py-1 rounded border text-left",
+                                        suggested
+                                            ? "border-amber-400 bg-amber-50 ring-1 ring-amber-300"
+                                            : "border-gray-200 hover:bg-blue-50 hover:border-blue-300"
+                                    )}
                                 >
                                     <span className="block font-bold text-[9px] text-gray-800">
                                         New revision of {line}
+                                        {suggested && (
+                                            <span className="ml-1 text-[8px] font-bold uppercase tracking-wide text-amber-600">
+                                                from + Revision
+                                            </span>
+                                        )}
                                     </span>
                                     <span className="block text-[8px] text-gray-500">
                                         Becomes Rev {nextRevisionFor(scene.models, line)} and hides the one before it
                                     </span>
                                 </button>
-                            ))}
+                                );
+                            })}
                             <button
                                 onClick={() => finishImport(pending, 'beside')}
                                 className="px-2 py-1 rounded border border-gray-200 hover:bg-blue-50 hover:border-blue-300 text-left"
@@ -1033,7 +1116,7 @@ const SceneTree: React.FC = () => {
                     </div>
                 )}
 
-                {isHost && <ModelEditorsControl />}
+                {maySetModelEditors && <ModelEditorsControl />}
             </div>
 
             {/* Tree View */}

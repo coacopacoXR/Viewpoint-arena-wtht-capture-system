@@ -41,6 +41,7 @@ import { usePointingTimeline } from './usePointingTimeline';
 import { usePointingTimelineStore } from './pointingTimelineStore';
 import { flattenSceneTree } from './componentIndex';
 import { LocalCaptureProvider, meetingSlideContext } from './connectors/capture/local';
+import { capturePauseReason, isCapturePaused, setCapturePausedBy } from './capture/captureGate';
 import type { ChatMessage } from '../types';
 import type { GroundedCaptureContext } from './connectors/capture/types';
 
@@ -123,6 +124,19 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const recordingStartMs = isRecording ? recordingState!.startedAt : 0;
   const [shownRecordingStart, setShownRecordingStart] = useState(0);
 
+  // ─── Capture pauses while ANYBODY has the review's Edit on ─────────────────
+  // Batch BH. Not "while I am editing": the curation conversation is the whole
+  // room's, so a participant's microphone would still be transcribing "no, put
+  // that slide after the pin" while the editor's own is quiet.
+  const reviewEditing = useStore((s) => s.reviewEditing);
+  const capturePaused = reviewEditing !== null;
+  useEffect(() => {
+    // The one writer of the gate, and it is here rather than in the component that
+    // turns Edit on, because the pause has to happen on EVERY client — including
+    // the ones that will never see the amber strip.
+    setCapturePausedBy(reviewEditing ? (reviewEditing.name || 'somebody') : null);
+  }, [reviewEditing]);
+
   // React to recording start/stop: update shownRecordingStart for the
   // liveLines filter, and reset when recording stops.
   useEffect(() => {
@@ -154,8 +168,14 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Per-client own-mic slicer. Runs on every client (host included) while
   // the room is recording. Feeds useLiveTranscript's onLiveChunk.
+  //
+  // `recording` is the gate for the live transcript: false stops the slicer, so no
+  // chunk is produced, so nothing is transcribed and nothing is broadcast. Turning
+  // the slicer off rather than dropping its output means the paused minutes are not
+  // recorded-then-discarded either, which is what "capture is paused" has to mean
+  // for a microphone that is still open.
   const { status: ownMicStatus, stopSharing: stopSharingMic } = useOwnMicTranscriber({
-    recording: isRecording,
+    recording: isRecording && !capturePaused,
     startedAtMs: recordingStartMs,
     localStream,
     isMicOn,
@@ -183,6 +203,16 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [state]);
 
   const summarise = useCallback(async (audio: Blob): Promise<void> => {
+    // The extractor refuses to send while the review is being edited. Checked
+    // here rather than left to the caller, because this is the one place audio
+    // leaves the browser for card extraction and a gate anywhere else would be a
+    // gate a future caller could walk past. The recording itself is kept — the
+    // person who stopped it still gets their audio — but it is not sent to be
+    // read, and they are told why instead of getting cards about the curation.
+    if (isCapturePaused()) {
+      setOutcome({ message: capturePauseReason() });
+      return;
+    }
     setSummarising(true);
     setOutcome(null);
     try {

@@ -23,6 +23,10 @@ export const PresenceContext = createContext<UsePartyPresenceReturn>({
   broadcastSceneUpdate: notSent,
   broadcastSetModelEditors: notSent,
   broadcastReviewConfig: () => false,
+  // No room to ask, so no Edit to be given. The default is a no-op rather than a
+  // refusal message: outside a room there is nobody to refuse and nothing to show.
+  requestReviewEdit: noop,
+  endReviewEdit: noop,
   broadcastMeetingEnd: noop,
   broadcastTakeoverSync: noop,
   broadcastHostTransfer: noop,

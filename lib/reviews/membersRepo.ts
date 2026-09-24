@@ -12,11 +12,14 @@
 // finding it silently reassigned to whoever happened to save it first.
 //
 // The People screen — adding an editor, removing a participant, transferring
-// ownership — is batch BH. This module holds the one membership write BC needs.
+// ownership — is batch BH. Its WRITES go through api/reviews/members.ts, because
+// review_members is read-only to the public key (docs/supabase-schema.sql); this
+// module holds the reads a browser does for itself, and the one membership write
+// BC needs.
 
 import { supabase } from '../supabase';
 import { getStoredIdentity } from '../identity';
-import type { MemberRole } from './roles';
+import { asMemberRole, type MemberRole, type ReviewMember } from './roles';
 
 /**
  * The account this browser is signed in with, or null.
@@ -106,5 +109,58 @@ export async function ensureReviewOwner(reviewId: string): Promise<boolean> {
   } catch (err) {
     console.error('[membersRepo] ensureReviewOwner threw:', err);
     return false;
+  }
+}
+
+/** What resolveRole needs to know about one review, read from the database. */
+export interface ReviewRoster {
+  /** review_curations.owner_id, or null for a review nobody has claimed. */
+  ownerId: string | null;
+  /** The review_members rows, with any role this code has never heard of dropped. */
+  members: ReviewMember[];
+}
+
+/** A review with nothing readable: nobody owns it, nobody is on the roster. */
+export const EMPTY_ROSTER: ReviewRoster = { ownerId: null, members: [] };
+
+/**
+ * One review's owner and roster, as a role decision needs them.
+ *
+ * The same two reads party/reviewRoles.ts makes with the room server's anon key,
+ * made here with the browser's — both tables are readable by the public key on
+ * purpose, because every participant's screen has to be able to work out what
+ * the person using it may do.
+ *
+ * Answers EMPTY_ROSTER on any failure. That is fail-closed and it is fail-closed
+ * on purpose: with no roster, resolveRole answers 'participant' for a signed-in
+ * person, who may not edit the review or manage its people. The alternative —
+ * treating an unreadable roster as "no restrictions" — would make a database
+ * outage the moment every design review on the install became editable by
+ * whoever was standing in the room.
+ */
+export async function readReviewRoster(reviewId: string): Promise<ReviewRoster> {
+  if (!reviewId) return EMPTY_ROSTER;
+  try {
+    const [curation, memberRows] = await Promise.all([
+      supabase.from('review_curations').select('owner_id').eq('id', reviewId).maybeSingle(),
+      supabase.from('review_members').select('user_id,role').eq('review_id', reviewId),
+    ]);
+    if (curation.error || memberRows.error) return EMPTY_ROSTER;
+
+    const rawOwner = curation.data?.owner_id;
+    const ownerId = typeof rawOwner === 'string' && rawOwner !== '' ? rawOwner : null;
+
+    const members: ReviewMember[] = [];
+    for (const row of (memberRows.data ?? []) as Array<Record<string, unknown>>) {
+      const userId = row['user_id'];
+      if (typeof userId !== 'string' || userId === '') continue;
+      const role = asMemberRole(row['role']);
+      if (!role) continue;
+      members.push({ userId, role });
+    }
+    return { ownerId, members };
+  } catch (err) {
+    console.error('[membersRepo] readReviewRoster threw:', err);
+    return EMPTY_ROSTER;
   }
 }

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Html } from '@react-three/drei';
 import { useStore, sceneModelVisible, type SceneModelEntry } from '../../store';
 import type { SceneModel } from '../../lib/scene/roomScene';
+import { sceneModelTransform } from '../../lib/scene/roomScene';
 
 /**
  * Scale the imported model and put it centred on the origin, resting on the
@@ -41,8 +42,21 @@ const SceneModelView: React.FC<{ model: SceneModel; entry: SceneModelEntry; labe
 }) => {
     const objectStates = useStore(state => state.objectStates);
     const registerPOI = useStore(state => state.registerPOI);
+    const registerSceneModelGroup = useStore(state => state.registerSceneModelGroup);
     const groupRef = useRef<THREE.Group>(null);
+    // The wrapper, which is the object carrying this model's own transform and
+    // therefore the one the amber strip's gizmo has to drag. Registered so the
+    // gizmo — a sibling of this component inside the canvas, with no prop path to
+    // it — can find it by model id.
+    const wrapperRef = useRef<THREE.Group>(null);
     const registeredIds = useRef<Set<string>>(new Set());
+
+    useEffect(() => {
+        const group = wrapperRef.current;
+        if (!group) return;
+        registerSceneModelGroup(model.id, group);
+        return () => registerSceneModelGroup(model.id, null);
+    }, [model.id, registerSceneModelGroup]);
 
     useEffect(() => {
         if (!groupRef.current) return;
@@ -103,8 +117,16 @@ const SceneModelView: React.FC<{ model: SceneModel; entry: SceneModelEntry; labe
     // placement uses rather than inheriting a scale that would grow the text.
     const labelY = entry.size.y * entry.baseScale * entry.scale + 0.15;
 
+    // The room's own transform for this model — where the amber strip's Move /
+    // Rotate / Scale left it. Read through sceneModelTransform so a model written
+    // before batch BH, which has neither field, stands exactly as it arrived.
+    // Applied to the WRAPPER rather than to the geometry inside it: that group is
+    // already scaled and centred by placeImportedGroup, and scaling it again
+    // would scale the centring with it and slide the model off its own origin.
+    const transform = sceneModelTransform(model);
+
     return (
-        <group position={model.offset}>
+        <group ref={wrapperRef} position={transform.offset} rotation={transform.rotation} scale={transform.scale}>
             <primitive ref={groupRef} object={entry.group} />
             {label && (
                 <Html

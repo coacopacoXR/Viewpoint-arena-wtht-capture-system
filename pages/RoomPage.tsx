@@ -12,7 +12,9 @@ import { WebRTCContext } from '../lib/WebRTCContext';
 import { useReviewSetupStore } from '../lib/reviewSetupStore';
 import type { ReviewDraft } from '../lib/reviewSetupStore';
 import { useActiveReviewStore } from '../lib/activeReviewStore';
+import { consumeLocalEdit } from '../lib/reviewLocalEdit';
 import { loadCuration, saveCuration } from '../lib/curationsRepo';
+import { supabaseConfigured } from '../lib/supabase';
 import { useIsMobile } from '../lib/useIsMobile';
 import { RecordingProvider } from '../lib/RecordingContext';
 import RemoteAudioSink from '../components/UI/RemoteAudioSink';
@@ -53,67 +55,155 @@ const RoomPage: React.FC = () => {
   const joinState = useJoinState();
 
   // Seed the active review for this room:
-  //   1. Use the local draft if it matches the roomId (the host who just
-  //      finished setup arrives here with the freshest copy in memory).
-  //   2. Otherwise pull from the cloud — anyone with the URL joins into the
-  //      same curation across sessions and devices.
+  //   1. Put the draft the lobby handed over on screen at once, so the room is
+  //      not empty while the row is read. It is a copy of the row the lobby just
+  //      wrote, and on an install with no database it is the only copy there is.
+  //   2. Then read the row — the copy everybody else has been editing, and the
+  //      one a review saved in an earlier visit lives in — and adopt it. The row
+  //      wins, and from that moment the handover draft is dropped: it described
+  //      the review as it was when the lobby created it, and nothing in the room
+  //      ever updates it, so a later visit that seeded from it again would put an
+  //      older review on screen and in front of everybody else in the room.
   // Then broadcast to other participants.
+  //
+  // `roomId` is the ONLY dependency. usePartyPresence builds a fresh object every
+  // render, so listing it re-ran the seed on every render of the room and put the
+  // lobby's draft back over whatever the review had become since. That is how a
+  // view saved from the amber strip was gone again a moment later, and how the
+  // stale draft — not the edit — was what reached the database. The broadcast is
+  // read through a ref, the way components/UI/Interface.tsx reads the sender of
+  // its own ?edit=1 request, for exactly this reason.
+  const broadcastReviewConfigRef = useRef(presence.broadcastReviewConfig);
+  useEffect(() => {
+    broadcastReviewConfigRef.current = presence.broadcastReviewConfig;
+  });
+  // The draft the seed put in the store. Seeding is not editing: nothing here
+  // raises the local-edit mark the persistence subscriber below needs, so walking
+  // into a room never writes the row back over whatever somebody else has just
+  // saved. The ref is what tells the read below apart from an edit made while it
+  // was in flight.
+  const seededDraftRef = useRef<ReviewDraft | null>(null);
   useEffect(() => {
     if (!roomId) return;
     let cancelled = false;
+    let stopRetrying: (() => void) | undefined;
 
     const broadcastWhenReady = (draft: ReviewDraft) => {
-      if (presence.broadcastReviewConfig(draft)) return;
+      stopRetrying?.();
+      stopRetrying = undefined;
+      if (broadcastReviewConfigRef.current(draft)) return;
       const id = setInterval(() => {
-        if (presence.broadcastReviewConfig(draft)) clearInterval(id);
+        if (broadcastReviewConfigRef.current(draft)) clearInterval(id);
       }, 250);
       const stop = setTimeout(() => clearInterval(id), 5000);
-      return () => { clearInterval(id); clearTimeout(stop); };
+      stopRetrying = () => { clearInterval(id); clearTimeout(stop); };
     };
 
-    const localDraft = useReviewSetupStore.getState().draft;
-    if (localDraft && localDraft.reviewId === roomId) {
-      useActiveReviewStore.getState().setConfig(localDraft);
+    const seed = (draft: ReviewDraft) => {
+      seededDraftRef.current = draft;
+      useActiveReviewStore.getState().setConfig(draft);
       // This room is holding a design review, not an ad-hoc session: the meeting
       // that ends here is recorded against it (lib/trackerBridge).
       useStore.getState().setActiveReviewId(roomId);
-      return broadcastWhenReady(localDraft);
+      broadcastWhenReady(draft);
+    };
+
+    const localDraft = useReviewSetupStore.getState().draft;
+    if (localDraft && localDraft.reviewId === roomId) seed(localDraft);
+
+    // Skipped where there is no database to read: the handover draft above is the
+    // whole story on such an install, and a request to a client that was built
+    // with placeholder credentials can only fail and log. It is also why the drop
+    // below happens only once a row has actually come back — with no row, that
+    // draft is the only copy of the review this browser has.
+    if (supabaseConfigured) {
+      void (async () => {
+        const remote = await loadCuration(roomId);
+        if (cancelled || !remote) return;
+        // The row is the truth from here on, so the copy the lobby handed over has
+        // finished its job — in this visit and in every later one. Left in
+        // localStorage it would seed the next visit with a review that predates
+        // everything anybody has saved since, and the seed broadcasts, so it would
+        // hand that older copy to everybody else in the room as well.
+        if (useReviewSetupStore.getState().draft?.reviewId === roomId) {
+          useReviewSetupStore.getState().discardDraft();
+        }
+        // Somebody in this room has already changed the review — a write made in
+        // the moment before the read landed. That copy is what the subscriber
+        // below is about to save, so the row must not replace it.
+        const current = useActiveReviewStore.getState().config;
+        if (current !== null && current !== seededDraftRef.current) return;
+        seed(remote);
+      })();
     }
 
-    let cleanup: (() => void) | undefined;
-    (async () => {
-      const remote = await loadCuration(roomId);
-      if (cancelled || !remote) return;
-      useActiveReviewStore.getState().setConfig(remote);
-      useStore.getState().setActiveReviewId(roomId);
-      cleanup = broadcastWhenReady(remote);
-    })();
-    return () => { cancelled = true; cleanup?.(); };
-  }, [roomId, presence]);
+    return () => { cancelled = true; stopRetrying?.(); };
+  }, [roomId]);
 
   // Persist in-room edits to viewpoints / pins / agenda back to the cloud
-  // (debounced). Only the host writes through — other participants get the
-  // latest via PartyKit's REVIEW_CONFIG broadcast and don't need to push.
+  // (debounced). Only one screen writes through at a time — everybody else gets
+  // the latest via PartyKit's REVIEW_CONFIG broadcast and doesn't need to push.
+  //
+  // Who that one screen is widened in batch BH, when the curation tabs moved into
+  // the room: it used to be the meeting host alone, because the only in-room edits
+  // were a renamed viewpoint or pin. With Edit on, an owner or an editor who is
+  // NOT the host is the one changing the review, and a subscriber that listened
+  // only to the host would have thrown their work away on the next reload. So:
+  // the host, or whoever the room server says has Edit.
+  //
+  // Being one of those two is necessary but NOT sufficient, which batch BH3 found
+  // the hard way. The review this screen holds also changes when a REVIEW_CONFIG
+  // arrives from somebody else, when the room seeds itself from the lobby's
+  // handover draft, and when the row is read back on entry — and a subscriber that
+  // saved on any of those wrote a copy it had not authored over one somebody else
+  // had just saved. With two people in the room that emptied a review one of them
+  // had already saved a view into. So the question is not "did the review change"
+  // but "did I change it": every editing action marks it (lib/reviewLocalEdit),
+  // the mark is taken here, and nothing else writes.
+  //
+  // The whole review still goes, not a diff of it. Two people editing at once is
+  // already impossible — Edit is one lock the room server hands out (batch BH) —
+  // so last writer wins, and the last writer is by definition somebody who was
+  // editing.
   const sessionHostId = useStore(state => state.sessionHostId);
+  const reviewEditing = useStore(state => state.reviewEditing);
+  const localUserId = presence.localUserId;
   useEffect(() => {
     if (!roomId) return;
-    const isHost = sessionHostId === presence.localUserId || sessionHostId === null;
-    if (!isHost) return;
+    const isHost = sessionHostId === localUserId || sessionHostId === null;
+    const iAmEditing = reviewEditing !== null && reviewEditing.userId === localUserId;
+    if (!isHost && !iAmEditing) return;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+    let pending: ReviewDraft | null = null;
+    const flush = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = undefined;
+      if (!pending) return;
+      const draft = pending;
+      pending = null;
+      saveCuration(draft);
+    };
     const unsub = useActiveReviewStore.subscribe((state, prev) => {
       if (!state.config || state.config === prev.config) return;
       if (state.config.reviewId !== roomId) return;
-      // debounce per-host via a moving timer keyed off the config object
+      // Taken at the moment of the change rather than at the flush: the copy that
+      // goes is the one this screen was holding when its owner made the edit, and
+      // a copy that arrives from the room a moment later leaves it alone.
+      if (!consumeLocalEdit()) return;
+      // debounce per-writer via a moving timer keyed off the config object
+      pending = state.config;
       if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        saveCuration(state.config!);
-      }, 1000);
+      debounceTimer = setTimeout(flush, 1000);
     });
     return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
+      // Flushed rather than dropped. Unsubscribing now happens every time Edit
+      // changes hands, and Done is pressed within a second of the last edit far
+      // more often than not — a cleanup that only cleared the timer would lose
+      // exactly the change the person just made.
+      flush();
       unsub();
     };
-  }, [roomId, sessionHostId, presence.localUserId]);
+  }, [roomId, sessionHostId, localUserId, reviewEditing]);
 
   // "The reviews I have been part of" (docs/plan/13-identity.md batch AZ).
   // Written once per room entry, and only for somebody this deployment signed

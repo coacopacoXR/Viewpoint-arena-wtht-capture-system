@@ -12,6 +12,12 @@
 // will do and to render the result. One reducer, two callers — which is what
 // stops a client from believing something the server would never have allowed.
 
+// lib/reviews/roles.ts is the one import, and it is pure for the same reason: no
+// Supabase, no DOM, no clock, so workerd can load it too. It is what lets
+// scenePermissions below be ONE function the browser and the room server both
+// ask, rather than two that drift apart.
+import { can, type Role } from '../reviews/roles';
+
 /** A model that ships with the app and has nothing to fetch. */
 export type BuiltInModel = 'synth' | 'headphones' | 'bicycle';
 
@@ -41,6 +47,52 @@ export interface SceneModel {
   visible: boolean;
   /** Placement in the room, in scene units. See lib/scene/placement.ts. */
   offset: [number, number, number];
+  /**
+   * Turn and size, both OPTIONAL and both absent on every model written before
+   * batch BH put Move / Rotate / Scale in the room's amber strip. Absent means
+   * identity — see sceneModelTransform — which is what a scene persisted by an
+   * older build, or sent by an older client, has to mean: a model that was placed
+   * but never turned is a model standing the way it arrived.
+   *
+   * Euler radians in XYZ, the order three.js reads a group's rotation in, so the
+   * value the gizmo produces is the value the renderer consumes.
+   */
+  rotation?: [number, number, number];
+  /** Uniform, multiplying the entry's own baseScale and the user's slider. */
+  scale?: number;
+}
+
+/** Where one model sits in the room, and how it is turned and sized. */
+export interface SceneModelTransform {
+  offset: [number, number, number];
+  rotation: [number, number, number];
+  scale: number;
+}
+
+/** A model nobody has moved, turned or resized. */
+export const IDENTITY_SCENE_TRANSFORM: SceneModelTransform = {
+  offset: [0, 0, 0],
+  rotation: [0, 0, 0],
+  scale: 1,
+};
+
+/**
+ * One model's transform, with the optional fields filled in.
+ *
+ * Every reader goes through this rather than reaching for `model.rotation ?? …`,
+ * so "absent means identity" is written down once. A scale that is not a usable
+ * number — zero would make a model vanish, a negative one would invert it, and
+ * both can only arrive from a client that meant something else — falls back to 1.
+ */
+export function sceneModelTransform(model: SceneModel): SceneModelTransform {
+  const scale = typeof model.scale === 'number' && Number.isFinite(model.scale) && model.scale > 0
+    ? model.scale
+    : 1;
+  return {
+    offset: model.offset ?? IDENTITY_SCENE_TRANSFORM.offset,
+    rotation: model.rotation ?? IDENTITY_SCENE_TRANSFORM.rotation,
+    scale,
+  };
 }
 
 /**
@@ -81,6 +133,17 @@ export type SceneUpdate =
   | { op: 'setVisible'; id: string; visible: boolean }
   | { op: 'remove'; id: string }
   | { op: 'setOffset'; id: string; offset: [number, number, number] }
+  /**
+   * One model's whole transform, from the amber strip's gizmo.
+   *
+   * All three fields at once rather than one op per axis, because the gizmo
+   * produces all three on every drag frame and a room that received "rotate" and
+   * "scale" as separate operations would relay two SCENE_STATEs per frame to
+   * everybody. `setOffset` stays: it is what placement.ts sends when it puts a
+   * newly imported model beside the others, and it does not know or care about
+   * turn and size.
+   */
+  | { op: 'setTransform'; id: string; transform: SceneModelTransform }
   | { op: 'setBuiltIn'; builtIn: BuiltInModel | null };
 
 /**
@@ -250,7 +313,7 @@ export function sceneModelPrefix(hash: string): string {
 }
 
 /**
- * Whether this person may change the models in the room.
+ * Whether this person may change the models in the room, by batch BB's rule.
  *
  * The host always may, whatever the setting says: a room whose host has been
  * locked out of its own scene is a room nobody can fix. A null host means
@@ -258,10 +321,9 @@ export function sceneModelPrefix(hash: string): string {
  * HOST_CHANGE — and the app reads that as "you are the host" everywhere else
  * (Interface, SharePanel, ManageButton), so it reads that way here too.
  *
- * The room server calls this with the host it computed itself, and the browser
- * calls it with the host the server told it about, which is why the answer is
- * the same on both sides of the socket. Enforcing it only in the UI would have
- * left the websocket open to anybody who wanted to use it.
+ * This is the WHOLE rule on a deployment with no identities, and only half of it
+ * on one with accounts — see scenePermissions, which is what both the room server
+ * and the browser actually call.
  */
 export function mayChangeModels(
   modelEditors: ModelEditors,
@@ -274,6 +336,96 @@ export function mayChangeModels(
   if (modelEditors === 'everyone') return true;
   if (Array.isArray(modelEditors)) return modelEditors.includes(userId);
   return false;
+}
+
+/**
+ * Everything the two scene-permission questions are decided from.
+ *
+ * Four facts and no runtime, so that the browser and the room server can be
+ * handed the same four and cannot disagree — which is the failure this exists to
+ * end. Batch BC made the server decide by ROLE when identities are on; the client
+ * kept deciding by "am I the meeting host", and the result was an owner who had
+ * created a review, made a colleague an editor, reloaded, and been shown "Import
+ * locked" in their own review because the colleague had arrived first.
+ */
+export interface SceneAuthority {
+  /**
+   * This person's role in the design review, or NULL when the deployment has no
+   * identities to resolve one from. Null is not a role and not a guess at one: it
+   * is party/room.server.ts's `roleFor` answering from `reviewFactsCacheFor()`,
+   * and lib/reviews/useReviewRole's `rolesApply: false`. With it, the host rule
+   * below is the whole rule, exactly as it was before accounts existed.
+   */
+  role: Role | null;
+  /** Who the review says may change its models. */
+  modelEditors: ModelEditors;
+  /** This person in the room, or null for a connection the room could not place. */
+  userId: string | null;
+  /** The meeting host — whoever arrived first — or null while nobody is named. */
+  hostId: string | null;
+}
+
+/** Both answers, with the reason behind each refusal. */
+export interface ScenePermissions {
+  /** Import, hide for everybody, move, turn, resize, remove. */
+  mayChangeModels: boolean;
+  /** Why not, as describeSceneRefusal turns it into words. Null when they may. */
+  changeRefusal: SceneRefusalReason | null;
+  /** Choose who else may change the models. */
+  maySetModelEditors: boolean;
+  /** Why not. Null when they may. */
+  editorsRefusal: SceneRefusalReason | null;
+}
+
+/**
+ * What one person may do to this room's scene, and why not if not.
+ *
+ * TWO deployments, two rules, and the role being null is what selects between
+ * them:
+ *
+ * WITHOUT accounts, batch BB's rule unchanged — the meeting host, widened by the
+ * "who may change models" setting. There is no roster to read and nobody to be,
+ * so a host is the only authority a password-protected install has.
+ *
+ * WITH accounts, the person's ROLE in the review replaces the host as the
+ * authority, because the host is only whoever happened to arrive first and a
+ * supplier's guest could be that. Owners and editors may change the models;
+ * participants and guests may not — unless the review's own setting says
+ * otherwise, which is still the owner's choice to make and the reason
+ * 'everyone' and named people keep working rather than being overridden.
+ *
+ * Choosing who may change them is a step above changing them: it is how a power
+ * is handed to somebody else, so it is its own question with its own answer.
+ */
+export function scenePermissions(authority: SceneAuthority): ScenePermissions {
+  const { role, modelEditors, userId, hostId } = authority;
+
+  let changeRefusal: SceneRefusalReason | null;
+  let editorsRefusal: SceneRefusalReason | null;
+
+  if (role === null) {
+    changeRefusal = mayChangeModels(modelEditors, userId, hostId)
+      ? null
+      : modelEditors === 'host'
+        ? 'host-only'
+        : 'not-an-editor';
+    editorsRefusal = userId !== null && userId === hostId ? null : 'host-only-setting';
+  } else {
+    const named = Array.isArray(modelEditors)
+      && userId !== null
+      && modelEditors.includes(userId);
+    changeRefusal = can(role, 'editReview') || modelEditors === 'everyone' || named
+      ? null
+      : 'role-forbidden';
+    editorsRefusal = can(role, 'setModelEditors') ? null : 'role-forbidden-setting';
+  }
+
+  return {
+    mayChangeModels: changeRefusal === null,
+    changeRefusal,
+    maySetModelEditors: editorsRefusal === null,
+    editorsRefusal,
+  };
 }
 
 /**
@@ -303,6 +455,14 @@ export function describeSceneRefusal(reason: SceneRefusalReason): string {
     return `This room is already showing ${MAX_SCENE_MODELS} models. Hide or remove one before adding another.`;
   }
   return 'The room server could not read that scene change, so nothing was changed for anybody.';
+}
+
+/** Three numbers, equal component by component. */
+function sameTriple(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+): boolean {
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 }
 
 /**
@@ -360,6 +520,32 @@ export function applySceneUpdate(scene: RoomScene, update: SceneUpdate): RoomSce
     case 'setBuiltIn': {
       if (scene.builtIn === update.builtIn) return scene;
       return { ...scene, builtIn: update.builtIn };
+    }
+    case 'setTransform': {
+      const target = scene.models.find((model) => model.id === update.id);
+      if (!target) return scene;
+      const current = sceneModelTransform(target);
+      const next = update.transform;
+      // Compared field by field against the FILLED-IN current value, not against
+      // the stored optionals: a model that has never been turned has no rotation
+      // field at all, and a gizmo sending [0,0,0] for it is not a change. Without
+      // this, the first drag of an untouched model would relay a scene whose
+      // models are byte-identical to what everybody already has.
+      if (
+        sameTriple(current.offset, next.offset) &&
+        sameTriple(current.rotation, next.rotation) &&
+        current.scale === next.scale
+      ) {
+        return scene;
+      }
+      return {
+        ...scene,
+        models: scene.models.map((model) =>
+          model.id === update.id
+            ? { ...model, offset: next.offset, rotation: next.rotation, scale: next.scale }
+            : model,
+        ),
+      };
     }
     default:
       return scene;

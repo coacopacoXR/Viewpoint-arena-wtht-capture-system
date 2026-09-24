@@ -5,7 +5,8 @@ import { useIdentity, AVATAR_COLORS, UserIdentity } from '../lib/identity';
 import { signOutOfAccount } from '../lib/auth/useAuth';
 import { identityRequired, publicIdentityOf } from '../lib/auth/authRules';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
-import { listRecentCurations, deleteCuration, getCurationSummary, type CurationSummary } from '../lib/curationsRepo';
+import { listRecentCurations, deleteCuration, getCurationSummary, createReview, type CurationSummary } from '../lib/curationsRepo';
+import { useReviewSetupStore, createReviewDraft } from '../lib/reviewSetupStore';
 import { listMyReviews, describeLastVisit, type MyReview } from '../lib/reviewParticipantsRepo';
 import { Camera, MapPin, Layers, Play, Pencil, Trash2 } from 'lucide-react';
 
@@ -102,12 +103,11 @@ const LobbyPage: React.FC = () => {
   function resumeCuration(id: string, mode: 'setup' | 'room') {
     const ident = name.trim() ? buildIdentity() : identity;
     if (ident) setIdentity(ident);
-    if (mode === 'room') {
-      sessionStorage.setItem('vp_enteredRoom', id);
-      navigate(`/room/${id}`, { state: { fromLobby: true } });
-    } else {
-      navigate(`/review/${id}/setup`);
-    }
+    // Both spellings open the room. 'setup' means "open it ready to edit", which
+    // since batch BH is a query parameter on the room's own address rather than a
+    // separate curation page: the tabs that used to live there are the room's side
+    // panel with Edit on.
+    enterRoom(id, mode === 'setup');
   }
 
   async function handleDeleteCuration(id: string) {
@@ -126,11 +126,11 @@ const LobbyPage: React.FC = () => {
     return next;
   }
 
-  function enterRoom(roomId: string) {
+  function enterRoom(roomId: string, edit = false) {
     const id = buildIdentity();
     setIdentity(id);
     sessionStorage.setItem('vp_enteredRoom', roomId);
-    navigate(`/room/${roomId}`, { state: { fromLobby: true } });
+    navigate(edit ? `/room/${roomId}?edit=1` : `/room/${roomId}`, { state: { fromLobby: true } });
   }
 
   function handleNewSession() {
@@ -138,12 +138,35 @@ const LobbyPage: React.FC = () => {
     enterRoom(crypto.randomUUID());
   }
 
-  function handleCurateReview() {
+  /**
+   * "New design review" — the button that used to say "Curate a design review".
+   *
+   * The review is CREATED here rather than on arrival, because a room with no
+   * review_curations row has nothing to edit: RoomPage seeds itself from
+   * loadCuration and an absent row leaves the side panel empty. Writing the row
+   * first also means the link in the address bar is the review's permanent one
+   * from the first moment it exists.
+   *
+   * The room opens whether or not the write landed. An install with no database
+   * configured — the default self-hosted one, which leaves VITE_SUPABASE_URL
+   * unset — cannot write a row and never could; refusing to open the room there
+   * would have taken the batch's headline button away from exactly the install
+   * that has no other way to start a review. So the draft is handed to
+   * lib/reviewSetupStore as well, which is where RoomPage looks FIRST, and the
+   * room's own save-on-edit upserts the row later if a database ever answers.
+   */
+  const [creatingReview, setCreatingReview] = useState(false);
+
+  async function handleNewDesignReview() {
     if (!name.trim()) { setError('Enter your name first.'); return; }
-    const id = buildIdentity();
-    setIdentity(id);
+    if (creatingReview) return;
+    setCreatingReview(true);
+    setError('');
     const reviewId = crypto.randomUUID();
-    navigate(`/review/${reviewId}/setup`);
+    const created = await createReview(reviewId);
+    setCreatingReview(false);
+    useReviewSetupStore.getState().hydrateDraft(created ?? createReviewDraft(reviewId));
+    enterRoom(reviewId, true);
   }
 
   function handleJoin() {
@@ -360,9 +383,9 @@ const LobbyPage: React.FC = () => {
                   {isReturning ? 'New session' : 'Start new session'}
                 </button>
 
-                <button onClick={handleCurateReview}
-                  className="w-full text-sm font-bold py-3 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/20 transition-colors">
-                  Curate a design review →
+                <button onClick={handleNewDesignReview} disabled={creatingReview}
+                  className="w-full text-sm font-bold py-3 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/20 transition-colors disabled:opacity-50">
+                  {creatingReview ? 'Creating…' : 'New design review →'}
                 </button>
               </>
             )}
@@ -488,7 +511,7 @@ const LobbyPage: React.FC = () => {
                 <div className="rounded-xl border border-dashed border-white/10 px-4 py-5 text-center">
                   <p className="text-[11px] text-gray-500">No saved design reviews yet.</p>
                   <p className="text-[10px] text-gray-600 mt-1">
-                    Click <span className="text-emerald-400">Curate a design review</span> to start one — it'll save automatically and appear here for anyone you share the link with.
+                    Click <span className="text-emerald-400">New design review</span> to start one — it'll save automatically and appear here for anyone you share the link with.
                   </p>
                 </div>
               ) : (

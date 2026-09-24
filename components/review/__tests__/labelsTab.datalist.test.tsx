@@ -1,3 +1,11 @@
+// LabelsTab's free-text suggestions.
+//
+// Moved here from pages/__tests__ when batch BH moved the tab itself out of the
+// curate page and into components/review/. Same two questions, same answers — the
+// only change is that the tab no longer reaches into lib/reviewSetupStore for its
+// data, so the test hands it `labels` and `actions` as props instead of mocking a
+// store it no longer reads.
+
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
@@ -6,22 +14,13 @@ const { mockListUsedLabelValues } = vi.hoisted(() => ({
   mockListUsedLabelValues: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('../../lib/curationsRepo', () => ({
+vi.mock('../../../lib/curationsRepo', () => ({
   listUsedLabelValues: mockListUsedLabelValues,
-}));
-
-vi.mock('../../lib/reviewSetupStore', () => ({
-  useReviewSetupStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({
-      draft: { labels: {} },
-      setLabel: vi.fn(),
-      clearLabel: vi.fn(),
-    }),
 }));
 
 const loadFieldsMock = vi.fn();
 
-vi.mock('../../lib/labelFieldsStore', () => ({
+vi.mock('../../../lib/labelFieldsStore', () => ({
   useLabelFieldsStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
       fields: [
@@ -33,7 +32,32 @@ vi.mock('../../lib/labelFieldsStore', () => ({
     }),
 }));
 
-import { LabelsTab } from '../ReviewSetupPage';
+import { LabelsTab } from '../LabelsTab';
+import type { ReviewDraftActions } from '../draftActions';
+
+/** Every write a no-op: this test is about the suggestions, not about saving. */
+const noopActions: ReviewDraftActions = {
+  updateViewpoint: () => {},
+  removeViewpoint: () => {},
+  updatePin: () => {},
+  removePin: () => {},
+  addAgendaItem: () => {},
+  updateAgendaItem: () => {},
+  removeAgendaItem: () => {},
+  reorderAgenda: () => {},
+  attachViewpointToAgendaItem: () => {},
+  detachViewpointFromAgendaItem: () => {},
+  attachPinToAgendaItem: () => {},
+  detachPinFromAgendaItem: () => {},
+  addRequirement: () => {},
+  updateRequirement: () => {},
+  removeRequirement: () => {},
+  reorderRequirements: () => {},
+  setLabel: () => {},
+  clearLabel: () => {},
+};
+
+const renderTab = () => render(<LabelsTab labels={{}} actions={noopActions} />);
 
 describe('LabelsTab — datalist suggestions', () => {
   beforeEach(() => {
@@ -45,7 +69,7 @@ describe('LabelsTab — datalist suggestions', () => {
   });
 
   it('renders a <datalist> with used values for a free-text field', async () => {
-    const { container } = render(<LabelsTab />);
+    const { container } = renderTab();
 
     await waitFor(() => {
       const datalist = container.querySelector('datalist#label-suggestions-free');
@@ -60,7 +84,7 @@ describe('LabelsTab — datalist suggestions', () => {
   });
 
   it('does not render a <datalist> for a field with a fixed value list', async () => {
-    const { container } = render(<LabelsTab />);
+    const { container } = renderTab();
 
     await waitFor(() => {
       expect(container.querySelector('datalist#label-suggestions-free')).not.toBeNull();

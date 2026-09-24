@@ -1,8 +1,12 @@
 import { create } from 'zustand';
-import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, BoardroomLayout, LiveChatMessage } from './types';
-import { Vector3 } from 'three';
+import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, ReviewGizmoMode, BoardroomLayout, LiveChatMessage, ViewCapture } from './types';
+import { Vector3, type Group } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
 import { useReviewSetupStore } from './lib/reviewSetupStore';
+// Read inside endMeeting only, and lib/activeReviewStore reads this store inside
+// its own actions only — so the two never touch each other while a module is
+// still being evaluated, which is what makes the import cycle between them safe.
+import { useActiveReviewStore } from './lib/activeReviewStore';
 import { usePointingTimelineStore } from './lib/pointingTimelineStore';
 import type { SceneModelEntry } from './lib/scene/sceneEntries';
 import {
@@ -402,6 +406,10 @@ function adoptScene(scene: RoomScene, state: AppState, fresh: boolean): Partial<
     return {
         scene,
         sceneEntries: entries,
+        // Pruned with the entries: a group belonging to a model the room has
+        // removed is an Object3D nobody renders, and keeping it would leave the
+        // gizmo able to attach to a model that is not on screen.
+        sceneModelGroups: pruneToScene(state.sceneModelGroups, scene),
         localModelVisibility: pruneToScene(state.localModelVisibility, scene),
         expandedSceneModels: pruneToScene(state.expandedSceneModels, scene),
         activeSceneModelId,
@@ -488,6 +496,22 @@ interface AppState {
   modelEditors: ModelEditors;
   /** Parsed geometry per SceneModel.id. Absent until the file has been fetched and parsed. */
   sceneEntries: Record<string, SceneModelEntry>;
+  /**
+   * The rendered wrapper group per SceneModel.id — the one that carries the
+   * model's own offset, rotation and scale.
+   *
+   * Registered by SceneModelView and read by ReviewModelGizmo, because drei's
+   * TransformControls needs the Object3D itself and the gizmo lives in a different
+   * branch of the canvas than the model does. This is the wrapper and NOT
+   * sceneEntries[id].group: that inner group is already scaled and centred by
+   * placeImportedGroup, so dragging it would write a transform that includes the
+   * centring and slide the model when the drag ended.
+   *
+   * Non-serializable, like sceneEntries and _glCapture beside it: an Object3D has
+   * one parent, so exactly one renderer may hold each of these.
+   */
+  sceneModelGroups: Record<string, Group>;
+  registerSceneModelGroup: (id: string, group: Group | null) => void;
   /** Per-model visibility for THIS screen only. Overrides SceneModel.visible while present. */
   localModelVisibility: Record<string, boolean>;
   /** The model the scale slider and the import status refer to. */
@@ -537,6 +561,34 @@ interface AppState {
 
   // --- NEW: Panel Mode ---
   rightPanelMode: RightPanelMode;
+
+  // --- Editing the design review (batch BH) ---
+  /**
+   * Who has the review's Edit switch on, or null when nobody does.
+   *
+   * Written ONLY from the room server's EDITING_STATE, never optimistically by
+   * the browser that pressed the button: the server decides whether one person
+   * may edit, and a client that assumed yes would show the tools for a frame
+   * before being told no. Reading it is how every other screen in the room knows
+   * to show "Paco is editing the review" instead of the tools, and how capture
+   * knows to stay quiet.
+   */
+  reviewEditing: { userId: string; name: string } | null;
+  /**
+   * A one-shot notice for somebody whose edit mode was ended by another person
+   * taking over. Cleared by whoever shows it, so it is read once and does not
+   * come back on the next render of an unrelated component.
+   */
+  reviewEditNotice: string | null;
+  /**
+   * The room's refusal of a request to edit, or null.
+   *
+   * Structured rather than a sentence because 'busy' comes with a button: the
+   * person who was refused can ask to take over, which is a second EDITING_START
+   * with force. 'role' has nothing to offer — the tools are not this person's —
+   * and is only ever shown as the reason the Edit button did nothing.
+   */
+  reviewEditRefusal: { reason: 'busy' | 'role'; editorName: string | null } | null;
 
   // --- NEW: Comments Display State ---
   commentsExpandedInScene: boolean; // Toggle all comments expanded in 3D
@@ -632,9 +684,35 @@ interface AppState {
   // Non-serializable: live reference so handleSave can capture the current GL frame.
   _glCapture: (() => string | null) | null;
   setGlCapture: (fn: (() => string | null) | null) => void;
+  /**
+   * Where the room's camera is, and what it is looking at, plus a thumbnail of it.
+   *
+   * Non-serializable for the same reason as _glCapture and registered from inside
+   * the canvas by the component that owns the OrbitControls: "Save this view" is a
+   * button in the amber strip, which is an overlay in a different React tree from
+   * the renderer, and the camera's pose is only readable from within R3F.
+   *
+   * Null outside a room, so the button can be hidden rather than offered and
+   * silently do nothing.
+   */
+  _viewCapture: (() => ViewCapture | null) | null;
+  setViewCapture: (fn: (() => ViewCapture | null) | null) => void;
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode: RightPanelMode) => void;
+
+  // --- Editing the design review actions (batch BH) ---
+  setReviewEditing: (editing: { userId: string; name: string } | null) => void;
+  setReviewEditNotice: (message: string | null) => void;
+  setReviewEditRefusal: (refusal: { reason: 'busy' | 'role'; editorName: string | null } | null) => void;
+  /**
+   * Which transform the amber strip is applying to the SELECTED scene model.
+   * In the store rather than in the strip's component because the thing being
+   * moved is drei's TransformControls inside the R3F canvas, and a canvas and an
+   * overlay are two trees with no prop path between them.
+   */
+  reviewGizmoMode: ReviewGizmoMode;
+  setReviewGizmoMode: (mode: ReviewGizmoMode) => void;
 
   // --- NEW: Comments Display Actions ---
   toggleCommentsExpandedInScene: () => void;
@@ -751,6 +829,13 @@ export const useStore = create<AppState>((set, get) => ({
   scene: emptyScene(),
   modelEditors: 'host',
   sceneEntries: {},
+  sceneModelGroups: {},
+  registerSceneModelGroup: (id, group) => set((state) => {
+      const groups = { ...state.sceneModelGroups };
+      if (group) groups[id] = group;
+      else delete groups[id];
+      return { sceneModelGroups: groups };
+  }),
   localModelVisibility: {},
   activeSceneModelId: null,
   expandedSceneModels: {},
@@ -777,6 +862,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   // --- NEW: Panel Mode ---
   rightPanelMode: 'meeting',
+  reviewEditing: null,
+  reviewEditNotice: null,
+  reviewEditRefusal: null,
+  reviewGizmoMode: null,
 
   // --- NEW: Comments Display State ---
   commentsExpandedInScene: false,
@@ -795,7 +884,16 @@ export const useStore = create<AppState>((set, get) => ({
     if (ended) {
       const { insightCards, agents, activeModelType, hideAgents, scene, activeReviewId } = get();
       const roomId = window.location.pathname.split('/room/')[1] ?? 'local';
-      const reviewDraft = useReviewSetupStore.getState().draft;
+      // The labels of the review this meeting was held in. The room's own copy
+      // first, because batch BH3 drops the lobby's handover draft once the room
+      // has read the row — in a room with a database that draft is gone by the
+      // time the meeting ends. It was always the weaker answer anyway: the review
+      // being presented is the copy everybody in the room was looking at, and the
+      // draft is only what one browser carried in from the lobby. Kept as the
+      // fallback for an install with no database, where the draft is all there is.
+      const labels = useActiveReviewStore.getState().config?.labels
+        ?? useReviewSetupStore.getState().draft?.labels
+        ?? {};
       flushSessionToTracker({
         roomId,
         insightCards,
@@ -805,7 +903,7 @@ export const useStore = create<AppState>((set, get) => ({
         // recorded four people who were never there.
         participantCount: participantCount ?? (hideAgents ? 1 : agents.length),
         modelName: activeModelType ?? null,
-        labels: reviewDraft?.labels ?? {},
+        labels,
         // The design review this room is holding, or null for an ad-hoc session.
         // Deliberately NOT the draft's reviewId: the draft is persisted, so a
         // stale one from the review somebody curated an hour ago would otherwise
@@ -1051,9 +1149,27 @@ export const useStore = create<AppState>((set, get) => ({
   setShowDrawingCanvas: (show) => set({ showDrawingCanvas: show }),
   _glCapture: null,
   setGlCapture: (fn) => set({ _glCapture: fn }),
+  _viewCapture: null,
+  setViewCapture: (fn) => set({ _viewCapture: fn }),
 
   // --- NEW: Panel Mode Action ---
   setRightPanelMode: (mode) => set({ rightPanelMode: mode }),
+  setReviewEditing: (editing) => set((state) => (
+    // The gizmo is a tool of edit mode, so it goes when edit mode does. A
+    // TransformControls left attached to a model after Done would keep stealing
+    // the camera drag for somebody who can no longer see why. A refusal goes at
+    // the same time: it was an answer to a question the room has now answered
+    // differently, and leaving the prompt up beside the working tools would be
+    // two contradictory things on one screen.
+    editing === null
+      ? (state.reviewGizmoMode !== null || state.reviewEditRefusal !== null
+          ? { reviewEditing: null, reviewGizmoMode: null, reviewEditRefusal: null }
+          : { reviewEditing: null })
+      : { reviewEditing: editing, reviewEditRefusal: null }
+  )),
+  setReviewEditNotice: (message) => set({ reviewEditNotice: message }),
+  setReviewEditRefusal: (refusal) => set({ reviewEditRefusal: refusal }),
+  setReviewGizmoMode: (mode) => set({ reviewGizmoMode: mode }),
 
   // --- NEW: Comments Display Actions ---
   toggleCommentsExpandedInScene: () => set((state) => ({

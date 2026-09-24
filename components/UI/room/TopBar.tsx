@@ -9,7 +9,7 @@
 
 import React from 'react';
 import {
-  Crosshair, Users, Share2, Shield, ShieldOff, MonitorPlay,
+  Crosshair, Users, Share2, Shield, ShieldOff, MonitorPlay, Pencil,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../../store';
@@ -56,6 +56,19 @@ interface TopBarProps {
   showParticipants: boolean;
   onToggleParticipants: () => void;
   onOpenDeicticExplainer: () => void;
+  /**
+   * Whether the Edit button belongs on the bar at all.
+   *
+   * Decided by lib/reviews/roles.ts through lib/reviews/useReviewRole, not here:
+   * on a deployment with accounts it is the person's role in THIS review, and on
+   * the default install with none it is the meeting host. Hidden rather than
+   * disabled, because a control greyed out for somebody who will never have it is
+   * a question the room then has to answer — and the room server would refuse the
+   * press anyway.
+   */
+  canEditReview?: boolean;
+  /** Ask the room for Edit. The answer arrives as state, not as a return value. */
+  onEditReview?: () => void;
 }
 
 const TopBar: React.FC<TopBarProps> = ({
@@ -66,6 +79,8 @@ const TopBar: React.FC<TopBarProps> = ({
   showParticipants,
   onToggleParticipants,
   onOpenDeicticExplainer,
+  canEditReview = false,
+  onEditReview,
 }) => {
   const isPrivacyMode = useStore((s) => s.isPrivacyMode);
   const togglePrivacyMode = useStore((s) => s.togglePrivacyMode);
@@ -83,6 +98,19 @@ const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <div className="flex items-center gap-1.5 bg-white/90 backdrop-blur-md border border-gray-200 rounded-md shadow-sm p-1.5 pointer-events-auto">
+      {/* Into the review's own editing, leftmost because it is the one control here
+          that changes the review rather than the meeting. Pressing it ASKS the room:
+          if somebody already has Edit, the answer comes back as "Paco is editing —
+          ask them, or take over" rather than as a second editor. */}
+      {canEditReview && onEditReview && (
+        <RoomButton
+          onClick={onEditReview}
+          title="Edit the review"
+          icon={<Pencil size={16} />}
+          label="Edit"
+        />
+      )}
+
       {/* Highlight granularity */}
       <div className="flex items-center gap-1 px-1.5 shrink-0">
         <Crosshair size={14} className="text-gray-400" />

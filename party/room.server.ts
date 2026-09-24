@@ -5,10 +5,11 @@ import { verifyAccessToken, type VerifiedAccount } from './verifyJwt';
 import {
   applySceneUpdate as reduceSceneUpdate,
   emptyScene,
-  mayChangeModels,
   MAX_SCENE_MODELS,
+  scenePermissions,
   type ModelEditors,
   type RoomScene,
+  type SceneAuthority,
   type SceneRefusalReason,
   type SceneStatePayload,
   type SceneUpdate,
@@ -114,6 +115,16 @@ type RoomMessage =
   | { type: 'SCENE_REFUSED'; payload: { reason: SceneRefusalReason } }
   | { type: 'SET_MODEL_EDITORS'; payload: { modelEditors: ModelEditors } }
   | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
+  // Editing the review (batch BH). Requests come in, and the answer goes out —
+  // EDITING_STATE to the whole room, the two others to the one connection that
+  // needs them. The mirror of SCENE_UPDATE / SCENE_REFUSED: this server owns the
+  // fact, so "only one person edits at a time" is not something two clients can
+  // each believe differently.
+  | { type: 'EDITING_START'; payload: { force?: boolean } }
+  | { type: 'EDITING_STOP'; payload: Record<string, never> }
+  | { type: 'EDITING_STATE'; payload: { editorUserId: string | null; editorName: string | null } }
+  | { type: 'EDITING_REFUSED'; payload: { reason: 'busy' | 'role'; editorName: string | null } }
+  | { type: 'EDITING_TAKEN_OVER'; payload: { byName: string } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
   | { type: 'MEETING_END'; payload: Record<string, never> }
@@ -220,6 +231,20 @@ export default class RoomServer implements Party.Server {
   modelEditors: ModelEditors = 'host';
   // Persisted curated review config (viewpoints, pins, agenda…)
   reviewConfig: ReviewDraft | null = null;
+  // Who has the review's Edit switch on, or null when nobody does.
+  //
+  // Held HERE rather than on the clients because "only one person edits at a
+  // time" is a claim about the room, and a claim two clients each keep locally is
+  // two claims that can disagree. The name is taken from `participants` — which
+  // applyVerifiedIdentity has already vouched for — and never from the message
+  // that asked, so one client cannot put somebody else's name on the banner.
+  //
+  // NOT persisted to room storage, unlike the scene and the admitted set: a
+  // container restart drops the socket of whoever was editing too, so a room that
+  // came back "being edited" by somebody who is no longer connected would be a
+  // banner nobody could clear. Coming back with nobody editing is both the safe
+  // answer and the true one.
+  editing: { userId: string; name: string } | null = null;
   // Persisted spatial comments for late joiners
   comments: SpatialComment[] = [];
   // Whether the room is currently in boardroom mode — sent to late joiners
@@ -492,44 +517,30 @@ export default class RoomServer implements Party.Server {
   }
 
   /**
-   * Why this connection may not change the models, or null when it may.
+   * The four facts both scene questions are decided from.
    *
-   * TWO rules, and which one applies depends on whether this deployment can say
-   * who anybody is:
-   *
-   * WITHOUT accounts, batch BB's rule unchanged. The host is whoever
-   * computeHost() says — the first person in, which is the same answer the client
-   * was given by HOST_CHANGE, so the button it disabled and the refusal it gets
-   * here are the same judgement made twice rather than two different judgements
-   * that can disagree.
-   *
-   * WITH accounts, the person's role in the review replaces "the host" as the
-   * authority, because the host is only whoever happened to arrive first and a
-   * supplier's guest could be that. Owners and editors may change the models;
-   * participants and guests may not — UNLESS the review's own "who may change
-   * models" setting says otherwise, which is still the owner's choice to make and
-   * is the reason BB's 'everyone' and named-people settings keep working rather
-   * than being quietly overridden by the role.
+   * Gathered here rather than answered here: the rule is ONE function,
+   * lib/scene/roomScene.scenePermissions, and the browser asks that same function
+   * about the same four facts before it disables a button. Two rules would be two
+   * chances to disagree, and they did — an owner who was not the meeting host was
+   * told "Import locked" by their own model tree while the server would have
+   * allowed the change.
    */
+  private async sceneAuthorityFor(connId: string): Promise<SceneAuthority> {
+    return {
+      // Null when this deployment has no identities to resolve a role from, which
+      // is what makes scenePermissions fall back to batch BB's host rule.
+      role: await this.roleFor(connId),
+      modelEditors: this.modelEditors,
+      userId: this.connToUser.get(connId) ?? null,
+      hostId: this.computeHost(),
+    };
+  }
+
+  /** Why this connection may not change the models, or null when it may. */
   private async sceneRefusalFor(connId: string): Promise<SceneRefusalReason | null> {
-    const senderUserId = this.connToUser.get(connId);
-    const role = await this.roleFor(connId);
-
-    if (role === null) {
-      if (mayChangeModels(this.modelEditors, senderUserId ?? null, this.computeHost())) return null;
-      return this.modelEditors === 'host' ? 'host-only' : 'not-an-editor';
-    }
-
-    if (can(role, 'editReview')) return null;
-    if (this.modelEditors === 'everyone') return null;
-    if (
-      Array.isArray(this.modelEditors) &&
-      senderUserId !== undefined &&
-      this.modelEditors.includes(senderUserId)
-    ) {
-      return null;
-    }
-    return 'role-forbidden';
+    const { changeRefusal } = scenePermissions(await this.sceneAuthorityFor(connId));
+    return changeRefusal;
   }
 
   /**
@@ -593,6 +604,113 @@ export default class RoomServer implements Party.Server {
     this.lastPresenterChange = 0;
   }
 
+  // ─── Editing the review ─────────────────────────────────────────────────────
+
+  private editingStatePayload() {
+    return {
+      editorUserId: this.editing?.userId ?? null,
+      editorName: this.editing?.name ?? null,
+    };
+  }
+
+  /**
+   * Whether this connection may turn Edit on.
+   *
+   * The same two-rule shape as sceneRefusalFor, because it is the same question
+   * asked about a different tool. WITHOUT accounts the meeting host may edit and
+   * nobody else can — which is exactly what the old curate page amounted to once
+   * it moved into the room, and the same answer HOST_CHANGE already gave the
+   * client, so the button it hides and the refusal here are one judgement made
+   * twice rather than two that can disagree. WITH accounts it is the person's
+   * role in the review: owners and editors, not participants and not guests.
+   *
+   * Async because the first ask on a deployment with accounts reads the roster
+   * (party/reviewRoles.ts). Callers re-check stillAdmitted afterwards, as the
+   * scene path does, for the same reason.
+   */
+  private async mayEditReview(connId: string): Promise<boolean> {
+    const userId = this.connToUser.get(connId);
+    const role = await this.roleFor(connId);
+    if (role === null) {
+      return userId !== undefined && userId === this.computeHost();
+    }
+    return can(role, 'editReview');
+  }
+
+  /**
+   * Turn Edit on for this connection, or say why it cannot.
+   *
+   * ONE editor at a time, and the room is told who. A second owner or editor who
+   * presses Edit while somebody else is editing is refused with that person's
+   * name, so what they see is "Paco is editing — ask them, or take over" rather
+   * than a button that appears to do nothing. Taking over is then their explicit
+   * second act: the first editor is told by name that it happened, because
+   * silently dropping somebody out of edit mode mid-drag is how two people end up
+   * fighting over the same model without either knowing why.
+   *
+   * EDITING_STATE is relayed to the sender too — as SCENE_STATE is — so the
+   * client's own edit mode is something the room confirmed rather than something
+   * it assumed.
+   */
+  private async startEditing(conn: Party.Connection, force: boolean): Promise<void> {
+    const userId = this.connToUser.get(conn.id);
+    if (!userId) return;
+
+    if (!(await this.mayEditReview(conn.id))) {
+      conn.send(JSON.stringify({
+        type: 'EDITING_REFUSED',
+        payload: { reason: 'role', editorName: this.editing?.name ?? null },
+      } as RoomMessage));
+      return;
+    }
+    // Asked again: judging it can take a round trip, and a person who left the
+    // room during it must not turn Edit on afterwards. See stillAdmitted.
+    if (!this.stillAdmitted(conn.id)) return;
+
+    const current = this.editing;
+    if (current && current.userId !== userId) {
+      if (!force) {
+        conn.send(JSON.stringify({
+          type: 'EDITING_REFUSED',
+          payload: { reason: 'busy', editorName: current.name },
+        } as RoomMessage));
+        return;
+      }
+      // Told to the person being displaced, and only to them: the room hears
+      // about it through the EDITING_STATE that follows, which already carries
+      // the new editor's name.
+      this.sendToUser(current.userId, {
+        type: 'EDITING_TAKEN_OVER',
+        payload: { byName: this.participants.get(userId)?.name ?? 'Somebody' },
+      });
+    }
+
+    this.editing = { userId, name: this.participants.get(userId)?.name ?? '' };
+    this.audit('review_editing', { actorName: this.editing.name, actorId: userId, detail: force ? 'takeover' : 'start' });
+    this.relay(JSON.stringify({ type: 'EDITING_STATE', payload: this.editingStatePayload() } as RoomMessage));
+  }
+
+  /**
+   * Turn Edit off.
+   *
+   * Only the person editing can stop it, which is what makes a stray or replayed
+   * EDITING_STOP from somebody else unable to end a colleague's session. A stop
+   * from anyone else is dropped without a word: there is nothing for them to act
+   * on and nothing for the room to hear.
+   */
+  private stopEditing(conn: Party.Connection): void {
+    const userId = this.connToUser.get(conn.id);
+    if (!userId || this.editing?.userId !== userId) return;
+    this.clearEditing();
+  }
+
+  /** Release the lock and tell the room, including whoever held it. */
+  private clearEditing(): void {
+    if (!this.editing) return;
+    this.editing = null;
+    this.relay(JSON.stringify({ type: 'EDITING_STATE', payload: this.editingStatePayload() } as RoomMessage));
+  }
+
   private sendRoomState(conn: Party.Connection) {
     conn.send(JSON.stringify({
       type: 'ROSTER',
@@ -611,6 +729,12 @@ export default class RoomServer implements Party.Server {
     } as RoomMessage));
     if (this.reviewConfig) {
       conn.send(JSON.stringify({ type: 'REVIEW_CONFIG', payload: { config: this.reviewConfig } } as RoomMessage));
+    }
+    // Only while somebody is editing. An arrival who got no EDITING_STATE is in a
+    // room nobody is editing, which is the state the client starts in anyway, so
+    // the common case sends nothing at all.
+    if (this.editing) {
+      conn.send(JSON.stringify({ type: 'EDITING_STATE', payload: this.editingStatePayload() } as RoomMessage));
     }
     conn.send(JSON.stringify({ type: 'COMMENT_ROSTER', payload: { comments: this.comments } } as RoomMessage));
     conn.send(JSON.stringify({
@@ -1160,20 +1284,23 @@ export default class RoomServer implements Party.Server {
       // everybody else's import button does, so letting somebody without the
       // right set it would have been letting them grant themselves that right.
       //
-      // WITHOUT accounts that right is the meeting host's, exactly as batch BB
-      // made it. WITH accounts it is the review OWNER's — lib/reviews/roles.ts's
-      // `setModelEditors` — because an editor who could set 'everyone' could give
-      // the whole room a power the owner had not, and the host is only whoever
-      // arrived first.
+      // The right is scenePermissions' other answer — the meeting host WITHOUT
+      // accounts, the review's owners and editors WITH them, exactly as the same
+      // function tells the browser. lib/reviews/roles.ts's `setModelEditors` is
+      // the row that says so.
       const senderId = this.connToUser.get(sender.id);
-      const role = await this.roleFor(sender.id);
-      if (role === null) {
-        if (senderId !== this.computeHost() || !this.admitted.has(senderId)) {
-          this.refuseScene(sender, 'host-only-setting');
-          return;
-        }
-      } else if (!can(role, 'setModelEditors')) {
-        this.refuseScene(sender, 'role-forbidden-setting');
+      const authority = await this.sceneAuthorityFor(sender.id);
+      const { editorsRefusal } = scenePermissions(authority);
+      // Admission is a fact about this connection rather than a rule about who
+      // may do what, so it stays here — and it is only the no-accounts branch
+      // that ever asked it, which is where batch BB put it.
+      const notAdmitted: SceneRefusalReason | null =
+        authority.role === null && senderId !== undefined && !this.admitted.has(senderId)
+          ? 'host-only-setting'
+          : null;
+      const refusal = editorsRefusal ?? notAdmitted;
+      if (refusal) {
+        this.refuseScene(sender, refusal);
         return;
       }
       if (!this.stillAdmitted(sender.id)) return;
@@ -1240,6 +1367,14 @@ export default class RoomServer implements Party.Server {
         type: 'SCENE_STATE',
         payload: this.sceneStatePayload(),
       } as RoomMessage));
+
+    } else if (msg.type === 'EDITING_START') {
+      // Somebody pressed Edit. Answered by the room rather than assumed by the
+      // client, so "only one person edits at a time" is a fact about the room.
+      await this.startEditing(sender, msg.payload.force === true);
+
+    } else if (msg.type === 'EDITING_STOP') {
+      this.stopEditing(sender);
 
     } else if (msg.type === 'REVIEW_CONFIG') {
       this.reviewConfig = msg.payload.config;
@@ -1355,6 +1490,14 @@ export default class RoomServer implements Party.Server {
 
     this.participants.delete(userId);
     this.joinOrder = this.joinOrder.filter(id => id !== userId);
+
+    // An editor who leaves releases the lock, and the room is told at once.
+    // Without this the banner "Paco is editing the review" would outlive Paco
+    // for as long as the room stayed awake, and nobody could press Edit again
+    // without being told somebody who is gone is busy.
+    if (this.editing?.userId === userId) {
+      this.clearEditing();
+    }
 
     // Prune the leaving user out of any boardroom approvals/leadership so the
     // remaining room doesn't chase a ghost.

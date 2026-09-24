@@ -148,6 +148,21 @@ export function asSceneUpdate(value: unknown): SceneUpdate | null {
       const offset = asOffset(record.offset);
       return offset ? { op: 'setOffset', id: record.id, offset } : null;
     }
+    case 'setTransform': {
+      if (typeof record.id !== 'string' || record.id === '') return null;
+      const raw = record.transform;
+      if (typeof raw !== 'object' || raw === null) return null;
+      const fields = raw as Record<string, unknown>;
+      const offset = asOffset(fields.offset);
+      const rotation = asOffset(fields.rotation);
+      if (!offset || !rotation) return null;
+      // A scale the renderer could not use is refused rather than rescued: zero
+      // would make the model vanish for everybody in the room and a negative one
+      // would turn it inside out, and neither is a transform anybody meant.
+      const scale = fields.scale;
+      if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0) return null;
+      return { op: 'setTransform', id: record.id, transform: { offset, rotation, scale } };
+    }
     case 'setBuiltIn': {
       if (record.builtIn === null) return { op: 'setBuiltIn', builtIn: null };
       const builtIn = asBuiltIn(record.builtIn);

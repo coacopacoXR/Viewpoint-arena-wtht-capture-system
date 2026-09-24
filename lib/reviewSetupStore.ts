@@ -43,6 +43,20 @@ export interface AgendaItem {
   durationMinutes?: number;
 }
 
+/**
+ * A slide as it is handed to addAgendaItem.
+ *
+ * The two link lists are optional because a new slide usually has nothing on it
+ * yet, and the store fills in the empty arrays. Named here rather than at either
+ * caller because two stores now offer addAgendaItem — this one, and
+ * lib/activeReviewStore for the room — and the curation tabs in
+ * components/review/ are written against whichever they are handed. One spelling
+ * of the argument is what keeps them interchangeable.
+ */
+export type NewAgendaItem =
+  Omit<AgendaItem, 'id' | 'viewpointIds' | 'pinIds'> &
+    Partial<Pick<AgendaItem, 'viewpointIds' | 'pinIds'>>;
+
 export interface ReviewAssetReference {
   id: string;
   name: string;
@@ -184,24 +198,40 @@ const uid = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
   ? crypto.randomUUID()
   : Math.random().toString(36).slice(2);
 
-const emptyDraft = (reviewId: string): ReviewDraft => ({
-  reviewId,
-  title: 'Untitled Review',
-  description: '',
-  asset: {
-    modelType: 'headphones',
-    references: [],
-  },
-  viewpoints: [],
-  pins: [],
-  agenda: [],
-  requirements: [],
-  team: [],
-  labels: {},
-  listed: true,
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-});
+/** The title a brand-new design review gets before anybody names it. */
+export const NEW_REVIEW_TITLE = 'Untitled design review';
+
+/**
+ * A draft for a review that does not exist yet.
+ *
+ * Exported (rather than staying the private `emptyDraft` below) because batch BH
+ * moved the moment a review is born: the lobby's "New design review" creates the
+ * row and opens the ROOM with Edit on, so the shape of a new review has to be
+ * reachable from outside this store. One factory, so a review created from the
+ * lobby and a draft started by the setup page cannot disagree about defaults.
+ */
+export function createReviewDraft(reviewId: string, title: string = NEW_REVIEW_TITLE): ReviewDraft {
+  return {
+    reviewId,
+    title,
+    description: '',
+    asset: {
+      modelType: 'headphones',
+      references: [],
+    },
+    viewpoints: [],
+    pins: [],
+    agenda: [],
+    requirements: [],
+    team: [],
+    labels: {},
+    listed: true,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+const emptyDraft = (reviewId: string): ReviewDraft => createReviewDraft(reviewId, 'Untitled Review');
 
 const touch = (draft: ReviewDraft): ReviewDraft => ({ ...draft, updatedAt: Date.now() });
 

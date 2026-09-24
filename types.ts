@@ -348,6 +348,30 @@ export interface XRParticipantData {
 
 export type RightPanelMode = 'meeting' | 'comments' | 'chat';
 
+/**
+ * The transform the amber strip applies to the selected scene model, or null for
+ * no gizmo. The three names are drei's TransformControls modes, which is why they
+ * are spelled 'translate' rather than the strip's own label "Move": the strip
+ * translates a button into one of these and the canvas hands it straight to drei.
+ * Batch BH (docs/plan/14-rooms-models-admin-ai.md).
+ */
+export type ReviewGizmoMode = 'translate' | 'rotate' | 'scale' | null;
+
+/**
+ * Where the room's camera is, as a review viewpoint needs it.
+ *
+ * The three fields ReviewViewpoint carries about a place in the model, without the
+ * id, the label or the timestamp that make it a saved one. "Save this view" reads
+ * this from inside the canvas and hands it to the review; a jump-to reads it back.
+ * Batch BH (docs/plan/14-rooms-models-admin-ai.md).
+ */
+export interface ViewCapture {
+  position: [number, number, number];
+  lookAt: [number, number, number];
+  /** A JPEG data URL of the frame, or absent when the canvas would not give one. */
+  thumbnail?: string;
+}
+
 export type ChatTag = 'RISK' | 'ACTION' | 'DECISION' | 'NOTE';
 
 export interface LiveChatMessage {

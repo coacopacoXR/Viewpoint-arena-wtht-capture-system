@@ -5,6 +5,7 @@ import type { InsightCard, LiveChatMessage, XRParticipantData, SpatialComment } 
 import { remoteXRParticipants } from './xrPresenceRef';
 import { remoteLaserTargets, remoteLaserColors, remoteLaserMeshNames, remoteLaserPartNames, remoteLaserLastUpdate } from './laserTargetRef';
 import { useActiveReviewStore } from './activeReviewStore';
+import { forgetLocalEdit } from './reviewLocalEdit';
 import type { ReviewDraft } from './reviewSetupStore';
 import { useStore } from '../store';
 import { ViewMode } from '../types';
@@ -45,6 +46,16 @@ type RoomMessage =
   | { type: 'SCENE_REFUSED'; payload: { reason: SceneRefusalReason } }
   | { type: 'SET_MODEL_EDITORS'; payload: { modelEditors: ModelEditors } }
   | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
+  // Editing the review (batch BH). A REQUEST and an ANSWER, not one message: the
+  // client asks to edit and the room says whether it may, because "only one
+  // person edits at a time" is a fact about the room and a client cannot know it.
+  // EDITING_REFUSED and EDITING_TAKEN_OVER go to one connection; EDITING_STATE is
+  // relayed to the whole room, sender included.
+  | { type: 'EDITING_START'; payload: { force?: boolean } }
+  | { type: 'EDITING_STOP'; payload: Record<string, never> }
+  | { type: 'EDITING_STATE'; payload: { editorUserId: string | null; editorName: string | null } }
+  | { type: 'EDITING_REFUSED'; payload: { reason: 'busy' | 'role'; editorName: string | null } }
+  | { type: 'EDITING_TAKEN_OVER'; payload: { byName: string } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
   | { type: 'MEETING_END'; payload: Record<string, never> }
@@ -272,6 +283,14 @@ export interface UsePartyPresenceReturn {
   broadcastSceneUpdate: (update: SceneUpdate) => boolean;
   broadcastSetModelEditors: (modelEditors: ModelEditors) => boolean;
   broadcastReviewConfig: (config: ReviewDraft) => boolean;
+  /**
+   * Ask the room for Edit. Answered by EDITING_STATE (room-wide) or
+   * EDITING_REFUSED (to this connection), so this returns nothing: whether the
+   * request was granted is state, not a result. See requestReviewEdit.
+   */
+  requestReviewEdit: (force?: boolean) => void;
+  /** Give Edit up. */
+  endReviewEdit: () => void;
   broadcastMeetingEnd: () => void;
   broadcastTakeoverSync: (enabled: boolean, approvedUserIds: string[]) => void;
   broadcastHostTransfer: (toUserId: string) => void;
@@ -586,6 +605,25 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         // locally before broadcasting; receivers (including late joiners via
         // on-connect replay) update through here.
         useActiveReviewStore.getState().setConfig(msg.payload.config);
+      } else if (msg.type === 'EDITING_STATE') {
+        // The room's answer about who is editing. Written straight through,
+        // including for the browser that asked: the request was a question, and
+        // this is the answer, so the tools appear only once the room agrees.
+        const { editorUserId, editorName } = msg.payload;
+        const { setReviewEditing } = useStore.getState();
+        setReviewEditing(editorUserId ? { userId: editorUserId, name: editorName ?? '' } : null);
+      } else if (msg.type === 'EDITING_REFUSED') {
+        // Told to this connection only, because it is the only one that asked.
+        // Surfaced rather than logged: an Edit button that appears to do nothing
+        // reads as a broken app, when what happened is that a colleague has it.
+        useStore.getState().setReviewEditRefusal({
+          reason: msg.payload.reason,
+          editorName: msg.payload.editorName,
+        });
+      } else if (msg.type === 'EDITING_TAKEN_OVER') {
+        // Also only to this connection — the one that was editing. The room hears
+        // about the change through the EDITING_STATE that follows this message.
+        useStore.getState().setReviewEditNotice(`${msg.payload.byName} took over editing`);
       } else if (msg.type === 'HOST_CHANGE') {
         setSessionHostId(msg.payload.hostId);
         // If I just became the host (e.g. previous host left), update local state
@@ -629,6 +667,11 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         // If the deleted comment was produced by committing a curated pin,
         // clear the pin's committedCommentId so it can be committed again.
         useActiveReviewStore.getState().clearCommittedCommentId(msg.payload.id);
+        // Taken back at once: that clear came off the socket, so it is not this
+        // browser's edit and must not make it write the review (batch BH3). The
+        // browser that deleted the comment broadcasts the cleared review and
+        // saves it itself.
+        forgetLocalEdit();
         deleteComment(msg.payload.id);
       } else if (msg.type === 'COMMENT_RESOLVE') {
         const { resolveComment } = useStore.getState();
@@ -826,6 +869,34 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   }
 
   /**
+   * Ask the room to turn Edit on for me.
+   *
+   * A request, not a switch. The room server decides — whether this person's role
+   * allows it at all, and whether somebody else already has it — and answers with
+   * EDITING_STATE (to everybody, sender included) or EDITING_REFUSED (to me
+   * alone). Nothing here writes to the store, so there is no frame in which the
+   * tools are up before the room has agreed.
+   *
+   * `force` is the second press, from the "ask them, or take over" prompt: it ends
+   * whoever was editing and tells them by name.
+   */
+  function requestReviewEdit(force = false) {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    // Clearing a stale refusal first: the prompt the person just answered must
+    // not still be on screen while the new answer is in flight.
+    useStore.getState().setReviewEditRefusal(null);
+    socket.send(JSON.stringify({ type: 'EDITING_START', payload: { force } } as RoomMessage));
+  }
+
+  /** Give Edit up. Only the person holding it can, and the server checks that too. */
+  function endReviewEdit() {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: 'EDITING_STOP', payload: {} } as RoomMessage));
+  }
+
+  /**
    * Ask the room to make ONE change to what is on screen.
    *
    * An operation, not a list. Sending "here is my scene" would be the natural
@@ -970,6 +1041,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastSceneUpdate,
     broadcastSetModelEditors,
     broadcastReviewConfig,
+    requestReviewEdit,
+    endReviewEdit,
     broadcastMeetingEnd,
     broadcastTakeoverSync,
     broadcastHostTransfer,
