@@ -67,6 +67,7 @@ const SignInPage: React.FC<SignInPageProps> = ({ methods, guestRoomId, onGuest }
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [passwordRepeat, setPasswordRepeat] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -100,6 +101,13 @@ const SignInPage: React.FC<SignInPageProps> = ({ methods, guestRoomId, onGuest }
 
     const credentials = { email: email.trim(), password };
     if (passwordMode === 'signup') {
+      // A mistyped password on sign-up is a password nobody knows, and there is
+      // no reset email on a stack without a mail server — so ask twice.
+      if (password !== passwordRepeat) {
+        setError("The two passwords don't match.");
+        setBusy(null);
+        return;
+      }
       // The name goes on the account (user_metadata.full_name), which is where
       // displayNameForAccount reads it. Without it a new account showed up in
       // rooms as the part of the email before the @.
@@ -262,9 +270,26 @@ const SignInPage: React.FC<SignInPageProps> = ({ methods, guestRoomId, onGuest }
                   />
                 </div>
 
+                {passwordMode === 'signup' && (
+                  <div>
+                    <label className="block text-[10px] font-mono font-bold text-gray-600 uppercase tracking-widest mb-2">
+                      Repeat password
+                    </label>
+                    <input
+                      type="password"
+                      value={passwordRepeat}
+                      onChange={e => { setPasswordRepeat(e.target.value); setError(''); setNotice(''); }}
+                      placeholder="Type it again"
+                      autoComplete="new-password"
+                      disabled={busy !== null}
+                      className={INPUT_CLASS}
+                    />
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  disabled={busy !== null || !email.trim() || !password || (passwordMode === 'signup' && !fullName.trim())}
+                  disabled={busy !== null || !email.trim() || !password || (passwordMode === 'signup' && (!fullName.trim() || !passwordRepeat))}
                   className={PRIMARY_BUTTON_CLASS}
                 >
                   {busy === 'password'

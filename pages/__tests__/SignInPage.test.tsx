@@ -201,6 +201,9 @@ describe('the sign-up switch', () => {
     fireEvent.change(screen.getByPlaceholderText('Your password'), {
       target: { value: 'letmein1' },
     });
+    fireEvent.change(screen.getByPlaceholderText('Type it again'), {
+      target: { value: 'letmein1' },
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
     });
@@ -226,6 +229,9 @@ describe('the sign-up switch', () => {
       target: { value: 'sam@acme.com' },
     });
     fireEvent.change(screen.getByPlaceholderText('Your password'), {
+      target: { value: 'letmein1' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Type it again'), {
       target: { value: 'letmein1' },
     });
     await act(async () => {
@@ -358,5 +364,19 @@ describe('the guest door', () => {
 
     const guest: GuestIdentity = onGuest.mock.calls[0][0];
     expect(guest.color).toBe('#F76B4F');
+  });
+
+  it('refuses to create an account when the two passwords differ', async () => {
+    await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Create an account' }));
+    fireEvent.change(screen.getByPlaceholderText('e.g. Alex Chen'), { target: { value: 'Sam Rivera' } });
+    fireEvent.change(screen.getByPlaceholderText('you@company.com'), { target: { value: 'sam@acme.com' } });
+    fireEvent.change(screen.getByPlaceholderText('Your password'), { target: { value: 'letmein1' } });
+    fireEvent.change(screen.getByPlaceholderText('Type it again'), { target: { value: 'letmein2' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+    });
+    expect(authMocks.signUp).not.toHaveBeenCalled();
+    expect(screen.getByText("The two passwords don't match.")).toBeTruthy();
   });
 });
