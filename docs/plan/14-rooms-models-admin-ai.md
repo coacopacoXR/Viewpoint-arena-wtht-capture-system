@@ -156,6 +156,35 @@ screen shows "key set · ends in …7f2a"). Settings made here override
   thing; if the user confirms "design review" as the name, the screens use
   that and "room" is kept only for the live space.
 
+## Preparing a review inside its room (proposed 2026-09-24, awaiting the user's go)
+
+The user: "we should merge the curate room and the room itself ... and think
+through who can do what and how the functionality of curating is presented to
+the user in the actual room." Naming confirmed: **Design review** for the
+lasting thing; "room" only for the live 3D space.
+
+Proposal, sketched in the "Review in the Room" artifact
+(https://claude.ai/artifact/L6BG3WhXjayhRLguSR6Cb1):
+- **Four roles per design review**: Owner (creator, and admins), Editor,
+  Participant, Guest.
+  - Everyone can meet, point and comment.
+  - Everyone except guests can add and edit cards.
+  - Owners and editors run meetings and edit the review.
+  - Only owners manage people or delete the review.
+  - Without accounts: the meeting host has the editor's powers, and the admin
+    passphrase is the owner.
+- **Edit review switch in the room**, for owners and editors:
+  - The side panel swaps to the Curate page's tabs (Agenda · Views · Pins ·
+    Requirements · Labels · People).
+  - An amber editing strip with move, rotate and scale and a Done button.
+  - "+ Revision" in the model tree, and "Save this view".
+  - Capture pauses while editing.
+- "Curate a design review" becomes **New design review**, which opens the room
+  with Edit on. The old `/review/:id/setup` address redirects there.
+- Others see "Paco is editing the review", not the tools.
+
+Batch **BH**, after BC (it needs membership and roles from BC).
+
 ## Batches, in order
 
 | Batch | Work |
@@ -167,5 +196,6 @@ screen shows "key set · ends in …7f2a"). Settings made here override
 | BE | Rooms and Models sections. |
 | BF | Settings store (encrypted), AI section, provider routing for the three jobs, Test connection, OpenAI-compatible and your-own-service contracts. |
 | BG | Hand-made cards in the room's Capture panel. |
+| BH | Curation inside the room: roles, Edit review switch, New design review. |
 
 Each lands verified on the running install, as before.
