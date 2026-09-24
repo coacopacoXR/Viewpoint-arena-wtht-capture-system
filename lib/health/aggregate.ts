@@ -28,6 +28,8 @@ import type {
 import { HEALTH_DETAILS } from './details.ts';
 import { safeDetail, safeProvider } from './sanitize.ts';
 import {
+  DEFAULT_AUTH_PROBE_URL,
+  probeAuthService,
   probeCaptureService,
   probeDatabase,
   type ProbeOptions,
@@ -365,6 +367,40 @@ export function buildChecks(config: ViewpointConfig, deps: HealthDeps): Check[] 
         signal: options.signal,
       }),
   });
+
+  // ── Identity ───────────────────────────────────────────────────────────
+  // docs/plan/13-identity.md. Three cases, and the distinction between the
+  // first two matters:
+  //   * no identity block at all — the config predates identity, or its author
+  //     deliberately wrote nothing. OMITTED, like plm 'none' and an empty
+  //     notifications list: an absent entry is how this report says "this
+  //     deployment did not enable that connector".
+  //   * mode 'none' — an explicit choice, answered as ok with "no external
+  //     dependency" (the modelImport 'genericGltf' answer). Signing in is not
+  //     part of this deployment; that is a healthy state, not a degraded one,
+  //     and reporting it degraded would make install.sh's health poll fail on
+  //     a stack that is exactly as ready as it was configured to be.
+  //   * mode 'accounts'/'sso' — probe the service that answers sign-in.
+  const identity = config.identity;
+  if (identity) {
+    if (identity.mode === 'none') {
+      checks.push({
+        slot: 'identity',
+        provider: 'none',
+        run: async () => ({ ok: true, detail: HEALTH_DETAILS.selfContained }),
+      });
+    } else {
+      checks.push({
+        slot: 'identity',
+        provider: identity.mode,
+        run: (options) =>
+          probeAuthService(identity.probeUrl ?? DEFAULT_AUTH_PROBE_URL, {
+            fetchFn: options.fetchFn,
+            signal: options.signal,
+          }),
+      });
+    }
+  }
 
   // ── Model import ─────────────────────────────────────────────────────
   const modelImport = config.modelImport.provider;

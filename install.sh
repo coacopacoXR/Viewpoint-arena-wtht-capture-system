@@ -520,6 +520,15 @@ mint_anon_jwt() {
 
 A_HOSTNAME='' A_PUBLIC_URL='' A_TLS=''
 A_ACCESS_PASSWORD='' A_ADMIN_PASSPHRASE=''
+# Identity (docs/plan/13-identity.md). A_IDENTITY is the mode; A_IDENTITY_METHOD
+# is the single external provider chosen for 'sso' and empty otherwise, because
+# the installer offers one provider per install — a deployment that needs two
+# edits the generated block by hand, which the schema already accepts.
+# A_CLIENT_ID_ENV / A_SECRET_ENV are the NAMES written into viewpoint.config.ts
+# for that provider, so the config and the .env section cannot disagree.
+A_IDENTITY='' A_IDENTITY_METHOD='' A_ALLOW_GUESTS='' A_SIGNUP=''
+A_SSO_CLIENT_ID='' A_SSO_CLIENT_SECRET='' A_SSO_TENANT_URL='' A_SSO_REALM_URL=''
+A_CLIENT_ID_ENV='' A_SECRET_ENV=''
 A_PLM='' A_PLM_BASE_URL=''
 A_ONSHAPE_CLIENT_ID='' A_ONSHAPE_CLIENT_SECRET=''
 A_TC_USERNAME='' A_TC_PASSWORD=''
@@ -613,13 +622,105 @@ collect_answers() {
     'own|I will mount my own certificate into deploy/certs')"
 
   # ── Access control ─────────────────────────────────────────────────────
-  # Two optional shared secrets. Both empty by default — an existing install
-  # behaves exactly as today until the operator sets them. The passwords are
-  # hashed before writing to .env; the plaintext never touches disk.
+  # Who gets in, and how they prove it. Identity is asked FIRST because it
+  # decides whether the front-door password question is asked at all: with
+  # accounts or sso, signing in IS the front door.
   say ''
-  say '  Access control: two optional passwords. Leave either empty to skip it.'
-  say '  This is a shared password on the front door, not per-person accounts.'
-  A_ACCESS_PASSWORD="$(ask_secret 'Front-door password for the whole app (Enter to leave open)')"
+  say '  Access control: who is allowed in, and how they prove it.'
+
+  A_IDENTITY="$(ask_choice \
+    'How do people sign in?' \
+    'none' \
+    'none|No accounts (as today) — names are typed in the lobby' \
+    'accounts|Accounts on this install — email and password' \
+    'sso|Company single sign-on — Entra ID, Google or Keycloak')"
+
+  case "$A_IDENTITY" in
+    accounts)
+      # The bundled GoTrue service holds these accounts. It starts only under
+      # the compose profile this answer turns on, so a "no accounts" install
+      # runs exactly the services it runs today.
+      A_ALLOW_GUESTS="$(ask_yes_no \
+        'Can people without an account join as guests when the host admits them?' 'no')"
+      A_SIGNUP="$(ask_choice \
+        'Who can create an account on this install?' \
+        'only-added' \
+        'only-added|Only people you add — the sign-up form stays closed' \
+        'anyone|Anyone who can reach the site')"
+      ;;
+    sso)
+      A_IDENTITY_METHOD="$(ask_choice \
+        'Which identity provider?' \
+        'azure' \
+        'azure|Microsoft Entra ID (Azure AD) — an app registration' \
+        'google|Google — a Google Cloud OAuth client' \
+        'keycloak|Keycloak, or another OpenID Connect provider' \
+        'saml|SAML 2.0 — registered afterwards, not by this installer')"
+
+      case "$A_IDENTITY_METHOD" in
+        azure)
+          A_CLIENT_ID_ENV='AZURE_CLIENT_ID'
+          A_SECRET_ENV='AZURE_CLIENT_SECRET'
+          A_SSO_CLIENT_ID="$(ask 'AZURE_CLIENT_ID (the app registration'"'"'s application/client id)')"
+          A_SSO_CLIENT_SECRET="$(ask_secret 'AZURE_CLIENT_SECRET (a client secret from that app registration)')"
+          # Empty would mean GoTrue's own default, the multi-tenant 'common'
+          # endpoint, which lets ANY Microsoft work or school account sign in.
+          # Naming the default out loud is what stops that being chosen by
+          # accident on a single-tenant deployment.
+          A_SSO_TENANT_URL="$(ask \
+            'Microsoft tenant URL' 'https://login.microsoftonline.com/common')"
+          ;;
+        google)
+          A_CLIENT_ID_ENV='GOOGLE_CLIENT_ID'
+          A_SECRET_ENV='GOOGLE_CLIENT_SECRET'
+          A_SSO_CLIENT_ID="$(ask 'GOOGLE_CLIENT_ID (an OAuth client id, ending .apps.googleusercontent.com)')"
+          A_SSO_CLIENT_SECRET="$(ask_secret 'GOOGLE_CLIENT_SECRET')"
+          ;;
+        keycloak)
+          A_CLIENT_ID_ENV='KEYCLOAK_CLIENT_ID'
+          A_SECRET_ENV='KEYCLOAK_CLIENT_SECRET'
+          A_SSO_CLIENT_ID="$(ask 'KEYCLOAK_CLIENT_ID')"
+          A_SSO_CLIENT_SECRET="$(ask_secret 'KEYCLOAK_CLIENT_SECRET')"
+          # No default on purpose: a guessed realm URL sends the company's
+          # sign-in to whatever answers at that address.
+          A_SSO_REALM_URL="$(ask 'Keycloak realm URL (e.g. https://keycloak.acme.com/realms/acme)')"
+          ;;
+        saml)
+          # A SAML provider is a metadata document plus a certificate, which
+          # GoTrue stores in auth.saml_providers and registers through its admin
+          # API. There is no client id/secret pair for .env to hold, so nothing
+          # is asked here; the variables that turn SAML on are written empty
+          # and marked TODO(operator).
+          say '  SAML providers are registered through the GoTrue admin API after'
+          say '  install, not by this installer. GOTRUE_SAML_ENABLED and'
+          say '  GOTRUE_SAML_PRIVATE_KEY will be left empty and marked'
+          say '  TODO(operator); SAML sign-in does not work until they are set.'
+          ;;
+      esac
+
+      # Asked for every provider, SAML included: whether an outside supplier
+      # can be admitted as a guest is a property of the deployment, not of the
+      # protocol the staff sign in with.
+      A_ALLOW_GUESTS="$(ask_yes_no \
+        'Can people without an account join as guests when the host admits them?' 'no')"
+      ;;
+  esac
+
+  if [[ "$A_IDENTITY" == 'none' ]]; then
+    say '  One optional SHARED password on the front door. Leave it empty to skip'
+    say '  it. This is not per-person accounts: anyone with the password gets in,'
+    say '  and the app cannot tell one person from another.'
+    A_ACCESS_PASSWORD="$(ask_secret 'Front-door password for the whole app (Enter to leave open)')"
+  else
+    # docs/plan/13-identity.md: with accounts or sso on, signing in IS the
+    # front door. A shared password in front of the sign-in page would add a
+    # second secret to lose without deciding anything the account does not
+    # already decide.
+    say "  Not asking for a front-door password: with '${A_IDENTITY}' turned on,"
+    say '  signing in is the door, and a shared password in front of the sign-in'
+    say '  page would only be a second secret to lose.'
+    A_ACCESS_PASSWORD=''
+  fi
   A_ADMIN_PASSPHRASE="$(ask_secret 'Admin passphrase for install-wide settings (Enter to skip)')"
 
   # ── PLM ────────────────────────────────────────────────────────────────
@@ -819,6 +920,40 @@ collect_answers() {
 validate_answers() {
   [[ -n "$A_HOSTNAME" ]] || die 'a public hostname is required'
 
+  # Identity. Every check here is a refusal to write a config that
+  # lib/config/schema.ts would reject, or one that would validate and then fail
+  # at sign-in time with a redirect error nobody could diagnose from a browser.
+  case "$A_IDENTITY" in
+    sso)
+      case "$A_IDENTITY_METHOD" in
+        azure|google|keycloak)
+          [[ -n "$A_SSO_CLIENT_ID" ]] || die "identity provider '${A_IDENTITY_METHOD}' needs a client id (${A_CLIENT_ID_ENV})"
+          [[ -n "$A_SSO_CLIENT_SECRET" ]] || die "identity provider '${A_IDENTITY_METHOD}' needs a client secret (${A_SECRET_ENV})"
+          ;;
+        saml)
+          # Nothing to check: a SAML provider is registered through the GoTrue
+          # admin API afterwards, and the schema needs no sub-block for it.
+          ;;
+        *) die "internal error: unhandled identity provider '$A_IDENTITY_METHOD'" ;;
+      esac
+      if [[ "$A_IDENTITY_METHOD" == 'azure' && -n "$A_SSO_TENANT_URL" ]]; then
+        case "$A_SSO_TENANT_URL" in
+          http://*|https://*) ;;
+          *) die "identity.azure.tenantUrl must be an absolute http(s) URL — got '$A_SSO_TENANT_URL'" ;;
+        esac
+      fi
+      if [[ "$A_IDENTITY_METHOD" == 'keycloak' ]]; then
+        [[ -n "$A_SSO_REALM_URL" ]] || die "identity provider 'keycloak' needs identity.keycloak.realmUrl"
+        case "$A_SSO_REALM_URL" in
+          http://*|https://*) ;;
+          *) die "identity.keycloak.realmUrl must be an absolute http(s) URL — got '$A_SSO_REALM_URL'" ;;
+        esac
+      fi
+      ;;
+    none|accounts) ;;
+    *) die "internal error: unhandled identity mode '$A_IDENTITY'" ;;
+  esac
+
   case "$A_PLM" in
     onshape|teamcenter)
       [[ -n "$A_PLM_BASE_URL" ]] || die "plm '$A_PLM' needs a base URL"
@@ -870,7 +1005,7 @@ validate_answers() {
   local name value
   for name in A_ONSHAPE_CLIENT_ID A_ONSHAPE_CLIENT_SECRET A_TC_PASSWORD \
               A_CAPTURE_API_KEY A_TEAMS_WEBHOOK A_SUPABASE_ANON_KEY \
-              A_TURN_API_TOKEN; do
+              A_TURN_API_TOKEN A_SSO_CLIENT_ID A_SSO_CLIENT_SECRET; do
     value="${!name}"
     if [[ -n "$value" && -z "${value//[[:space:]]/}" ]]; then
       die "the value given for ${name#A_} was whitespace only — re-run and paste the real one"
@@ -929,7 +1064,7 @@ prepare_target() {
 # output can be inspected (and tested) without touching the filesystem.
 render_config() {
   local plm_block capture_block turn_block notifications_block model_import generated
-  local db_probe_line=''
+  local identity_block='' db_probe_line=''
   # Bundled database: /api/health must probe PostgREST by service name. The
   # public URL (https://localhost/...) is the api container itself from inside it.
   if [[ "$A_DB" == 'bundled' ]]; then
@@ -1028,6 +1163,71 @@ render_config() {
     model_import="  modelImport: { provider: 'genericGltf' },"
   fi
 
+  # Identity. Written for EVERY answer, 'none' included: the generated file
+  # should record the choice rather than leave a reader to wonder whether the
+  # block is missing because this deployment has no accounts or because it was
+  # installed before the question existed. It also means /api/health reports an
+  # identity connector that answers "no external dependency" instead of saying
+  # nothing at all.
+  local allow_guests='false'
+  [[ "$A_ALLOW_GUESTS" == 'yes' ]] && allow_guests='true'
+
+  case "$A_IDENTITY" in
+    accounts)
+      identity_block="  identity: {
+    mode: 'accounts',
+    methods: ['password'],
+    allowGuests: ${allow_guests},
+    probeUrl: 'http://auth:9999/health',
+  },"
+      ;;
+    sso)
+      # The provider's own sub-block, naming the env vars whose VALUES are in
+      # .env. 'saml' gets none: its provider record lives in the database,
+      # registered through the GoTrue admin API, which is why lib/config/schema.ts
+      # exempts it from the "every listed method needs a sub-block" rule.
+      local method_block=''
+      case "$A_IDENTITY_METHOD" in
+        azure)
+          local tenant_line=''
+          if [[ -n "$A_SSO_TENANT_URL" ]]; then
+            tenant_line="
+      tenantUrl: '${A_SSO_TENANT_URL}',"
+          fi
+          method_block="
+    azure: {
+      clientIdEnv: '${A_CLIENT_ID_ENV}',
+      secretEnv: '${A_SECRET_ENV}',${tenant_line}
+    },"
+          ;;
+        google)
+          method_block="
+    google: {
+      clientIdEnv: '${A_CLIENT_ID_ENV}',
+      secretEnv: '${A_SECRET_ENV}',
+    },"
+          ;;
+        keycloak)
+          method_block="
+    keycloak: {
+      clientIdEnv: '${A_CLIENT_ID_ENV}',
+      secretEnv: '${A_SECRET_ENV}',
+      realmUrl: '${A_SSO_REALM_URL}',
+    },"
+          ;;
+      esac
+      identity_block="  identity: {
+    mode: 'sso',
+    methods: ['${A_IDENTITY_METHOD}'],
+    allowGuests: ${allow_guests},${method_block}
+    probeUrl: 'http://auth:9999/health',
+  },"
+      ;;
+    *)
+      identity_block="  identity: { mode: 'none' },"
+      ;;
+  esac
+
   cat <<CONFIG
 // viewpoint.config.ts — the master config for this deployment.
 //
@@ -1063,6 +1263,7 @@ ${turn_block}
     urlEnv: 'VITE_SUPABASE_URL',
     anonKeyEnv: 'VITE_SUPABASE_ANON_KEY',${db_probe_line}
   },
+${identity_block}
 ${notifications_block}
 ${model_import}
 });
@@ -1180,6 +1381,13 @@ SECRETS
   env_comment ''
   env_comment '# ── 2. Deployment settings (interpolated by docker-compose.yml) ──────────────'
   printf 'PUBLIC_HOSTNAME=%s\n' "$A_HOSTNAME"
+  # The absolute origin, port included. GoTrue builds its own redirect and
+  # callback URLs from it (GOTRUE_SITE_URL, API_EXTERNAL_URL,
+  # GOTRUE_URI_ALLOW_LIST) and cannot work it out from the request: the Host
+  # header nginx-proxy forwards carries no port, so an install on a non-443
+  # HTTPS_PORT would otherwise generate redirect URLs that do not resolve.
+  # Same value as publicUrl in viewpoint.config.ts.
+  printf 'PUBLIC_URL=%s\n' "$A_PUBLIC_URL"
   # PartyKit over TLS. partysocket chooses wss:// because the page is https, and
   # a page served over TLS cannot open ws:// to a published 1999 — that is why
   # nginx-proxy terminates the socket on 8443 (deploy/nginx/proxy.conf).
@@ -1326,6 +1534,94 @@ SECRETS
     env_comment '# notifications is empty: no sinks enabled. Sessions stay in the app.'
   fi
 
+  env_comment ''
+  env_comment '# ── 7a. Identity ───────────────────────────────────────────────────────────'
+  case "$A_IDENTITY" in
+    accounts)
+      env_comment '# identity.mode is "accounts": people sign in with an email address and a'
+      env_comment '# password held by the bundled GoTrue service (the `auth` service in'
+      env_comment '# docker-compose.yml, compose profile "identity", routed at /auth/v1/).'
+      env_comment '#'
+      env_comment '# GOTRUE_DISABLE_SIGNUP=true closes the sign-up form, so only accounts an'
+      env_comment '# admin creates can sign in; false lets anyone who can reach the site create'
+      env_comment '# one. This is the installer answer to "who can create an account?".'
+      if [[ "$A_SIGNUP" == 'anyone' ]]; then
+        printf 'GOTRUE_DISABLE_SIGNUP=false\n'
+      else
+        printf 'GOTRUE_DISABLE_SIGNUP=true\n'
+      fi
+      env_comment '#'
+      env_comment '# There is no mail server in this stack, so docker-compose.yml sets'
+      env_comment '# GOTRUE_MAILER_AUTOCONFIRM=true: an account works the moment it is created,'
+      env_comment '# and "I lost my password" cannot email a reset link. Point GoTrue at a real'
+      env_comment '# SMTP server and turn autoconfirm off there if password resets are needed.'
+      ;;
+    sso)
+      if [[ "$A_IDENTITY_METHOD" == 'saml' ]]; then
+        env_comment '# identity.mode is "sso" and the provider is SAML 2.0. Unlike the OIDC'
+        env_comment '# providers there is no client id/secret pair: a SAML provider is'
+        env_comment '# described by an IdP metadata document registered through the GoTrue admin'
+        env_comment '# API, which stores it in auth.saml_providers. That is a runtime step this'
+        env_comment '# installer cannot take for you, so both variables start empty and SAML'
+        env_comment '# sign-in does not work until they are filled in.'
+        todo_var 'GOTRUE_SAML_ENABLED' 'set to true once a SAML provider is registered through the GoTrue admin API (it lands in auth.saml_providers). Empty means SAML stays off, which is why sign-in does not work yet on this install.'
+        todo_var 'GOTRUE_SAML_PRIVATE_KEY' 'the PEM private key GoTrue signs SAML requests with, once a provider is registered. One line, with the newlines escaped as \n.'
+      else
+        env_comment "# identity.mode is \"sso\" and the provider is ${A_IDENTITY_METHOD}. GoTrue"
+        env_comment '# exchanges the authorisation code server-side, so the client secret below'
+        env_comment '# never reaches a browser — which is why viewpoint.config.ts NAMES these'
+        env_comment '# variables and their values live only here.'
+        if [[ -n "$A_SSO_CLIENT_ID" ]]; then
+          printf '%s=%s\n' "$A_CLIENT_ID_ENV" "$A_SSO_CLIENT_ID"
+        else
+          todo_var "$A_CLIENT_ID_ENV" "identity.${A_IDENTITY_METHOD}.clientIdEnv — the OAuth client id registered with this provider. Its redirect URI must be ${A_PUBLIC_URL}/auth/v1/callback."
+        fi
+        if [[ -n "$A_SSO_CLIENT_SECRET" ]]; then
+          printf '%s=%s\n' "$A_SECRET_ENV" "$A_SSO_CLIENT_SECRET"
+        else
+          todo_var "$A_SECRET_ENV" "identity.${A_IDENTITY_METHOD}.secretEnv — the OAuth client secret. Server-side only; it never reaches a browser."
+        fi
+        # GoTrue only offers a provider whose own ENABLED flag is true, and
+        # docker-compose.yml defaults all three to false so that an install
+        # which named no provider starts nothing. Naming it explicitly here is
+        # what connects the answer above to the running container.
+        local enabled_var=''
+        case "$A_IDENTITY_METHOD" in
+          azure)    enabled_var='GOTRUE_EXTERNAL_AZURE_ENABLED' ;;
+          google)   enabled_var='GOTRUE_EXTERNAL_GOOGLE_ENABLED' ;;
+          keycloak) enabled_var='GOTRUE_EXTERNAL_KEYCLOAK_ENABLED' ;;
+        esac
+        printf '%s=true\n' "$enabled_var"
+        # The provider's own endpoint. Google needs none: v2.197 ignores
+        # GOTRUE_EXTERNAL_GOOGLE_URL and resolves through OIDC discovery.
+        case "$A_IDENTITY_METHOD" in
+          azure)
+            env_comment '# The tenant GoTrue sends people to, with its scheme. Leaving it empty'
+            env_comment "# means Microsoft's multi-tenant 'common' endpoint, which accepts ANY"
+            env_comment '# work or school account rather than only this organisation.'"'"'s.'
+            printf 'AZURE_TENANT_URL=%s\n' "$A_SSO_TENANT_URL"
+            ;;
+          keycloak)
+            env_comment '# The REALM url, not the server url: GoTrue appends'
+            env_comment '# /protocol/openid-connect/{auth,token,userinfo} to it.'
+            printf 'KEYCLOAK_REALM_URL=%s\n' "$A_SSO_REALM_URL"
+            ;;
+        esac
+      fi
+      env_comment '#'
+      env_comment '# GOTRUE_DISABLE_SIGNUP is deliberately NOT written for an SSO install: a'
+      env_comment '# first sign-in from the provider is what creates the local account, and'
+      env_comment '# closing sign-up can close that door too. docker-compose.yml defaults it to'
+      env_comment '# false. Set it explicitly only if every account will be pre-created.'
+      ;;
+    *)
+      env_comment '# identity.mode is "none": nobody signs in, names are typed in the lobby, and'
+      env_comment '# the optional shared front-door password in section 1 is the only gate. The'
+      env_comment '# `auth` service is not started — no "identity" in COMPOSE_PROFILES below — so'
+      env_comment '# nothing in this section would be read.'
+      ;;
+  esac
+
   # Docker Compose reads COMPOSE_FILE and COMPOSE_PROFILES from the .env in the
   # project directory. Writing them here means a plain `docker compose ps`,
   # `up -d`, `logs` or `down` covers exactly the services this install runs.
@@ -1336,6 +1632,10 @@ SECRETS
   [[ "$A_CAPTURE" == 'local' || "$A_CAPTURE" == 'ollamaDirect' ]] && profiles+=(capture-local)
   [[ "$A_TURN" == 'bundled' ]] && profiles+=(turn)
   [[ "$A_N8N" == 'yes' ]] && profiles+=(n8n)
+  # The identity profile brings up `auth-init` and `auth` (GoTrue). Off unless
+  # the operator chose accounts or sso, so a default install runs exactly the
+  # services it ran before identity existed.
+  [[ "$A_IDENTITY" != 'none' ]] && profiles+=(identity)
   local profile_list
   profile_list="$(IFS=,; printf '%s' "${profiles[*]}")"
   cat <<COMPOSE
@@ -1359,6 +1659,7 @@ COMPOSE
 #SUPABASE_POSTGRES_IMAGE_TAG=17.6.1.136
 #POSTGREST_IMAGE_TAG=v14.17
 #REALTIME_IMAGE_TAG=v2.134.10
+#GOTRUE_IMAGE_TAG=v2.197.0
 #OLLAMA_IMAGE_TAG=latest
 #N8N_IMAGE_TAG=latest
 #
@@ -1434,6 +1735,12 @@ compose_files() {
   fi
   if [[ "$A_TURN" == 'bundled' ]]; then
     PROFILES+=(turn)
+  fi
+  # Must match the COMPOSE_PROFILES line render_env writes into .env, or
+  # `compose up` here and a later plain `docker compose up` would run different
+  # sets of services.
+  if [[ "$A_IDENTITY" != 'none' ]]; then
+    PROFILES+=(identity)
   fi
 }
 
@@ -1698,10 +2005,32 @@ print_summary() {
   say "  notifications    ${A_NOTIFY}"
   say "  gpu override     ${A_GPU}"
   say "  n8n profile      ${A_N8N}"
+
+  local signup_word='closed — only accounts an admin adds'
+  [[ "$A_SIGNUP" == 'anyone' ]] && signup_word='open — anyone who can reach the site'
+  local guests_word='no — an account is required'
+  [[ "$A_ALLOW_GUESTS" == 'yes' ]] && guests_word='yes — the host can admit a named guest'
+  case "$A_IDENTITY" in
+    accounts)
+      say '  identity         accounts (email + password held on this install)'
+      say "  sign-up          ${signup_word}"
+      say "  guests           ${guests_word}"
+      ;;
+    sso)
+      say "  identity         sso (${A_IDENTITY_METHOD})"
+      say "  guests           ${guests_word}"
+      ;;
+    *)
+      say '  identity         none (no accounts; names are typed in the lobby)'
+      ;;
+  esac
+
   if [[ -n "$S_ACCESS_PASSWORD_HASH" ]]; then
     say '  front-door pw    set (shared password — not per-person accounts)'
-  else
+  elif [[ "$A_IDENTITY" == 'none' ]]; then
     say '  front-door pw    open (no password; anyone with the link can enter)'
+  else
+    say '  front-door pw    not asked — with identity on, signing in is the door'
   fi
   if [[ -n "$S_ADMIN_PASSPHRASE_HASH" ]]; then
     say '  admin passphrase set'
@@ -1732,6 +2061,9 @@ print_summary() {
   note "app             https://${A_HOSTNAME}/"
   note "partykit (wss)  wss://${A_HOSTNAME}:${WSS_PORT:-8443}/<room>"
   note "health          https://${A_HOSTNAME}/api/health"
+  if [[ "$A_IDENTITY" != 'none' ]]; then
+    note "auth (GoTrue)    https://${A_HOSTNAME}/auth/v1/"
+  fi
   if [[ "$A_N8N" == 'yes' ]]; then
     note "n8n             http://127.0.0.1:${N8N_PORT:-5678}/  (loopback only)"
   fi
@@ -1754,6 +2086,13 @@ print_summary() {
     say '  correct. For off-machine browsers under Docker Desktop, set it to the'
     say '  Windows/macOS host LAN IP so coturn advertises a reachable address.'
   fi
+  if [[ "$A_IDENTITY" == 'sso' && "$A_IDENTITY_METHOD" != 'saml' ]]; then
+    say ''
+    say "  Register this redirect URI on the ${A_IDENTITY_METHOD} side, or every sign-in"
+    say '  fails with a redirect_uri mismatch that looks like a bug in this app:'
+    say "    ${A_PUBLIC_URL}/auth/v1/callback"
+  fi
+
   say ''
   say '  Everyday commands, from this directory (.env tells compose which'
   say '  services this install runs, so no flags are needed):'

@@ -166,3 +166,138 @@ describe('redactConfig', () => {
     expect(result.publicUrl).toBe('https://192.168.1.134');
   });
 });
+
+// ─── identity ───────────────────────────────────────────────────────────────
+//
+// The browser needs to know WHICH door to render: the mode, the methods to put
+// a button on, and whether "join as a guest" is offered. Everything else in the
+// block — the env var NAMES holding an SSO client id and secret, the tenant or
+// realm URL, the server-side probe URL — is deployment internals.
+
+describe('redactConfig — identity', () => {
+  it('reports mode none when the config has no identity block', () => {
+    // Absent and { mode: 'none' } are the same deployment, and the client is
+    // given one shape to branch on rather than having to handle both.
+    const result = redactConfig(fullSecretConfig);
+    expect(result.identity).toEqual({ mode: 'none', methods: [], allowGuests: false });
+  });
+
+  it('reports mode none for an explicit identity: { mode: "none" }', () => {
+    const result = redactConfig({ ...fullSecretConfig, identity: { mode: 'none' } });
+    expect(result.identity).toEqual({ mode: 'none', methods: [], allowGuests: false });
+  });
+
+  it('exposes accounts with its methods and allowGuests', () => {
+    const result = redactConfig({
+      ...fullSecretConfig,
+      identity: { mode: 'accounts', methods: ['password'], allowGuests: true },
+    });
+    expect(result.identity).toEqual({
+      mode: 'accounts',
+      methods: ['password'],
+      allowGuests: true,
+    });
+  });
+
+  it('exposes nothing but mode, methods and allowGuests for an sso config', () => {
+    const result = redactConfig({
+      ...fullSecretConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['password', 'azure', 'keycloak'],
+        allowGuests: false,
+        azure: {
+          clientIdEnv: 'AZURE_CLIENT_ID',
+          secretEnv: 'AZURE_CLIENT_SECRET',
+          tenantUrl: 'https://login.microsoftonline.com/acme-tenant-id',
+        },
+        keycloak: {
+          clientIdEnv: 'KEYCLOAK_CLIENT_ID',
+          secretEnv: 'KEYCLOAK_CLIENT_SECRET',
+          realmUrl: 'https://keycloak.acme.com/realms/acme',
+        },
+        probeUrl: 'http://auth:9999/health',
+      },
+    });
+
+    expect(result.identity).toEqual({
+      mode: 'sso',
+      methods: ['password', 'azure', 'keycloak'],
+      allowGuests: false,
+    });
+    expect(Object.keys(result.identity).sort()).toEqual(['allowGuests', 'methods', 'mode']);
+  });
+
+  it('never exposes an SSO client id env NAME, its secret env NAME, or a tenant/realm URL', () => {
+    // The point of the allowlist: the NAME of the variable holding a client id
+    // tells an attacker which variable to look for in a leaked .env, and the
+    // tenant URL names the org's identity provider. Neither is needed to draw
+    // a "Sign in with Microsoft" button.
+    const result = redactConfig({
+      ...fullSecretConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['azure', 'google', 'keycloak'],
+        allowGuests: false,
+        azure: {
+          clientIdEnv: 'AZURE_CLIENT_ID',
+          secretEnv: 'AZURE_CLIENT_SECRET',
+          tenantUrl: 'https://login.microsoftonline.com/acme-tenant-id',
+        },
+        google: { clientIdEnv: 'GOOGLE_CLIENT_ID', secretEnv: 'GOOGLE_CLIENT_SECRET' },
+        keycloak: {
+          clientIdEnv: 'KEYCLOAK_CLIENT_ID',
+          secretEnv: 'KEYCLOAK_CLIENT_SECRET',
+          realmUrl: 'https://keycloak.acme.com/realms/acme',
+        },
+      },
+    });
+    const json = JSON.stringify(result);
+
+    for (const name of [
+      'AZURE_CLIENT_ID',
+      'AZURE_CLIENT_SECRET',
+      'GOOGLE_CLIENT_ID',
+      'GOOGLE_CLIENT_SECRET',
+      'KEYCLOAK_CLIENT_ID',
+      'KEYCLOAK_CLIENT_SECRET',
+    ]) {
+      expect(json, `leaked the env var name ${name}`).not.toContain(name);
+    }
+    expect(json).not.toContain('login.microsoftonline.com');
+    expect(json).not.toContain('keycloak.acme.com');
+    expect(json).not.toContain('acme-tenant-id');
+    // No key ending in Env anywhere in the response, identity included.
+    expect(json).not.toMatch(/"[A-Za-z]*Env"/);
+    expect(json).not.toContain('clientIdEnv');
+    expect(json).not.toContain('secretEnv');
+  });
+
+  it('never exposes identity.probeUrl', () => {
+    // The probe URL is how the SERVER reaches GoTrue — a compose-internal
+    // hostname on a network that publishes no port, exactly like
+    // capture.serviceUrl and db.probeUrl, neither of which is allowlisted.
+    const result = redactConfig({
+      ...fullSecretConfig,
+      identity: {
+        mode: 'accounts',
+        methods: ['password'],
+        allowGuests: false,
+        probeUrl: 'http://auth:9999/health',
+      },
+    });
+    const json = JSON.stringify(result);
+    expect(json).not.toContain('probeUrl');
+    expect(json).not.toContain('auth:9999');
+  });
+
+  it('hands out a copy of methods, not the parsed config array', () => {
+    const config: ViewpointConfig = {
+      ...fullSecretConfig,
+      identity: { mode: 'accounts', methods: ['password'], allowGuests: false },
+    };
+    const result = redactConfig(config);
+    result.identity.methods.push('saml');
+    expect(config.identity).toMatchObject({ methods: ['password'] });
+  });
+});

@@ -42,6 +42,7 @@ const publicConfig: PublicConfig = {
   capture: { provider: 'ollamaDirect', model: 'deepseek-r1:7b', baseUrl: BASE_URL },
   turn: { provider: 'cloudflare' },
   db: { provider: 'supabase' },
+  identity: { mode: 'none', methods: [], allowGuests: false },
   notifications: [{ provider: 'teams' }],
   modelImport: { provider: 'onshape' },
 };

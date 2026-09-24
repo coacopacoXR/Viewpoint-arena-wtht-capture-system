@@ -40,6 +40,10 @@ describe('public-config endpoint', () => {
       capture: { provider: 'mock' },
       turn: { provider: 'cloudflare' },
       db: { provider: 'supabase' },
+      // mockConfig has no identity block, and the endpoint still answers with
+      // one: mode 'none' is a decision the client can act on, not an absence
+      // it has to special-case.
+      identity: { mode: 'none', methods: [], allowGuests: false },
       notifications: [{ provider: 'teams' }],
       modelImport: { provider: 'onshape' },
     });

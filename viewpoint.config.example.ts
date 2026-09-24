@@ -30,6 +30,41 @@ export default defineConfig({
     urlEnv: 'VITE_SUPABASE_URL',
     anonKeyEnv: 'VITE_SUPABASE_ANON_KEY',
   },
+  // How people sign in — docs/plan/13-identity.md. The block is OPTIONAL and
+  // 'none' is the default, so a config with no identity block at all means
+  // exactly this: names are typed in the lobby and self-asserted, with the
+  // optional shared front-door password as the only gate.
+  identity: { mode: 'none' },
+  // 'accounts' puts email + password on this install (the bundled GoTrue
+  // service, compose profile `identity`, at /auth/v1/):
+  //
+  //   identity: {
+  //     mode: 'accounts',
+  //     methods: ['password'],
+  //     allowGuests: false,
+  //     probeUrl: 'http://auth:9999/health',
+  //   },
+  //
+  // 'sso' borrows the company's identity provider. methods may also carry
+  // 'password' alongside a provider, for the staff-via-SSO-plus-a-few-external-
+  // suppliers case; every provider listed except 'saml' needs its sub-block
+  // naming the env vars that hold its client id and secret. 'saml' has none:
+  // its provider record is registered through the GoTrue admin API afterwards.
+  //
+  //   identity: {
+  //     mode: 'sso',
+  //     methods: ['azure'],
+  //     allowGuests: true,
+  //     azure: {
+  //       clientIdEnv: 'AZURE_CLIENT_ID',
+  //       secretEnv: 'AZURE_CLIENT_SECRET',
+  //       tenantUrl: 'https://login.microsoftonline.com/<tenant>',
+  //     },
+  //     probeUrl: 'http://auth:9999/health',
+  //   },
+  //
+  // The provider's redirect URI is <publicUrl>/auth/v1/callback, and sign-in
+  // fails with a redirect_uri mismatch until the provider has it registered.
   notifications: [{ provider: 'teams', webhookUrlEnv: 'TEAMS_WEBHOOK_URL' }],
   modelImport: { provider: 'onshape' },
 });

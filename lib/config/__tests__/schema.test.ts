@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { configSchema, defineConfig } from '../schema.ts';
+import { configSchema, defineConfig, identityOf } from '../schema.ts';
 import type { ViewpointConfig } from '../schema.ts';
 
 const validOnshapeConfig: ViewpointConfig = {
@@ -286,5 +286,338 @@ describe('configSchema', () => {
       publicUrl: 'not-a-url',
     };
     expect(configSchema.safeParse(config).success).toBe(false);
+  });
+});
+
+// ─── identity (docs/plan/13-identity.md) ────────────────────────────────────
+//
+// The block is OPTIONAL and absent means mode 'none', so the first guarantee to
+// pin is that nothing written before identity existed stops validating. The
+// rest pin the two rules that keep a deployment from configuring a sign-in
+// page it cannot actually serve: a mode must be backed by the methods it needs,
+// and every external provider named must have the env var NAMES its client
+// id/secret live in.
+
+describe('configSchema — identity', () => {
+  it('accepts a config with no identity block at all', () => {
+    const parsed = configSchema.parse(validOnshapeConfig);
+    expect(parsed.identity).toBeUndefined();
+    // Absent and { mode: 'none' } describe the same deployment, and identityOf
+    // is the one place that says so.
+    expect(identityOf(parsed)).toEqual({ mode: 'none' });
+  });
+
+  it('accepts identity: { mode: "none" }', () => {
+    const config = { ...validOnshapeConfig, identity: { mode: 'none' } };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('accepts accounts with the password method', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'accounts', methods: ['password'], allowGuests: false },
+    };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it("rejects accounts that does not offer 'password'", () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'accounts', methods: ['azure'], azure: { clientIdEnv: 'AZURE_CLIENT_ID', secretEnv: 'AZURE_CLIENT_SECRET' } },
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toMatch(/must include 'password'/);
+    }
+  });
+
+  it('rejects an empty methods list', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'accounts', methods: [], allowGuests: false },
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toMatch(/at least one sign-in method/);
+    }
+  });
+
+  it('defaults allowGuests to false', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'accounts', methods: ['password'] },
+    };
+    const parsed = configSchema.parse(config);
+    expect(parsed.identity).toEqual({
+      mode: 'accounts',
+      methods: ['password'],
+      allowGuests: false,
+    });
+  });
+
+  it('accepts allowGuests: true (an outside supplier admitted by the host)', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'accounts', methods: ['password'], allowGuests: true },
+    };
+    expect(configSchema.parse(config).identity).toMatchObject({ allowGuests: true });
+  });
+
+  it('rejects a non-boolean allowGuests', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'accounts', methods: ['password'], allowGuests: 'yes' },
+    };
+    expect(configSchema.safeParse(config).success).toBe(false);
+  });
+
+  it('accepts sso with one external provider and its env var names', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['azure'],
+        allowGuests: false,
+        azure: {
+          clientIdEnv: 'AZURE_CLIENT_ID',
+          secretEnv: 'AZURE_CLIENT_SECRET',
+          tenantUrl: 'https://login.microsoftonline.com/acme-tenant-id',
+        },
+      },
+    };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it("accepts azure with no tenantUrl (Microsoft's common endpoint)", () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['azure'],
+        allowGuests: false,
+        azure: { clientIdEnv: 'AZURE_CLIENT_ID', secretEnv: 'AZURE_CLIENT_SECRET' },
+      },
+    };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('rejects a non-URL azure tenantUrl', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['azure'],
+        allowGuests: false,
+        azure: { clientIdEnv: 'AZURE_CLIENT_ID', secretEnv: 'AZURE_CLIENT_SECRET', tenantUrl: 'acme.onmicrosoft.com' },
+      },
+    };
+    expect(configSchema.safeParse(config).success).toBe(false);
+  });
+
+  it('accepts sso combining password with an external provider', () => {
+    // The plan's "staff via SSO plus a few external suppliers on local
+    // accounts" case: methods carries both, and mode says which is the door.
+    const config = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['password', 'google'],
+        allowGuests: true,
+        google: { clientIdEnv: 'GOOGLE_CLIENT_ID', secretEnv: 'GOOGLE_CLIENT_SECRET' },
+      },
+    };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('rejects sso with no external provider at all', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'sso', methods: ['password'], allowGuests: false },
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toMatch(
+        /at least one of azure, google, keycloak or saml/,
+      );
+    }
+  });
+
+  it('accepts sso with only saml, which needs no env sub-block', () => {
+    // A SAML provider is registered through the admin API afterwards, so there
+    // is no client id/secret pair for .env to hold at config time.
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'sso', methods: ['saml'], allowGuests: false },
+    };
+    expect(configSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('rejects a listed provider whose env sub-block is missing', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'sso', methods: ['keycloak'], allowGuests: false },
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const msg = JSON.stringify(result.error.issues);
+      expect(msg).toMatch(/identity\.keycloak is missing/);
+      // The issue is anchored on the missing block, not on the whole identity.
+      expect(result.error.issues.some((i) => i.path.join('.') === 'identity.keycloak')).toBe(true);
+    }
+  });
+
+  it('names every missing provider sub-block, not just the first', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'sso', methods: ['azure', 'google'], allowGuests: false },
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((i) => i.path.join('.'));
+      expect(paths).toContain('identity.azure');
+      expect(paths).toContain('identity.google');
+    }
+  });
+
+  it('rejects keycloak without realmUrl', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['keycloak'],
+        allowGuests: false,
+        keycloak: { clientIdEnv: 'KEYCLOAK_CLIENT_ID', secretEnv: 'KEYCLOAK_CLIENT_SECRET' },
+      },
+    };
+    const result = configSchema.safeParse(config);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toMatch(/realmUrl/);
+    }
+  });
+
+  it('rejects a VITE_-prefixed identity client id or secret', () => {
+    // The rule the whole schema exists to enforce: VITE_ names are inlined into
+    // the browser bundle, and an SSO client secret in a bundle is a public
+    // secret that lets anyone impersonate this deployment to the IdP.
+    const leakyId = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['azure'],
+        allowGuests: false,
+        azure: { clientIdEnv: 'VITE_AZURE_CLIENT_ID', secretEnv: 'AZURE_CLIENT_SECRET' },
+      },
+    };
+    expect(() => configSchema.parse(leakyId)).toThrow(/VITE_/);
+
+    const leakySecret = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['google'],
+        allowGuests: false,
+        google: { clientIdEnv: 'GOOGLE_CLIENT_ID', secretEnv: 'VITE_GOOGLE_CLIENT_SECRET' },
+      },
+    };
+    expect(() => configSchema.parse(leakySecret)).toThrow(/VITE_/);
+  });
+
+  it('rejects a non-UPPER_SNAKE_CASE identity env var name', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'accounts',
+        methods: ['password'],
+        allowGuests: false,
+        azure: { clientIdEnv: 'azure_client_id', secretEnv: 'AZURE_CLIENT_SECRET' },
+      },
+    };
+    expect(() => configSchema.parse(config)).toThrow(/UPPER_SNAKE_CASE/);
+  });
+
+  it('accepts identity.probeUrl and rejects a non-URL one', () => {
+    const good = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'accounts',
+        methods: ['password'],
+        allowGuests: false,
+        probeUrl: 'http://auth:9999/health',
+      },
+    };
+    expect(configSchema.safeParse(good).success).toBe(true);
+
+    // Same rule as db.probeUrl, which is what makes it safe to hand the value
+    // straight to new URL() in lib/health/probes.ts. A relative path is the
+    // realistic mistake: it parses as no URL at all.
+    const bad = {
+      ...validOnshapeConfig,
+      identity: { mode: 'accounts', methods: ['password'], allowGuests: false, probeUrl: '/health' },
+    };
+    const result = configSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(JSON.stringify(result.error.issues)).toMatch(/identity\.probeUrl must be a URL/);
+    }
+  });
+
+  it('rejects an unknown method', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: { mode: 'accounts', methods: ['password', 'okta'], allowGuests: false },
+    };
+    expect(configSchema.safeParse(config).success).toBe(false);
+  });
+
+  it('rejects an unknown mode', () => {
+    const config = { ...validOnshapeConfig, identity: { mode: 'ldap' } };
+    expect(configSchema.safeParse(config).success).toBe(false);
+  });
+
+  it('strips a provider block from identity: { mode: "none" }', () => {
+    // 'none' means no identity service is in front of the app at all. The
+    // discriminated union picks the { mode: 'none' } branch, whose object
+    // strips unknown keys — so a hand-edited block that says none while naming
+    // an Azure client id cannot reach redactConfig, checkEnvVars or the
+    // installer's profile logic. What the parse output carries is the whole
+    // of what any reader may act on.
+    const config = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'none',
+        azure: { clientIdEnv: 'AZURE_CLIENT_ID', secretEnv: 'AZURE_CLIENT_SECRET' },
+      },
+    };
+    const parsed = configSchema.parse(config);
+    expect(parsed.identity).toEqual({ mode: 'none' });
+  });
+
+  it('defineConfig accepts a full sso identity block', () => {
+    const config = {
+      ...validOnshapeConfig,
+      identity: {
+        mode: 'sso',
+        methods: ['azure', 'keycloak'],
+        allowGuests: true,
+        azure: {
+          clientIdEnv: 'AZURE_CLIENT_ID',
+          secretEnv: 'AZURE_CLIENT_SECRET',
+          tenantUrl: 'https://login.microsoftonline.com/acme',
+        },
+        keycloak: {
+          clientIdEnv: 'KEYCLOAK_CLIENT_ID',
+          secretEnv: 'KEYCLOAK_CLIENT_SECRET',
+          realmUrl: 'https://keycloak.acme.com/realms/acme',
+        },
+        probeUrl: 'http://auth:9999/health',
+      },
+    };
+    expect(() => defineConfig(config as ViewpointConfig)).not.toThrow();
   });
 });

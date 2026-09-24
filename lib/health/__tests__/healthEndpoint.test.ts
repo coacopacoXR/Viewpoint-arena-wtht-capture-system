@@ -243,6 +243,68 @@ describe('GET /api/health', () => {
   });
 });
 
+describe('GET /api/health — identity', () => {
+  it('adds an identity entry when the config enables accounts', async () => {
+    loadConfig.mockResolvedValue({
+      ...CONFIG,
+      identity: {
+        mode: 'accounts',
+        methods: ['password'],
+        allowGuests: false,
+        probeUrl: 'http://auth:9999/health',
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      routingFetch([
+        [/\/rest\/v1\/$/, 200, { definitions: {} }],
+        [/^http:\/\/auth:9999\/health$/, 200, { name: 'GoTrue', version: '2.197.0' }],
+      ]).fn,
+    );
+
+    const captured = await call('GET');
+    const body = captured.body as HealthReport;
+
+    expect(captured.statusCode).toBe(200);
+    expect(body.connectors.identity).toEqual({
+      provider: 'accounts',
+      status: 'ok',
+      detail: 'upstream reachable',
+    });
+    // The internal compose hostname never reaches an unauthenticated caller.
+    expect(JSON.stringify(body)).not.toContain('auth:9999');
+  });
+
+  it('answers 503 when identity is configured but the service is down', async () => {
+    // The install.sh case that matters: the config says accounts, the compose
+    // profile was never enabled, so nginx answers 502 for /auth/v1/ and the
+    // operator is told WHICH connector is not ready.
+    loadConfig.mockResolvedValue({
+      ...CONFIG,
+      identity: { mode: 'accounts', methods: ['password'], allowGuests: false },
+    });
+    vi.stubGlobal(
+      'fetch',
+      routingFetch([
+        [/\/rest\/v1\/$/, 200, { definitions: {} }],
+        [/^http:\/\/auth:9999\/health$/, 502],
+      ]).fn,
+    );
+
+    const captured = await call('GET');
+    const body = captured.body as HealthReport;
+
+    expect(captured.statusCode).toBe(503);
+    expect(body.connectors.identity?.status).toBe('degraded');
+    expect(body.connectors.db?.status).toBe('ok');
+  });
+
+  it('omits identity when the config has no identity block', async () => {
+    const captured = await call('GET');
+    expect((captured.body as HealthReport).connectors.identity).toBeUndefined();
+  });
+});
+
 describe('GET /api/health — the config did not load', () => {
   beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => {});

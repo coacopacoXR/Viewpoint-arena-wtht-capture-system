@@ -122,6 +122,129 @@ const dbSchema = z.discriminatedUnion('provider', [
   }),
 ]);
 
+// ── Identity ─────────────────────────────────────────────────────────────────
+//
+// docs/plan/13-identity.md: how people get into a deployment is a per-
+// deployment CHOICE, not a feature that is either present or absent from the
+// code. 'none' is what ships today (names typed in the lobby, self-asserted,
+// with an optional shared front-door password). 'accounts' and 'sso' put a real
+// identity provider in front of the app — Supabase Auth (GoTrue) in the
+// self-hosted stack, the same project's Auth on Supabase cloud.
+//
+// The whole block is OPTIONAL and an absent block means { mode: 'none' }, so
+// every config written before identity existed still validates unchanged. Both
+// readers (lib/config/redact.ts, lib/health/aggregate.ts) normalise absent to
+// 'none' rather than the schema forcing a value into configs that never asked
+// for one: a hand-written config stays exactly what its author wrote.
+
+/**
+ * Every sign-in method the app can offer.
+ *
+ * 'password' is a local account (email + password held by GoTrue). The rest
+ * are external identity providers. 'saml' is the one method with no env vars
+ * here: a SAML provider is registered through the admin API afterwards
+ * (GoTrue stores it in auth.saml_providers), so it needs no client id/secret
+ * pair in the deployment's .env.
+ */
+const identityMethod = z.enum([
+  'password',
+  'azure',
+  'google',
+  'keycloak',
+  'saml',
+]);
+
+export type IdentityMethod = z.infer<typeof identityMethod>;
+
+/** The two external providers whose config is a plain client id/secret pair. */
+const ssoCredentials = z.object({
+  clientIdEnv: envVarName,
+  secretEnv: envVarName,
+});
+
+const azureSso = ssoCredentials.extend({
+  // e.g. https://login.microsoftonline.com/<tenant-id>. Optional: without it
+  // GoTrue uses Microsoft's common (multi-tenant) endpoint, which is the right
+  // default for an org that has not pinned a tenant.
+  tenantUrl: z.string().url('identity.azure.tenantUrl must be a URL').optional(),
+});
+
+const googleSso = ssoCredentials;
+
+const keycloakSso = ssoCredentials.extend({
+  // The realm URL, e.g. https://keycloak.acme.com/realms/acme. GoTrue reads
+  // the OIDC discovery document from it, and there is no sensible default for
+  // a self-hosted Keycloak — hence required, unlike Azure's tenantUrl.
+  realmUrl: z.string().url('identity.keycloak.realmUrl must be a URL'),
+});
+
+const identityNone = z.object({ mode: z.literal('none') });
+
+const identityEnabled = z.object({
+  mode: z.enum(['accounts', 'sso']),
+  methods: z
+    .array(identityMethod)
+    .min(1, 'identity.methods must name at least one sign-in method'),
+  // When true, a person with no account on this deployment can still knock on
+  // a room and be admitted by the host as a named guest — which is what keeps
+  // a review with an outside supplier possible on a locked-down install.
+  allowGuests: z.boolean().default(false),
+  azure: azureSso.optional(),
+  google: googleSso.optional(),
+  keycloak: keycloakSso.optional(),
+  // Optional: the identity service's /health URL as the SERVER reaches it, for
+  // /api/health only — exactly the role db.probeUrl plays. Needed because
+  // publicUrl (https://arena.acme.com) is not reachable from inside the api
+  // container: `localhost` there is the container itself. Absent means the
+  // bundled GoTrue service on the compose network (DEFAULT_AUTH_PROBE_URL in
+  // lib/health/probes.ts). Not a secret, and never sent to the browser.
+  probeUrl: z.string().url('identity.probeUrl must be a URL').optional(),
+});
+
+/** The providers that need a sub-block naming their env vars. 'saml' does not. */
+const SSO_METHODS_WITH_CONFIG = ['azure', 'google', 'keycloak'] as const;
+
+const identitySchema = z
+  .discriminatedUnion('mode', [identityNone, identityEnabled])
+  // 'accounts' IS email + password on this install, so a config that says
+  // accounts but offers no password method describes a door with no handle.
+  // 'sso' may ALSO include 'password' (staff via SSO plus a few external
+  // suppliers on local accounts), which is why this is not symmetric.
+  .refine((identity) => identity.mode !== 'accounts' || identity.methods.includes('password'), {
+    message: "identity.mode 'accounts' must include 'password' in identity.methods",
+    path: ['methods'],
+  })
+  // 'sso' without a single external provider would be a sign-in page with
+  // nothing on it. 'password' alone is the 'accounts' mode, not this one.
+  .refine(
+    (identity) =>
+      identity.mode !== 'sso' ||
+      SSO_METHODS_WITH_CONFIG.some((m) => identity.methods.includes(m)) ||
+      identity.methods.includes('saml'),
+    {
+      message:
+        "identity.mode 'sso' must include at least one of azure, google, keycloak or saml in identity.methods",
+      path: ['methods'],
+    },
+  )
+  // A listed provider with no sub-block has no client id or secret to
+  // authenticate with, and the failure would surface at sign-in time as an
+  // opaque redirect error rather than at config load. 'saml' is exempt: its
+  // provider record is registered through the admin API, not through env vars.
+  .superRefine((identity, ctx) => {
+    if (identity.mode === 'none') return;
+    for (const method of SSO_METHODS_WITH_CONFIG) {
+      if (!identity.methods.includes(method) || identity[method] !== undefined) continue;
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          `identity.methods lists '${method}' but identity.${method} is missing — ` +
+          `it names the env vars holding that provider's client id and secret`,
+        path: [method],
+      });
+    }
+  });
+
 const teamsNotification = z.object({
   provider: z.literal('teams'),
   webhookUrlEnv: envVarName,
@@ -163,11 +286,27 @@ export const configSchema = z.object({
   capture: captureSchema,
   turn: turnSchema,
   db: dbSchema,
+  identity: identitySchema.optional(),
   notifications: notificationsSchema,
   modelImport: modelImportSchema,
 });
 
 export type ViewpointConfig = z.infer<typeof configSchema>;
+
+/** The identity block. Optional on the config: absent means mode 'none'. */
+export type IdentityConfig = ViewpointConfig['identity'];
+
+/**
+ * The identity block with its default applied.
+ *
+ * "Absent" and "{ mode: 'none' }" describe the same deployment — today's rules,
+ * names typed in the lobby. Readers that branch on the mode call this instead
+ * of repeating `?? { mode: 'none' }` at every use site, so the two cannot drift
+ * apart.
+ */
+export function identityOf(config: ViewpointConfig): NonNullable<IdentityConfig> {
+  return config.identity ?? { mode: 'none' };
+}
 
 export function defineConfig(config: ViewpointConfig): ViewpointConfig {
   configSchema.parse(config);

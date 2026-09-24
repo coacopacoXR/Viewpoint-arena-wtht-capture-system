@@ -16,6 +16,7 @@ const baseConfig: ConfigContext.ConnectorConfig = {
     capture: { provider: 'mock' },
     turn: { provider: 'cloudflare' },
     db: { provider: 'supabase' },
+    identity: { mode: 'none', methods: [], allowGuests: false },
     notifications: [],
     modelImport: { provider: 'genericGltf' },
   },

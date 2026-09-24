@@ -13,7 +13,7 @@ import {
   type Check,
 } from '../aggregate.ts';
 import { HEALTH_DETAILS } from '../details.ts';
-import { probeCaptureService, CAPTURE_AUTH_HEADER } from '../probes.ts';
+import { probeCaptureService, CAPTURE_AUTH_HEADER, DEFAULT_AUTH_PROBE_URL } from '../probes.ts';
 import type { ViewpointConfig } from '../../config/schema.ts';
 import { GenericUploadModelImportAdapter } from '../../connectors/modelImport/genericUpload.ts';
 
@@ -437,6 +437,174 @@ describe('db connector', () => {
       status: 'degraded',
       detail: HEALTH_DETAILS.notConfigured,
     });
+  });
+});
+
+// ─── The identity connector (docs/plan/13-identity.md) ──────────────────────
+
+describe('identity connector', () => {
+  /** GoTrue's real /health body: no `status` field, unlike capture-service's. */
+  const GOTRUE_HEALTH = {
+    version: '2.197.0',
+    name: 'GoTrue',
+    description: 'GoTrue is a secure and easy way to authenticate users',
+  };
+
+  it('is omitted entirely when the config has no identity block', () => {
+    expect(buildChecks(BASE_CONFIG, { env: HEALTHY_ENV }).some((c) => c.slot === 'identity')).toBe(
+      false,
+    );
+  });
+
+  it("reports mode 'none' as ok with no external dependency, and makes no request", async () => {
+    // A deployment that answered "no accounts" to install.sh is not degraded.
+    // Reporting it degraded would fail install.sh's health poll (exit 3) on a
+    // stack that is exactly as ready as it was configured to be.
+    const { fn, calls } = fetchReturning(httpResponse(200, GOTRUE_HEALTH));
+    const report = await aggregateHealth(
+      { ...BASE_CONFIG, identity: { mode: 'none' } },
+      { env: HEALTHY_ENV, fetchFn: fn },
+    );
+
+    expect(report.connectors.identity).toEqual({
+      provider: 'none',
+      status: 'ok',
+      detail: HEALTH_DETAILS.selfContained,
+    });
+    // Only the db probe ran; nothing was sent to an identity service.
+    expect(calls.map((c) => String(c.url))).toEqual(['https://acme.supabase.co/rest/v1/']);
+    expect(report.ok).toBe(true);
+  });
+
+  it('probes the bundled GoTrue service by default when accounts is on', async () => {
+    const { fn, calls } = fetchReturning(httpResponse(200, GOTRUE_HEALTH));
+    const report = await aggregateHealth(
+      {
+        ...BASE_CONFIG,
+        identity: { mode: 'accounts', methods: ['password'], allowGuests: false },
+      },
+      { env: HEALTHY_ENV, fetchFn: fn },
+    );
+
+    expect(report.connectors.identity).toEqual({
+      provider: 'accounts',
+      status: 'ok',
+      detail: HEALTH_DETAILS.reachable,
+    });
+    expect(calls.map((c) => String(c.url))).toContain(DEFAULT_AUTH_PROBE_URL);
+  });
+
+  it('probes identity.probeUrl as given when set, never the public URL', async () => {
+    // Same reason db.probeUrl exists: inside the api container the public URL
+    // is the container itself, so probing it says nothing about GoTrue.
+    const { fn, calls } = fetchReturning(httpResponse(200, GOTRUE_HEALTH));
+    const report = await aggregateHealth(
+      {
+        ...BASE_CONFIG,
+        publicUrl: 'https://arena.acme.com',
+        identity: {
+          mode: 'sso',
+          methods: ['azure'],
+          allowGuests: false,
+          azure: { clientIdEnv: 'AZURE_CLIENT_ID', secretEnv: 'AZURE_CLIENT_SECRET' },
+          probeUrl: 'http://auth:9999/health',
+        },
+      },
+      { env: HEALTHY_ENV, fetchFn: fn },
+    );
+
+    expect(report.connectors.identity?.status).toBe('ok');
+    expect(report.connectors.identity?.provider).toBe('sso');
+    expect(calls.map((c) => String(c.url))).toContain('http://auth:9999/health');
+    expect(calls.map((c) => String(c.url))).not.toContain('https://arena.acme.com/auth/v1/health');
+  });
+
+  it('accepts a 200 whose body carries no status field', async () => {
+    // capture-service's /health is checked for `status: 'ok'` because an SPA
+    // fallback answers 200 with HTML. GoTrue's body has no such field, so
+    // requiring one would report a perfectly healthy identity service as
+    // degraded on every poll.
+    const { fn } = fetchReturning(httpResponse(200, GOTRUE_HEALTH));
+    const report = await aggregateHealth(
+      { ...BASE_CONFIG, identity: { mode: 'accounts', methods: ['password'], allowGuests: false } },
+      { env: HEALTHY_ENV, fetchFn: fn },
+    );
+    expect(report.connectors.identity?.status).toBe('ok');
+  });
+
+  it('is degraded when the identity service is down, and the rest of the report survives', async () => {
+    const report = await aggregateHealth(
+      { ...BASE_CONFIG, identity: { mode: 'accounts', methods: ['password'], allowGuests: false } },
+      {
+        env: HEALTHY_ENV,
+        fetchFn: (async (url: string) => {
+          if (String(url).includes('/rest/v1/')) return httpResponse(200, { definitions: {} });
+          throw new TypeError('fetch failed for http://auth:9999/health');
+        }) as unknown as typeof globalThis.fetch,
+      },
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.connectors.identity).toEqual({
+      provider: 'accounts',
+      status: 'degraded',
+      detail: HEALTH_DETAILS.unreachable,
+    });
+    expect(report.connectors.db?.status).toBe('ok');
+    expect(report.connectors.capture?.status).toBe('ok');
+  });
+
+  it('separates an upstream error from a missing route', async () => {
+    const config: ViewpointConfig = {
+      ...BASE_CONFIG,
+      identity: { mode: 'accounts', methods: ['password'], allowGuests: false },
+    };
+
+    const errored = await aggregateHealth(config, {
+      env: HEALTHY_ENV,
+      fetchFn: (async (url: string) =>
+        String(url).includes('/rest/v1/')
+          ? httpResponse(200, { definitions: {} })
+          : httpResponse(500, { msg: 'Internal Server Error' })) as unknown as typeof globalThis.fetch,
+    });
+    expect(errored.connectors.identity?.detail).toBe(HEALTH_DETAILS.upstreamError);
+
+    // A 502 from nginx-proxy when the `identity` compose profile is off but the
+    // config says accounts is the misconfiguration this distinguishes.
+    const missing = await aggregateHealth(config, {
+      env: HEALTHY_ENV,
+      fetchFn: (async (url: string) =>
+        String(url).includes('/rest/v1/')
+          ? httpResponse(200, { definitions: {} })
+          : httpResponse(404)) as unknown as typeof globalThis.fetch,
+    });
+    expect(missing.connectors.identity?.detail).toBe(HEALTH_DETAILS.routeUnavailable);
+  });
+
+  it('publishes no probe URL and no env var name', async () => {
+    const { fn } = fetchReturning(httpResponse(200, GOTRUE_HEALTH));
+    const report = await aggregateHealth(
+      {
+        ...BASE_CONFIG,
+        identity: {
+          mode: 'sso',
+          methods: ['azure'],
+          allowGuests: false,
+          azure: { clientIdEnv: 'AZURE_CLIENT_ID', secretEnv: 'AZURE_CLIENT_SECRET' },
+          probeUrl: 'http://auth:9999/health',
+        },
+      },
+      {
+        env: { ...HEALTHY_ENV, AZURE_CLIENT_ID: 'the-client-id', AZURE_CLIENT_SECRET: 'the-secret' },
+        fetchFn: fn,
+      },
+    );
+
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain('auth:9999');
+    expect(serialized).not.toContain('AZURE_CLIENT_ID');
+    expect(serialized).not.toContain('AZURE_CLIENT_SECRET');
+    expect(serialized).not.toContain('://');
   });
 });
 

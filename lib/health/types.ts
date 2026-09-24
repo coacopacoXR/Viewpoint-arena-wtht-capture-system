@@ -57,6 +57,13 @@ export interface HealthReport {
     capture?: ConnectorHealth;
     turn?: ConnectorHealth;
     db?: ConnectorHealth;
+    /**
+     * Sign-in for this deployment. Absent when the config has no identity
+     * block at all; present and `ok` with "no external dependency" when the
+     * deployment deliberately runs with mode 'none', because that is a
+     * complete answer about a real dependency (there is none), not a gap.
+     */
+    identity?: ConnectorHealth;
     modelImport?: ConnectorHealth;
     notifications?: Record<string, ConnectorHealth>;
   };

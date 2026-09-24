@@ -1,6 +1,6 @@
-// Server-side health probes for the two connectors that have no adapter.
+// Server-side health probes for the three connectors that have no adapter.
 //
-// Both are deliberate, and neither is a gap to be "fixed" by inventing an
+// All three are deliberate, and none is a gap to be "fixed" by inventing an
 // adapter:
 //
 //  * `capture.provider: 'local'` — the browser-side LocalCaptureProvider is
@@ -16,8 +16,16 @@
 //    adapter for something that is already portable is the abstraction the plan
 //    explicitly declines, so the health check lives here instead.
 //
-// Both are SERVER-ONLY. They read credentials out of the environment and send
-// them upstream, which is exactly what a browser-reachable module must never do.
+//  * `identity` — docs/plan/13-identity.md makes sign-in a deployment choice
+//    over an off-the-shelf service (Supabase Auth), not a connector with
+//    interchangeable third-party implementations. There is nothing to adapt:
+//    the only question /api/health can usefully answer is whether that one
+//    service answers, and it does so on an internal compose network the
+//    browser cannot reach, so again the probe has to be server-side.
+//
+// All three are SERVER-ONLY. They read credentials out of the environment and
+// send them upstream, which is exactly what a browser-reachable module must
+// never do.
 
 import type { HealthCheckResult } from './types.ts';
 import { HEALTH_DETAILS } from './details.ts';
@@ -175,6 +183,65 @@ export async function probeDatabase(
   try {
     response = await fetchFnOf(options)(endpoint.toString(), {
       headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+      signal: options.signal,
+    });
+  } catch {
+    return { ok: false, detail: HEALTH_DETAILS.unreachable };
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    return { ok: false, detail: HEALTH_DETAILS.rejected };
+  }
+  if (response.status === 404) {
+    return { ok: false, detail: HEALTH_DETAILS.routeUnavailable };
+  }
+  if (!response.ok) {
+    return { ok: false, detail: HEALTH_DETAILS.upstreamError };
+  }
+  return { ok: true, detail: HEALTH_DETAILS.reachable };
+}
+
+/**
+ * Where the bundled identity service (Supabase Auth / GoTrue) answers, as the
+ * api container reaches it: docker-compose.yml's `auth` service on the
+ * backend network, reachable by its compose service name.
+ *
+ * Used when the config sets no identity.probeUrl. It is NOT derived from
+ * config.publicUrl, for the same reason db.probeUrl exists: the public URL
+ * (https://arena.acme.com) points back at nginx-proxy from inside a container,
+ * where it either does not resolve at all or resolves to the wrong thing.
+ */
+export const DEFAULT_AUTH_PROBE_URL = 'http://auth:9999/health';
+
+/**
+ * Is the identity service up?
+ *
+ * GET /health on GoTrue performs no I/O and needs no token, so this is safe to
+ * poll from an unauthenticated endpoint. Unlike capture-service's /health,
+ * GoTrue's body carries no `status` field (it answers with name/version/
+ * description), so the HTTP status alone is the answer: a 200 from anything
+ * else on that port would have to be an HTTP server that is not GoTrue, and
+ * nginx-proxy answers 502 rather than 200 when the service is down.
+ *
+ * No credential is sent and none is echoed. The URL never appears in a detail:
+ * for a self-hosted deployment it is an internal container name, and
+ * /api/health is unauthenticated.
+ */
+export async function probeAuthService(
+  probeUrl: string,
+  options: ProbeOptions = {},
+): Promise<HealthCheckResult> {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(probeUrl);
+  } catch {
+    return { ok: false, detail: HEALTH_DETAILS.configInvalid };
+  }
+
+  let response: Response;
+  try {
+    response = await fetchFnOf(options)(endpoint.toString(), {
+      headers: { Accept: 'application/json' },
       signal: options.signal,
     });
   } catch {

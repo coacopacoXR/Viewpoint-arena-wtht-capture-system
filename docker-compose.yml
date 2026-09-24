@@ -19,7 +19,8 @@
 #                                 coturn service comment below.
 #   n8n           127.0.0.1:5678  loopback only, profile n8n
 #
-#   app, api, capture-service, whisper, db, rest, realtime, ollama   NO PORTS
+#   app, api, capture-service, whisper, db, rest, realtime, auth,
+#   ollama                                                  NO PORTS
 #
 #   Ollama used to publish 127.0.0.1:11434 for `ollama pull` from the host,
 #   but that clashes with a native Ollama on developer machines (port held on
@@ -77,6 +78,12 @@
 #                   'selfHostedCoturn' and the coturn runs in this stack (the
 #                   install.sh default). Off when using Cloudflare TURN or an
 #                   external coturn the operator manages separately.
+#   identity        `auth-init` and `auth` (Supabase Auth / GoTrue), which
+#                   together implement identity.mode 'accounts' and 'sso'
+#                   (docs/plan/13-identity.md). install.sh activates it only
+#                   when the operator chose accounts or sso, so a default
+#                   install runs no auth container at all and behaves exactly
+#                   as it did before identity existed.
 #
 #   GPU is a compose OVERRIDE, not a profile, because a profile cannot add a
 #   device reservation to an existing service:
@@ -595,6 +602,225 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  # ── Identity, part 1: one-shot database preparation ──────────────────────
+  #
+  # GoTrue logs into Postgres as supabase_auth_admin and runs its OWN
+  # migrations inside the `auth` schema (embedded in the binary, applied on
+  # every start). Two things have to be true first, and neither is true by
+  # default on an EXISTING install:
+  #
+  #   * the role needs a password. deploy/db/roles.sql sets it, but that file
+  #     is mounted into docker-entrypoint-initdb.d/, which the image runs only
+  #     on the first boot of an EMPTY data volume. An install that switches
+  #     identity on later would hand GoTrue a role it cannot log in with, and
+  #     `auth` would restart-loop on "password authentication failed" against a
+  #     database that looks perfectly healthy.
+  #   * the `auth` schema must already exist. GoTrue's first migration creates
+  #     auth.users inside it and never creates the schema itself.
+  #
+  # So this service runs deploy/db/auth-init.sql on EVERY `up` with the profile
+  # on, as supabase_admin (a superuser in this image; `postgres` is demoted),
+  # and exits. The script is idempotent, so a fresh volume — where the image and
+  # roles.sql have already done the equivalent work — is unaffected. `auth`
+  # waits for it to exit 0 rather than racing it.
+  #
+  # Same image as db, so an install that already pulled the database pulls
+  # nothing new. The ENTRYPOINT is overridden because the image's own
+  # docker-entrypoint.sh expects to start a server.
+  auth-init:
+    profiles:
+      - identity
+    image: supabase/postgres:${SUPABASE_POSTGRES_IMAGE_TAG:-17.6.1.136}
+    # One-shot, and `no` rather than unless-stopped: a container whose job is to
+    # exit must not be restarted, and `service_completed_successfully` below
+    # only reports success for one that exited 0 and stayed exited.
+    restart: 'no'
+    logging: *logging
+    # backend only. It talks to db and nothing else; it has no reason to be
+    # reachable from the proxy, and no port is published.
+    networks:
+      - backend
+    environment:
+      # PGPASSWORD is what psql authenticates with; POSTGRES_PASSWORD is what
+      # auth-init.sql reads through a `\set` backtick to build the ALTER USER.
+      # Same value, two readers.
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - ./deploy/db/auth-init.sql:/auth-init.sql:ro
+    entrypoint:
+      - psql
+      - -v
+      - ON_ERROR_STOP=1
+      - -h
+      - db
+      - -p
+      - '5432'
+      - -U
+      - supabase_admin
+      - -d
+      - postgres
+      - -f
+      - /auth-init.sql
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ── Identity, part 2: Supabase Auth (GoTrue) ─────────────────────────────
+  #
+  # docs/plan/13-identity.md: how people sign in is a per-deployment choice,
+  # and this is the service that implements 'accounts' and 'sso' for a
+  # self-hosted install. It is not a home-grown login: password storage, reset
+  # flows, OIDC and SAML are exactly the code that should not be written by a
+  # project another company will audit.
+  #
+  # It signs its JWTs with the SAME JWT_SECRET that PostgREST (PGRST_JWT_SECRET)
+  # and Realtime (API_JWT_SECRET) already verify. That single shared secret is
+  # what makes a token from /auth/v1/token acceptable to /rest/v1/ with no glue
+  # code, and what will let Row Level Security say "reviews you took part in"
+  # with auth.uid() without a second trust boundary.
+  #
+  # NO PORTS. Browsers reach it through nginx-proxy at /auth/v1/
+  # (deploy/nginx/proxy.conf) — same origin as everything else, so no client
+  # secret ever has to reach a bundle and the service can be moved or replaced
+  # without rebuilding the app.
+  auth:
+    profiles:
+      - identity
+    image: supabase/gotrue:${GOTRUE_IMAGE_TAG:-v2.197.0}
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      # backend: the database lives only there.
+      - backend
+      # edge: nginx-proxy is only on edge, so this is what makes /auth/v1/
+      # reachable at all — the same reason rest and realtime are on both. It is
+      # also the outbound route GoTrue needs for an SSO provider's token
+      # endpoint (login.microsoftonline.com, Google, a Keycloak host), and
+      # `backend` is internal:true with no route off this host.
+      - edge
+    environment:
+      # 0.0.0.0 INSIDE the container so the compose network can reach it. That
+      # is not the same as publishing a port: there is no `ports:` entry above,
+      # and there must not be one.
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: '9999'
+
+      # The public URL of this deployment, which GoTrue stamps into its own
+      # redirect and callback URLs. The name is API_EXTERNAL_URL and NOT
+      # GOTRUE_API_EXTERNAL_URL: v2.197 reads the unprefixed one, silently
+      # ignores the prefixed one, and then dies at boot with "required key
+      # API_EXTERNAL_URL missing value" because the field is mandatory. It must
+      # be an absolute URL — an empty value passes the presence check and then
+      # fails URL parsing.
+      API_EXTERNAL_URL: ${PUBLIC_URL:-https://localhost}/auth/v1
+      GOTRUE_SITE_URL: ${PUBLIC_URL:-https://localhost}
+      # Where a browser may be sent after signing in. Comma-separated with NO
+      # spaces after a comma (GoTrue splits without trimming, so " https://b"
+      # never matches), and every entry is compiled as a glob at boot where a
+      # malformed pattern PANICS rather than logging. Hence one exact origin.
+      GOTRUE_URI_ALLOW_LIST: ${PUBLIC_URL:-https://localhost}
+
+      GOTRUE_DB_DRIVER: postgres
+      # The role deploy/db/auth-init.sql gives a password on every `up`, which
+      # is what makes an existing volume work as well as a fresh one.
+      # POSTGRES_PASSWORD is 64 hex characters from `openssl rand -hex 32`, so
+      # it needs no URL escaping in the userinfo part.
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD:-}@db:5432/postgres
+
+      # The same secret as rest and realtime — see the comment above.
+      GOTRUE_JWT_SECRET: ${JWT_SECRET:-}
+      GOTRUE_JWT_EXP: '3600'
+      # No default in GoTrue for either of these two: without them a token
+      # carries an empty `aud` and no default group, and PostgREST's role
+      # resolution has nothing to work from.
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+
+      # ── EVERY boolean and number below carries an explicit default, and
+      # that is load-bearing rather than tidy. GoTrue reads its environment
+      # with envconfig, which applies a field's own default only when the
+      # variable is UNSET. A variable that is SET BUT EMPTY is parsed, and
+      # ParseBool("") fails, so a `${SOME_FLAG:-}` here would crash the
+      # container at boot instead of turning the feature off. Do not "clean up"
+      # one of these to an empty default.
+      GOTRUE_DISABLE_SIGNUP: ${GOTRUE_DISABLE_SIGNUP:-false}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
+      # There is no mail server in this stack, so GoTrue confirms addresses
+      # itself and an account works the moment it is created. The cost is that
+      # "I lost my password" cannot email a reset link: point GoTrue at a real
+      # SMTP server (GOTRUE_SMTP_*) and set this to false if resets are needed.
+      GOTRUE_MAILER_AUTOCONFIRM: 'true'
+
+      # ── SSO providers ────────────────────────────────────────────────────
+      # GoTrue's naming is GOTRUE_EXTERNAL_<PROVIDER>_<FIELD>, with KEYCLOAK as
+      # one word. Only _ENABLED turns a provider on and every one defaults to
+      # false, so the empty client ids and secrets below are inert: GoTrue
+      # validates a provider when a request starts that provider's flow, not at
+      # boot, so a half-filled provider cannot crash the service.
+      GOTRUE_EXTERNAL_AZURE_ENABLED: ${GOTRUE_EXTERNAL_AZURE_ENABLED:-false}
+      GOTRUE_EXTERNAL_AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_AZURE_SECRET: ${AZURE_CLIENT_SECRET:-}
+      GOTRUE_EXTERNAL_AZURE_REDIRECT_URI: ${PUBLIC_URL:-https://localhost}/auth/v1/callback
+      # The tenant, WITH its scheme: GoTrue appends /oauth2/v2.0/authorize and
+      # /oauth2/v2.0/token to this value verbatim. Empty means Microsoft's own
+      # multi-tenant 'common' endpoint, which lets ANY work or school account
+      # sign in — install.sh shows that default out loud rather than hiding it.
+      GOTRUE_EXTERNAL_AZURE_URL: ${AZURE_TENANT_URL:-}
+
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${GOTRUE_EXTERNAL_GOOGLE_ENABLED:-false}
+      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${PUBLIC_URL:-https://localhost}/auth/v1/callback
+      # GOTRUE_EXTERNAL_GOOGLE_URL is deliberately absent. v2.197 ignores it
+      # and logs a warning, because Google always resolves through OIDC
+      # discovery against a fixed issuer.
+
+      GOTRUE_EXTERNAL_KEYCLOAK_ENABLED: ${GOTRUE_EXTERNAL_KEYCLOAK_ENABLED:-false}
+      GOTRUE_EXTERNAL_KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_KEYCLOAK_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+      GOTRUE_EXTERNAL_KEYCLOAK_REDIRECT_URI: ${PUBLIC_URL:-https://localhost}/auth/v1/callback
+      # The REALM url, not the server url: GoTrue appends
+      # /protocol/openid-connect/{auth,token,userinfo} to it, and refuses to
+      # start the flow at all when it is empty. A trailing slash is stripped.
+      GOTRUE_EXTERNAL_KEYCLOAK_URL: ${KEYCLOAK_REALM_URL:-}
+
+      # ── SAML ─────────────────────────────────────────────────────────────
+      # Off unless explicitly enabled, and the caution is specific: SAML is the
+      # one provider GoTrue validates AT BOOT, so GOTRUE_SAML_ENABLED=true with
+      # an unusable private key is a fatal configuration error rather than a
+      # feature that stays unused. The key must be standard (not URL-safe)
+      # base64 of a PKCS#1 DER RSA key with exponent 65537 and at least 2048
+      # bits. A provider must also be registered through the admin API before
+      # anyone can sign in with it; it lands in auth.saml_providers.
+      GOTRUE_SAML_ENABLED: ${GOTRUE_SAML_ENABLED:-false}
+      GOTRUE_SAML_PRIVATE_KEY: ${GOTRUE_SAML_PRIVATE_KEY:-}
+    depends_on:
+      # Ordering, not just preference: without the password and the schema in
+      # place, GoTrue's first migration fails and the container exits.
+      auth-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    healthcheck:
+      # GoTrue's own /health: HTTP 200 + JSON, no authentication and no
+      # Host-header requirement, so a spider is enough. wget is BusyBox's from
+      # the image's alpine base — this is the check Supabase's own self-host
+      # compose uses.
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://localhost:9999/health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # The first start runs 75 embedded migrations against the database.
+      start_period: 30s
 
   # ── Optional workflow engine (T4.8) ──────────────────────────────────────
   n8n:

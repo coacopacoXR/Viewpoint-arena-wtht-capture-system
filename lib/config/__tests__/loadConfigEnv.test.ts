@@ -160,3 +160,53 @@ describe('loadConfig with VIEWPOINT_CONFIG', () => {
     );
   });
 });
+
+// An SSO provider whose client secret is missing fails at SIGN-IN time with an
+// opaque redirect error, long after install.sh reported success. checkEnvVars
+// walks every key ending in `Env` wherever it sits in the config, so the
+// identity block's provider sub-blocks are covered by the same rule as plm's —
+// which is worth pinning, because they are nested one level deeper than any
+// other *Env field in the schema.
+describe('checkEnvVars — identity', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    for (const [k, v] of Object.entries(REQUIRED_ENV)) vi.stubEnv(k, v);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  const ssoConfig = {
+    ...validConfig,
+    identity: {
+      mode: 'sso' as const,
+      methods: ['azure' as const],
+      allowGuests: false,
+      azure: { clientIdEnv: 'AZURE_CLIENT_ID', secretEnv: 'AZURE_CLIENT_SECRET' },
+    },
+  };
+
+  it('loads when both identity variables are set', async () => {
+    vi.stubEnv('AZURE_CLIENT_ID', 'the-client-id');
+    vi.stubEnv('AZURE_CLIENT_SECRET', 'the-client-secret');
+    vi.stubEnv('VIEWPOINT_CONFIG', JSON.stringify(ssoConfig));
+
+    const { loadConfig } = await import('../loadConfig.ts');
+    await expect(loadConfig()).resolves.toMatchObject({
+      identity: { mode: 'sso', methods: ['azure'] },
+    });
+  });
+
+  it('names the missing identity variable and its config path', async () => {
+    vi.stubEnv('AZURE_CLIENT_ID', 'the-client-id');
+    vi.stubEnv('AZURE_CLIENT_SECRET', '');
+    vi.stubEnv('VIEWPOINT_CONFIG', JSON.stringify(ssoConfig));
+
+    const { loadConfig } = await import('../loadConfig.ts');
+    await expect(loadConfig()).rejects.toThrow(
+      /identity\.azure\.secretEnv 'AZURE_CLIENT_SECRET' is not set/,
+    );
+  });
+});
