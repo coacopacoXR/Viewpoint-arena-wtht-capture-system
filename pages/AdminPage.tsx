@@ -26,10 +26,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useAdminGate } from '../lib/access/useAdminGate.ts';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import {
-  listAllCurations,
   deleteCuration,
   setCurationListed,
-  type CurationSummary,
 } from '../lib/curationsRepo';
 import { listAuditEvents, type AuditEvent, type AuditListResult } from '../lib/auditRepo';
 import AdminUnlockPage from './AdminUnlockPage.tsx';
@@ -38,7 +36,7 @@ import AiSettingsSection from '../components/UI/AiSettingsSection';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
 import { supabase } from '../lib/supabase';
 
-type Section = 'people' | 'reviews' | 'ai' | 'labels' | 'access' | 'activity';
+type Section = 'people' | 'reviews' | 'models' | 'ai' | 'labels' | 'access' | 'activity';
 
 // ─── Gate logic ──────────────────────────────────────────────────────────────
 
@@ -251,6 +249,7 @@ const AdminContent: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode })
   const sections: { id: Section; label: string }[] = [
     ...(mode !== 'none' ? [{ id: 'people' as Section, label: 'People' }] : []),
     { id: 'reviews', label: 'Design reviews' },
+    { id: 'models', label: 'Models' },
     { id: 'ai', label: 'AI' },
     { id: 'labels', label: 'Labels' },
     { id: 'access', label: 'Access' },
@@ -307,7 +306,8 @@ const AdminContent: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode })
         {/* Content */}
         <main className="flex-1 px-8 py-8 max-w-3xl">
           {section === 'people' && mode !== 'none' && <PeopleSection />}
-          {section === 'reviews' && <ReviewsSection />}
+          {section === 'reviews' && <ReviewsSection mode={mode} />}
+          {section === 'models' && <ModelsSection mode={mode} />}
           {/* In passphrase mode the admin cookie rides along on a plain
               same-origin fetch; in accounts/sso mode the token has to be
               attached, which is what adminFetch does. */}
@@ -652,24 +652,60 @@ const AddPersonForm: React.FC<{ onClose: () => void; onCreated: () => void }> = 
 
 // ─── Reviews section ─────────────────────────────────────────────────────────
 
-const ReviewsSection: React.FC = () => {
-  const [curations, setCurations] = useState<CurationSummary[]>([]);
+interface AdminReview {
+  id: string;
+  title: string;
+  listed: boolean;
+  archived: boolean;
+  owner_id: string | null;
+  owner_name: string | null;
+  owner_email: string | null;
+  member_count: number;
+  revisions_count: number;
+  last_meeting_at: string | null;
+  updated_at: string;
+  created_at: string;
+}
+
+const ReviewsSection: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode }) => {
+  const [reviews, setReviews] = useState<AdminReview[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<'active' | 'archived' | 'all'>('active');
+  const [search, setSearch] = useState('');
+  const [transferId, setTransferId] = useState<string | null>(null);
+  const [transferEmail, setTransferEmail] = useState('');
+  const [transferError, setTransferError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    const list = await listAllCurations();
-    setCurations(list);
+    try {
+      const res = mode === 'none'
+        ? await fetch('/api/admin/reviews')
+        : await adminFetch('/api/admin/reviews');
+      if (res.ok) {
+        const data = (await res.json()) as { reviews: AdminReview[] };
+        setReviews(data.reviews);
+      }
+    } catch {
+      // Unreachable — stay on the loaded state.
+    }
     setLoaded(true);
-  }, []);
+  }, [mode]);
 
   useEffect(() => { void reload(); }, [reload]);
 
-  const handleToggleListed = async (c: CurationSummary) => {
-    const ok = await setCurationListed(c.id, !c.listed);
+  const filtered = reviews.filter((r) => {
+    if (filter === 'active' && r.archived) return false;
+    if (filter === 'archived' && !r.archived) return false;
+    if (search && !r.title.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  const handleToggleListed = async (r: AdminReview) => {
+    const ok = await setCurationListed(r.id, !r.listed);
     if (ok) {
-      setCurations((prev) =>
-        prev.map((x) => (x.id === c.id ? { ...x, listed: !x.listed } : x)),
+      setReviews((prev) =>
+        prev.map((x) => (x.id === r.id ? { ...x, listed: !x.listed } : x)),
       );
     }
   };
@@ -681,63 +717,398 @@ const ReviewsSection: React.FC = () => {
     }
     const ok = await deleteCuration(id);
     if (ok) {
-      setCurations((prev) => prev.filter((x) => x.id !== id));
+      setReviews((prev) => prev.filter((x) => x.id !== id));
       setConfirmDeleteId(null);
     }
   };
 
   const cancelDelete = () => setConfirmDeleteId(null);
 
+  const handleArchive = async (r: AdminReview) => {
+    const fetchFn = mode === 'none'
+      ? (path: string, opts: RequestInit) => fetch(path, opts)
+      : (path: string, opts: RequestInit) => adminFetch(path, opts);
+    const res = await fetchFn(`/api/admin/reviews?id=${encodeURIComponent(r.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ archived: !r.archived }),
+    });
+    if (res.ok) {
+      setReviews((prev) =>
+        prev.map((x) => (x.id === r.id ? { ...x, archived: !x.archived } : x)),
+      );
+    }
+  };
+
+  const handleTransfer = async (id: string) => {
+    if (!transferEmail.trim()) return;
+    setTransferError(null);
+    const fetchFn = mode === 'none'
+      ? (path: string, opts: RequestInit) => fetch(path, opts)
+      : (path: string, opts: RequestInit) => adminFetch(path, opts);
+    const res = await fetchFn(`/api/admin/reviews?id=${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ owner_email: transferEmail.trim() }),
+    });
+    if (res.ok) {
+      setTransferId(null);
+      setTransferEmail('');
+      await reload();
+    } else {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setTransferError(data.error ?? 'Transfer failed.');
+    }
+  };
+
   return (
     <section>
       <h2 className="text-sm font-bold font-mono text-gray-400 uppercase tracking-widest mb-4">
-        Design reviews{loaded && curations.length > 0 ? ` · ${curations.length}` : ''}
+        Design reviews{loaded && filtered.length > 0 ? ` · ${filtered.length}` : ''}
       </h2>
+
+      {/* Filters */}
+      <div className="flex items-center gap-3 mb-3">
+        <div className="flex items-center gap-1">
+          {(['active', 'archived', 'all'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`text-[10px] font-mono px-2 py-1 rounded border transition-colors ${
+                filter === f
+                  ? 'border-white/30 text-white bg-white/10'
+                  : 'border-white/10 text-gray-500 hover:text-white hover:border-white/30'
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        <input
+          type="text"
+          placeholder="Search title…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 text-xs bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-white placeholder:text-gray-500 focus:outline-none focus:border-white/30"
+        />
+      </div>
+
       {!loaded ? (
         <p className="text-gray-600 text-xs">Loading…</p>
-      ) : curations.length === 0 ? (
-        <p className="text-gray-600 text-xs">No design reviews yet.</p>
+      ) : filtered.length === 0 ? (
+        <p className="text-gray-600 text-xs">No design reviews match.</p>
       ) : (
-        <div className="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
-          {curations.map((c) => (
+        <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
+          {filtered.map((r) => (
             <div
-              key={c.id}
-              className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-xl px-4 py-3"
+              key={r.id}
+              className="flex flex-col gap-2 bg-white/5 border border-white/10 rounded-xl px-4 py-3"
             >
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate">{c.title || 'Untitled'}</p>
-                <p className="text-[10px] font-mono text-gray-500 mt-0.5">
-                  {new Date(c.updated_at).toLocaleDateString()} · {c.listed ? 'Listed' : 'Link-only'}
-                </p>
-              </div>
-              <button
-                onClick={() => handleToggleListed(c)}
-                className="text-[10px] font-mono px-2 py-1 rounded border border-white/10 hover:border-white/30 transition-colors flex-shrink-0"
-              >
-                {c.listed ? 'Make link-only' : 'List in lobby'}
-              </button>
-              {confirmDeleteId === c.id ? (
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate">
+                    {r.title || 'Untitled'}
+                    {r.archived && (
+                      <span className="ml-2 text-[10px] font-mono text-gray-500 normal-case">archived</span>
+                    )}
+                  </p>
+                  <p className="text-[10px] font-mono text-gray-500 mt-0.5">
+                    {new Date(r.updated_at).toLocaleDateString()}
+                    {' · '}
+                    {r.listed ? 'Listed' : 'Link-only'}
+                    {' · '}
+                    {r.member_count} member{r.member_count !== 1 ? 's' : ''}
+                    {' · '}
+                    {r.revisions_count} revision{r.revisions_count !== 1 ? 's' : ''}
+                    {r.last_meeting_at && (
+                      <>
+                        {' · Last meeting '}
+                        {new Date(r.last_meeting_at).toLocaleDateString()}
+                      </>
+                    )}
+                  </p>
+                  {mode !== 'none' && r.owner_email && (
+                    <p className="text-[10px] font-mono text-gray-500 mt-0.5">
+                      Owner: {r.owner_name || r.owner_email}
+                    </p>
+                  )}
+                </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <button
-                    onClick={() => handleDelete(c.id)}
-                    className="text-[10px] font-mono px-2 py-1 rounded bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors"
+                    onClick={() => handleToggleListed(r)}
+                    className="text-[10px] font-mono px-2 py-1 rounded border border-white/10 hover:border-white/30 transition-colors"
                   >
-                    Confirm delete
+                    {r.listed ? 'Make link-only' : 'List in lobby'}
                   </button>
                   <button
-                    onClick={cancelDelete}
+                    onClick={() => handleArchive(r)}
+                    className="text-[10px] font-mono px-2 py-1 rounded border border-white/10 hover:border-white/30 transition-colors"
+                  >
+                    {r.archived ? 'Unarchive' : 'Archive'}
+                  </button>
+                  {mode !== 'none' && (
+                    <button
+                      onClick={() => { setTransferId(r.id); setTransferEmail(''); setTransferError(null); }}
+                      className="text-[10px] font-mono px-2 py-1 rounded border border-white/10 hover:border-white/30 transition-colors"
+                    >
+                      Transfer
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Transfer form */}
+              {transferId === r.id && (
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="email"
+                    placeholder="New owner email…"
+                    value={transferEmail}
+                    onChange={(e) => setTransferEmail(e.target.value)}
+                    className="flex-1 text-xs bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-white placeholder:text-gray-500 focus:outline-none focus:border-white/30"
+                  />
+                  <button
+                    onClick={() => handleTransfer(r.id)}
+                    className="text-[10px] font-mono px-2 py-1 rounded bg-white/10 text-white hover:bg-white/20 transition-colors"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => { setTransferId(null); setTransferError(null); }}
                     className="text-[10px] font-mono px-2 py-1 rounded text-gray-500 hover:text-white transition-colors"
                   >
                     Cancel
                   </button>
+                  {transferError && (
+                    <span className="text-[10px] text-red-400">{transferError}</span>
+                  )}
                 </div>
-              ) : (
-                <button
-                  onClick={() => handleDelete(c.id)}
-                  className="text-[10px] font-mono px-2 py-1 rounded text-gray-500 hover:text-red-400 transition-colors flex-shrink-0"
-                >
-                  Delete
-                </button>
+              )}
+
+              {/* Delete confirm */}
+              <div className="flex items-center gap-1">
+                {confirmDeleteId === r.id ? (
+                  <>
+                    <button
+                      onClick={() => handleDelete(r.id)}
+                      className="text-[10px] font-mono px-2 py-1 rounded bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors"
+                    >
+                      Confirm delete
+                    </button>
+                    <button
+                      onClick={cancelDelete}
+                      className="text-[10px] font-mono px-2 py-1 rounded text-gray-500 hover:text-white transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => handleDelete(r.id)}
+                    className="text-[10px] font-mono px-2 py-1 rounded text-gray-500 hover:text-red-400 transition-colors"
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
+
+// ─── Models section ──────────────────────────────────────────────────────────
+
+interface ModelRevisionRef {
+  id: string;
+  review_id: string;
+  review_title: string;
+  line: string;
+  revision: string;
+}
+
+interface CurationRef {
+  review_id: string;
+  review_title: string;
+}
+
+interface AdminModelEntry {
+  hash: string;
+  file_name: string;
+  size: number;
+  content_type: string;
+  uploaded_at: string;
+  uploaded_by_name: string;
+  revisions: ModelRevisionRef[];
+  curation_refs: CurationRef[];
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+const ModelsSection: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode }) => {
+  const [models, setModels] = useState<AdminModelEntry[]>([]);
+  const [totalStorage, setTotalStorage] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDeleteHash, setConfirmDeleteHash] = useState<string | null>(null);
+
+  const fetchFn = useCallback((path: string, opts: RequestInit = {}) => {
+    return mode === 'none' ? fetch(path, opts) : adminFetch(path, opts);
+  }, [mode]);
+
+  const reload = useCallback(async () => {
+    try {
+      const res = await fetchFn('/api/admin/models');
+      if (res.ok) {
+        const data = (await res.json()) as { models: AdminModelEntry[]; total_storage: number };
+        setModels(data.models);
+        setTotalStorage(data.total_storage);
+      } else if (res.status === 503) {
+        setError('Storage is not available on this deployment.');
+      }
+    } catch {
+      setError('Could not reach the server.');
+    }
+    setLoaded(true);
+  }, [fetchFn]);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  const handleDeleteRevision = async (revisionId: string) => {
+    const res = await fetchFn(
+      `/api/admin/models?type=revision&id=${encodeURIComponent(revisionId)}`,
+      { method: 'DELETE' },
+    );
+    if (res.ok) {
+      await reload();
+    } else {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(data.error ?? 'Delete failed.');
+    }
+  };
+
+  const handleDeleteFile = async (hash: string) => {
+    if (confirmDeleteHash !== hash) {
+      setConfirmDeleteHash(hash);
+      return;
+    }
+    const res = await fetchFn(
+      `/api/admin/models?type=file&hash=${encodeURIComponent(hash)}`,
+      { method: 'DELETE' },
+    );
+    if (res.ok) {
+      setConfirmDeleteHash(null);
+      await reload();
+    } else {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(data.error ?? 'Delete failed.');
+    }
+  };
+
+  const hasAnyRef = (m: AdminModelEntry) => m.revisions.length > 0 || m.curation_refs.length > 0;
+
+  return (
+    <section>
+      <h2 className="text-sm font-bold font-mono text-gray-400 uppercase tracking-widest mb-4">
+        Models{loaded && models.length > 0 ? ` · ${models.length}` : ''}
+        {loaded && totalStorage > 0 && (
+          <span className="ml-2 text-gray-500 normal-case">· {formatBytes(totalStorage)}</span>
+        )}
+      </h2>
+
+      {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
+
+      {!loaded ? (
+        <p className="text-gray-600 text-xs">Loading…</p>
+      ) : models.length === 0 ? (
+        <p className="text-gray-600 text-xs">No model files stored yet.</p>
+      ) : (
+        <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
+          {models.map((m) => (
+            <div
+              key={m.hash}
+              className="flex flex-col gap-1.5 bg-white/5 border border-white/10 rounded-xl px-4 py-3"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate">
+                    {m.file_name || m.hash.slice(0, 12)}
+                  </p>
+                  <p className="text-[10px] font-mono text-gray-500 mt-0.5">
+                    {formatBytes(m.size)}
+                    {m.uploaded_by_name && ` · ${m.uploaded_by_name}`}
+                    {m.uploaded_at && ` · ${new Date(m.uploaded_at).toLocaleDateString()}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {confirmDeleteHash === m.hash ? (
+                    hasAnyRef(m) ? (
+                      <button
+                        onClick={() => setConfirmDeleteHash(null)}
+                        className="text-[10px] font-mono px-2 py-1 rounded text-gray-500 hover:text-white transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => handleDeleteFile(m.hash)}
+                          className="text-[10px] font-mono px-2 py-1 rounded bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteHash(null)}
+                          className="text-[10px] font-mono px-2 py-1 rounded text-gray-500 hover:text-white transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )
+                  ) : (
+                    <button
+                      onClick={() => handleDeleteFile(m.hash)}
+                      disabled={hasAnyRef(m)}
+                      className="text-[10px] font-mono px-2 py-1 rounded text-gray-500 hover:text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      title={hasAnyRef(m) ? 'Still referenced — delete revisions first' : 'Delete file'}
+                    >
+                      Delete file
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* References */}
+              {m.revisions.length > 0 && (
+                <div className="pl-2 space-y-0.5">
+                  {m.revisions.map((rev) => (
+                    <div key={rev.id} className="flex items-center gap-2 text-[10px] font-mono text-gray-500">
+                      <span>
+                        {rev.review_title} · {rev.line} {rev.revision}
+                      </span>
+                      <button
+                        onClick={() => handleDeleteRevision(rev.id)}
+                        className="text-gray-600 hover:text-red-400 transition-colors"
+                      >
+                        remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {m.curation_refs.length > 0 && (
+                <div className="pl-2 space-y-0.5">
+                  {m.curation_refs.map((ref) => (
+                    <p key={ref.review_id} className="text-[10px] font-mono text-gray-500">
+                      Current model in: {ref.review_title}
+                    </p>
+                  ))}
+                </div>
               )}
             </div>
           ))}

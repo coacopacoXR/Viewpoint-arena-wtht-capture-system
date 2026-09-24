@@ -69,6 +69,14 @@ export interface ModelStore {
 
   /** The recorded metadata, or null when the store has no such object. */
   head(hash: string): Promise<ModelMeta | null>;
+
+  /**
+   * Remove the object and its sidecar. Returns true when something was removed,
+   * false when the hash was not stored. A hash that does not match MODEL_HASH_RE
+   * is treated as absent (false), not as an error — the admin console calls
+   * this after checking references, and a bad hash means "nothing to do".
+   */
+  delete(hash: string): Promise<boolean>;
 }
 
 /**

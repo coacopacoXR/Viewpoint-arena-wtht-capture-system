@@ -100,6 +100,26 @@ export class SupabaseModelStore implements ModelStore {
     return parseSidecar(await res.text());
   }
 
+  async delete(hash: string): Promise<boolean> {
+    if (!isModelHash(hash)) return false;
+    const objectRes = await this.fetchFn(this.objectUrl(hash), {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    const sidecarRes = await this.fetchFn(this.objectUrl(sidecarName(hash)), {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    // Storage returns 400/404 for a missing object. Either success or absent
+    // counts: the admin console called this because references were gone, and
+    // a file that was already half-cleaned is not a failure.
+    const objectGone = ABSENT_STATUSES.has(objectRes.status);
+    const sidecarGone = ABSENT_STATUSES.has(sidecarRes.status);
+    if (!objectRes.ok && !objectGone) throw this.storageError('delete', hash, objectRes.status);
+    if (!sidecarRes.ok && !sidecarGone) throw this.storageError('delete', sidecarName(hash), sidecarRes.status);
+    return !objectGone || !sidecarGone;
+  }
+
   private async upload(path: string, body: Buffer, contentType: string): Promise<void> {
     const res = await this.fetchFn(this.objectUrl(path), {
       method: 'POST',

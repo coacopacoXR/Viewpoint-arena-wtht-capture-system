@@ -66,6 +66,18 @@ function fakeStorage() {
         return new Response(JSON.stringify({ Key: path }), { status: 200 });
       }
 
+      if ((init?.method ?? 'GET') === 'DELETE') {
+        const had = objects.has(path);
+        objects.delete(path);
+        if (!had) {
+          return new Response(
+            JSON.stringify({ statusCode: '400', error: 'Not found', message: 'Object not found' }),
+            { status: 400 },
+          );
+        }
+        return new Response(null, { status: 204 });
+      }
+
       const found = objects.get(path);
       if (!found) {
         return new Response(
@@ -184,6 +196,34 @@ describe('SupabaseModelStore.get / head', () => {
     storage.failEveryRequestWith(503);
     await expect(store.get(HASH)).rejects.toThrow(/HTTP 503/);
     await expect(store.head(HASH)).rejects.toThrow(/HTTP 503/);
+  });
+});
+
+describe('SupabaseModelStore.delete', () => {
+  it('removes both the object and the sidecar, and reports true', async () => {
+    const { storage, store } = makeStore();
+    await store.put(BYTES, META);
+    expect(await store.delete(HASH)).toBe(true);
+    expect(storage.objects.has(HASH)).toBe(false);
+    expect(storage.objects.has(`${HASH}.json`)).toBe(false);
+    // The DELETE calls carried the service-role key as bearer and apikey.
+    const deleteCalls = storage.calls.filter((c) => c.method === 'DELETE');
+    expect(deleteCalls).toHaveLength(2);
+    for (const call of deleteCalls) {
+      expect(call.headers['Authorization']).toBe(`Bearer ${SERVICE_ROLE_KEY}`);
+      expect(call.headers['apikey']).toBe(SERVICE_ROLE_KEY);
+    }
+  });
+
+  it('reports false for a hash that was never stored', async () => {
+    const { store } = makeStore();
+    expect(await store.delete(HASH)).toBe(false);
+  });
+
+  it('refuses a non-hash value without making a request', async () => {
+    const { storage, store } = makeStore();
+    expect(await store.delete('../etc/passwd')).toBe(false);
+    expect(storage.fetchFn).not.toHaveBeenCalled();
   });
 });
 

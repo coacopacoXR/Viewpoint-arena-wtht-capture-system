@@ -206,3 +206,23 @@ describe('LocalModelStore.get / head', () => {
     expect(await isPresent(HASH)).toBe(true);
   });
 });
+
+describe('LocalModelStore.delete', () => {
+  it('removes both the object and the sidecar, and reports true', async () => {
+    await store.put(BYTES, META);
+    expect(await store.delete(HASH)).toBe(true);
+    expect(entries()).toEqual([]);
+    expect(await store.get(HASH)).toBeNull();
+    expect(await store.head(HASH)).toBeNull();
+  });
+
+  it('reports false for a hash that was never stored', async () => {
+    expect(await store.delete(HASH)).toBe(false);
+  });
+
+  it('refuses a non-hash value without touching the directory', async () => {
+    await store.put(BYTES, META);
+    expect(await store.delete('../secret')).toBe(false);
+    expect(entries()).toEqual([HASH, `${HASH}.json`]);
+  });
+});

@@ -87,6 +87,22 @@ export class LocalModelStore implements ModelStore {
     return parseSidecar(raw);
   }
 
+  async delete(hash: string): Promise<boolean> {
+    if (!isModelHash(hash)) return false;
+    const objectPath = join(this.dir, hash);
+    const sidecarPath = join(this.dir, sidecarName(hash));
+    let removed = false;
+    if (existsSync(objectPath)) {
+      rmSync(objectPath);
+      removed = true;
+    }
+    if (existsSync(sidecarPath)) {
+      rmSync(sidecarPath);
+      removed = true;
+    }
+    return removed;
+  }
+
   /**
    * Write to a temp file in the SAME directory and rename over the destination.
    *
