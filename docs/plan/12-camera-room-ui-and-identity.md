@@ -6,7 +6,7 @@ user's own terms, with the reasoning kept rather than compressed into tickets.
 **Status (2026-09-23, night):**
 - **A1–A4: done.** `d81579d` did A1 and A2; `3a735f7` did A3 and A4.
 - **B: done** as Option B (`a43a5bf`).
-- **C: not started**, waiting on the user's choice.
+- **C: decided 2026-09-24**: all three modes, chosen per deployment. Plan in `13-identity.md`.
 - **D:**
   - The Vercel config gap is closed (`6187662`).
   - The spend ceiling is documented in the README rather than built. The
