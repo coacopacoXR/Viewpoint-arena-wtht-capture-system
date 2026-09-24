@@ -6,18 +6,49 @@ import { clsx } from 'clsx';
 import { parseModelFile, validateModelFile } from '../../utils/modelLoader';
 import { usePresence } from '../../lib/PresenceContext';
 
+// Find all ancestor ids of a node in the tree (excluding the node itself)
+function findAncestorIds(root: SceneNode, targetId: string): string[] {
+  const ancestors: string[] = [];
+
+  function search(node: SceneNode, path: string[]): boolean {
+    if (node.id === targetId) {
+      ancestors.push(...path);
+      return true;
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        if (search(child, [...path, node.id])) return true;
+      }
+    }
+    return false;
+  }
+
+  search(root, []);
+  return ancestors;
+}
+
 const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth }) => {
     const objectState = useStore(state => state.objectStates[node.id]);
     const toggleVisibility = useStore(state => state.toggleNodeVisibility);
     const toggleExpanded = useStore(state => state.toggleNodeExpanded);
     const selectNode = useStore(state => state.selectNode);
-
-    if (!objectState) return null;
+    const rowRef = useRef<HTMLDivElement>(null);
+    const prevSelectedRef = useRef(false);
 
     const isGroup = node.type === 'GROUP';
-    const isExpanded = objectState.expanded;
-    const isSelected = objectState.selected;
-    const isVisible = objectState.visible;
+    const isExpanded = objectState?.expanded ?? false;
+    const isSelected = objectState?.selected ?? false;
+    const isVisible = objectState?.visible ?? true;
+
+    // Scroll into view when this node becomes selected (only on selection change)
+    useEffect(() => {
+      if (isSelected && !prevSelectedRef.current && rowRef.current) {
+        rowRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+      prevSelectedRef.current = isSelected;
+    }, [isSelected]);
+
+    if (!objectState) return null;
 
     const handleToggleExpand = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -35,11 +66,12 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
 
     return (
         <div className="flex flex-col select-none">
-            <div 
+            <div
+                ref={rowRef}
                 className={clsx(
                     "flex items-center h-7 px-2 cursor-pointer transition-colors border-l-2",
-                    isSelected 
-                        ? "bg-blue-50 border-blue-500" 
+                    isSelected
+                        ? "bg-blue-50 border-blue-500"
                         : "hover:bg-gray-50 border-transparent"
                 )}
                 style={{ paddingLeft: `${depth * 12 + 4}px` }}
@@ -100,6 +132,8 @@ const SceneTree: React.FC = () => {
     const setIsImporting = useStore(state => state.setIsImporting);
     const setImportedModel = useStore(state => state.setImportedModel);
     const importedSceneTree = useStore(state => state.importedSceneTree);
+    const bicycleSceneTree = useStore(state => state.bicycleSceneTree);
+    const headphonesSceneTree = useStore(state => state.headphonesSceneTree);
     const importedFileName = useStore(state => state.importedFileName);
     const importedScale = useStore(state => state.importedScale);
     const setImportedScale = useStore(state => state.setImportedScale);
@@ -109,7 +143,25 @@ const SceneTree: React.FC = () => {
     const { broadcastModelChange } = usePresence();
     const [importError, setImportError] = useState<string | null>(null);
 
-    const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
+    const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree, bicycleSceneTree, headphonesSceneTree);
+    const objectStates = useStore(state => state.objectStates);
+    const toggleExpanded = useStore(state => state.toggleNodeExpanded);
+
+    // Auto-expand ancestors when a node is selected (from 3D view or elsewhere)
+    const prevSelectedIdRef = useRef<string | null>(null);
+    useEffect(() => {
+      const selectedId = Object.keys(objectStates).find(id => objectStates[id]?.selected) ?? null;
+      if (selectedId && selectedId !== prevSelectedIdRef.current) {
+        const ancestors = findAncestorIds(currentTree, selectedId);
+        ancestors.forEach(ancestorId => {
+          const ancestorState = objectStates[ancestorId];
+          if (ancestorState && !ancestorState.expanded) {
+            toggleExpanded(ancestorId);
+          }
+        });
+      }
+      prevSelectedIdRef.current = selectedId;
+    }, [objectStates, currentTree, toggleExpanded]);
 
     // Auto-clear success message after 5 seconds
     useEffect(() => {

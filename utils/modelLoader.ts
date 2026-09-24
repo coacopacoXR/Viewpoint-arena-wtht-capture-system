@@ -94,12 +94,37 @@ const hasRenderableDescendant = (object: THREE.Object3D): boolean => {
     return object.children.some(child => hasRenderableDescendant(child));
 };
 
-const buildSceneTree = (object: THREE.Object3D, counter: { value: number }): SceneNode | null => {
+const FALLBACK_NAME = /^(Mesh|Group) \d+$/;
+
+/**
+ * Exporters wrap parts in groups that hold exactly one thing: Sketchfab-style
+ * GLBs nest every model six levels deep ("Sketchfab_model" > "root" > ...),
+ * and CAD exports put each mesh in a same-named group ("Hook Left" > "Hook
+ * Left"). Each such group is shown as its only child instead, so the tree reads
+ * as the product rather than the file. The child keeps its id (that is what the
+ * 3D objects carry), and takes the group's name when its own is a placeholder.
+ * Collapsed groups simply have no row; their meshes are still reachable.
+ */
+export const collapseSingleChildGroups = (node: SceneNode): SceneNode => {
+    let current = node;
+    while (current.type === 'GROUP' && current.children?.length === 1) {
+        const only = current.children[0];
+        current = FALLBACK_NAME.test(only.name) ? { ...only, name: current.name } : only;
+    }
+    return current;
+};
+
+export const buildSceneTree = (
+    object: THREE.Object3D,
+    counter: { value: number },
+    prefix: string = 'imported'
+): SceneNode | null => {
     if (!hasRenderableDescendant(object)) return null;
 
     const index = counter.value++;
-    const id = `imported_${index}`;
+    const id = `${prefix}_${index}`;
     object.userData.modelId = id;
+    object.userData.nodeId = id;
 
     const isMesh = object instanceof THREE.Mesh;
     const fallbackName = isMesh ? `Mesh ${index + 1}` : `Group ${index + 1}`;
@@ -112,8 +137,9 @@ const buildSceneTree = (object: THREE.Object3D, counter: { value: number }): Sce
     };
 
     const children = object.children
-        .map(child => buildSceneTree(child, counter))
-        .filter((child): child is SceneNode => Boolean(child));
+        .map(child => buildSceneTree(child, counter, prefix))
+        .filter((child): child is SceneNode => Boolean(child))
+        .map(collapseSingleChildGroups);
 
     if (children.length > 0) {
         node.children = children;

@@ -9,6 +9,7 @@ import { setLaserEntry, clearLaserEntry } from '../../lib/laserTargetRef';
 import { fingerPointerRef } from '../../lib/fingerPointerRef';
 import { pointingSourceRef } from '../../lib/pointingSourceRef';
 import { getModelCenter } from '../../lib/orbitPivot';
+import { pickSelectionId } from '../../lib/pickSelectionId';
 
 // Project the active model's center to NDC. Returns true on success.
 function computeModelCenterNDC(scene: THREE.Scene, camera: THREE.Camera, out: Vector2): boolean {
@@ -362,6 +363,7 @@ const UserLaser: React.FC = () => {
         let foundId: string | null = null;
         let foundMeshName: string | null = null;
         let foundPartName: string | null = null;
+        let hitObject: THREE.Object3D | null = null;
         const hitPoint = new Vector3();
 
         for (let i = 0; i < intersects.length; i++) {
@@ -386,6 +388,7 @@ const UserLaser: React.FC = () => {
             if (skip) { foundId = null; continue; }
 
             if (foundId) {
+                hitObject = obj;
                 hitPoint.copy(hit.point);
                 foundMeshName = obj.userData?.meshIndex != null
                     ? String(obj.userData.meshIndex)
@@ -439,7 +442,9 @@ const UserLaser: React.FC = () => {
         }
 
         if (foundId !== lastHitId.current) {
-             selectNode(foundId);
+             const granularity = useStore.getState().laserHighlightGranularity;
+             const selectionId = pickSelectionId(hitObject, granularity);
+             selectNode(selectionId);
              lastHitId.current = foundId;
         }
 

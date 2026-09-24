@@ -251,6 +251,11 @@ interface AppState {
   importedBaseScale: number;
   importedBasePosition: Vector3 | null;
 
+  // Built-in models' real scene trees, populated when the GLB loads.
+  // Until then, getCurrentSceneTree falls back to the hand-written constants.
+  bicycleSceneTree: SceneNode | null;
+  headphonesSceneTree: SceneNode | null;
+
   // Curator-set transform applied to whatever model is loaded. Lives here
   // (not in the imported* group) so it applies to presets too. Synced from
   // the active review config's asset.transform when a curation loads.
@@ -338,6 +343,7 @@ interface AppState {
   setIsImporting: (importing: boolean) => void;
   setImportedModel: (meshes: Group, sceneTree: SceneNode, fileName: string, baseScale: number, basePosition: Vector3) => void;
   setImportedScale: (scale: number) => void;
+  setBuiltInSceneTree: (type: 'bicycle' | 'headphones', tree: SceneNode) => void;
 
   // --- NEW: Comment Actions ---
   setAllComments: (comments: SpatialComment[]) => void;
@@ -460,6 +466,8 @@ export const useStore = create<AppState>((set, get) => ({
   importedScale: 1,
   importedBaseScale: 1,
   importedBasePosition: null,
+  bicycleSceneTree: null,
+  headphonesSceneTree: null,
 
   // --- NEW: Comments System ---
   comments: [],
@@ -697,6 +705,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   setImportedScale: (scale) => set({ importedScale: scale }),
 
+  setBuiltInSceneTree: (type, tree) => set({
+    [type === 'bicycle' ? 'bicycleSceneTree' : 'headphonesSceneTree']: tree,
+    objectStates: initObjectStates(tree),
+    pois: derivePoisFromSceneTree(tree),
+  }),
+
   // --- NEW: Comment Actions ---
   setAllComments: (comments) => set({ comments }),
   setCommentMode: (mode) => set({ commentMode: mode }),
@@ -840,9 +854,20 @@ export const useStore = create<AppState>((set, get) => ({
 }));
 
 // Helper to get current scene tree
-export const getCurrentSceneTree = (modelType: ModelType, importedTree?: SceneNode | null): SceneNode => {
-    if (modelType === 'imported' && importedTree) {
-        return importedTree;
-    }
-    return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : modelType === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
+export const getCurrentSceneTree = (
+  modelType: ModelType,
+  importedTree?: SceneNode | null,
+  bicycleTree?: SceneNode | null,
+  headphonesTree?: SceneNode | null
+): SceneNode => {
+  if (modelType === 'imported' && importedTree) {
+    return importedTree;
+  }
+  if (modelType === 'bicycle' && bicycleTree) {
+    return bicycleTree;
+  }
+  if (modelType === 'headphones' && headphonesTree) {
+    return headphonesTree;
+  }
+  return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : modelType === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
 };

@@ -5,13 +5,13 @@ import { useStore } from '../../store';
 
 // Wrapper component that connects 3D objects to the Scene Tree State
 // Handles Visibility and Selection Glow
-const ModelPart: React.FC<{ 
-    id: string; 
+const ModelPart: React.FC<{
+    id: string;
     children: React.ReactNode | ((props: { selected: boolean }) => React.ReactNode);
     groupProps?: any;
 }> = ({ id, children, groupProps }) => {
     const objectState = useStore(state => state.objectStates[id]);
-    
+
     // Default to visible if state not ready
     const visible = objectState ? objectState.visible : true;
     const selected = objectState ? objectState.selected : false;
@@ -19,8 +19,8 @@ const ModelPart: React.FC<{
     if (!visible) return null;
 
     return (
-        // userData.modelId is crucial for the Laser Raycaster to identify this group
-        <group {...groupProps} userData={{ modelId: id }}>
+        // userData.modelId and nodeId are crucial for the Laser Raycaster to identify this group
+        <group {...groupProps} userData={{ modelId: id, nodeId: id }}>
             {typeof children === 'function' ? children({ selected }) : children}
         </group>
     );
