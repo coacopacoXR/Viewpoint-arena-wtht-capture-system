@@ -275,8 +275,29 @@ After `down -v`, `./install.sh` starts again from a clean slate.
   Troubleshooting).
 - **Onshape, Teamcenter and Microsoft Teams** connections need your own
   accounts and keys; the installer asks for them if you pick those options.
-- **Sign-in.** There are no accounts. Access is three separate things, and it
-  is worth knowing which one does what:
+- **Sign-in is your choice.** `./install.sh` asks "How do people sign in?":
+  1. **No accounts** (the default). Names are typed in the lobby. Access is
+     the three things listed below.
+  2. **Accounts on this install**: email and password. You choose whether
+     anyone can create an account or only people you add. There is no mail
+     server in the stack, so accounts are confirmed at once and there is no
+     "forgot password" email yet.
+  3. **Company single sign-on**: Microsoft Entra ID, Google or Keycloak (any
+     OpenID Connect provider through Keycloak's settings). Register the app
+     with your provider using the redirect address
+     `https://<your address>/auth/v1/callback`. SAML (Okta, ADFS) is planned.
+
+  With 2 or 3, signing in replaces the front-door password. The name people
+  see in a room comes from the account and is checked by the room server, so
+  it cannot be faked. Each person gets a **Your reviews** list in the lobby
+  showing the reviews they hosted or joined. You can also let people without
+  an account join a room as a **guest**: they knock like anyone else, show as
+  "Name (guest)", and can only enter the room they were invited to. Under the
+  hood this is Supabase's sign-in service (GoTrue), which runs only when 2 or
+  3 is chosen.
+
+  **Without accounts**, access is three separate things, and it is worth
+  knowing which one does what:
   - **The front-door password** (asked by `./install.sh`, stored as a hash in
     `ACCESS_PASSWORD_HASH`). Optional and empty by default, which leaves the
     app open exactly as before. It is one password for everyone, not

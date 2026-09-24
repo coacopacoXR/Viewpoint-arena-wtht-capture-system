@@ -1,6 +1,8 @@
 # Plan — identity as a deployment choice
 
-Written 2026-09-24. The user settled plan 12 §C:
+Written 2026-09-24. **Status: AX, AY, AZ built, reviewed, verified live and committed the same day** (`aa2d47b`, `9abb01c`, `8e8c4f4`). Left: the "later" row.
+
+The user settled plan 12 §C:
 
 > "I guess it is up to the company how it is gonna be used, either no identity
 > at all, SSO or normal accounts. So all those options gotta be available."
