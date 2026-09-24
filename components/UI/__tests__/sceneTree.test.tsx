@@ -12,8 +12,10 @@ beforeEach(() => {
 // Mock the presence context
 vi.mock('../../../lib/PresenceContext', () => ({
   usePresence: () => ({
-    broadcastModelChange: vi.fn(),
+    broadcastSceneUpdate: vi.fn(() => true),
+    broadcastSetModelEditors: vi.fn(() => true),
     localUserId: 'test-user',
+    remoteParticipantList: [],
   }),
 }));
 

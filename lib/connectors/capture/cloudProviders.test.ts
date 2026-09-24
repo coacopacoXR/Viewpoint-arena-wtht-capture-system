@@ -6,6 +6,14 @@
 // credential, send no credential, and cannot be handed one. Everything else is
 // about turning an endpoint response — including every failure code the
 // endpoint can produce — into either InsightCard[] or a clear Error.
+//
+// Since plan 14 batch BF there is a SECOND negative property, and it is the one
+// these two classes now exist to demonstrate: they send no PROVIDER either.
+// lib/ai/router.ts decides which AI extracts the cards, so a browser that named
+// one would be a second place the decision is made. OpenAICaptureProvider and
+// AnthropicCaptureProvider are therefore byte-identical on the wire and differ
+// only in their class name — the tests below assert that sameness rather than a
+// difference, which is the opposite of what they asserted before.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { OpenAICaptureProvider } from './openai';
@@ -92,11 +100,11 @@ describe('OpenAICaptureProvider', () => {
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toBe(EXTRACT_ENDPOINT);
     expect(requests[0].method).toBe('POST');
-    expect(JSON.parse(requests[0].body)).toEqual({
-      provider: 'openai',
-      transcript,
-      context,
-    });
+    // The transcript and the context, and nothing else. In particular NO
+    // `provider` field: the server picks the AI now, and a body that named one
+    // would be a second, contradicting answer to the same question.
+    expect(JSON.parse(requests[0].body)).toEqual({ transcript, context });
+    expect(Object.keys(JSON.parse(requests[0].body))).toEqual(['transcript', 'context']);
   });
 
   it('sends no credential of any kind', async () => {
@@ -150,15 +158,20 @@ describe('OpenAICaptureProvider', () => {
 });
 
 describe('AnthropicCaptureProvider', () => {
-  it('POSTs the transcript with provider "anthropic"', async () => {
+  it('POSTs the transcript to the same endpoint, naming no provider', async () => {
     const { requests } = stubFetch(jsonResponse({ cards: [CARD] }));
     const provider = new AnthropicCaptureProvider();
 
     const cards = await provider.extractInsights(transcript, context);
 
     expect(cards).toHaveLength(1);
-    expect(JSON.parse(requests[0].body).provider).toBe('anthropic');
     expect(requests[0].url).toBe(EXTRACT_ENDPOINT);
+    // The class is called Anthropic and the request never says so. Which AI
+    // answers is lib/ai/router.ts's decision, taken from the admin console's AI
+    // section, from viewpoint.config.ts or from the built-in stack.
+    expect(JSON.parse(requests[0].body)).toEqual({ transcript, context });
+    expect(requests[0].body).not.toContain('anthropic');
+    expect(requests[0].body).not.toContain('provider');
   });
 
   it('sends no credential of any kind', async () => {
@@ -174,15 +187,20 @@ describe('AnthropicCaptureProvider', () => {
     expect(requests[0].body).not.toMatch(/sk-ant-/);
   });
 
-  it('uses the same endpoint as OpenAI — only the provider field differs', async () => {
+  it('sends a byte-identical request to OpenAICaptureProvider', async () => {
+    // The two classes are deliberately the same request. If this ever fails,
+    // one of them has started choosing an AI in the browser again — which is the
+    // thing batch BF removed, and the thing that makes the server-side key the
+    // only key.
     const { requests } = stubFetch(jsonResponse({ cards: [] }));
 
     await new OpenAICaptureProvider().extractInsights(transcript, context);
     await new AnthropicCaptureProvider().extractInsights(transcript, context);
 
     expect(requests.map((r) => r.url)).toEqual([EXTRACT_ENDPOINT, EXTRACT_ENDPOINT]);
-    expect(JSON.parse(requests[0].body).provider).toBe('openai');
-    expect(JSON.parse(requests[1].body).provider).toBe('anthropic');
+    expect(requests[0].body).toBe(requests[1].body);
+    expect(requests[0].method).toBe(requests[1].method);
+    expect(requests[0].headers).toEqual(requests[1].headers);
   });
 });
 
@@ -208,22 +226,25 @@ describe('cloud providers — endpoint failure codes become clear errors', () =>
     return failure;
   }
 
-  it('503 capture_not_configured says the key belongs on the server', async () => {
+  it('503 capture_not_configured says the choice is made server-side', async () => {
     const failure = await expectEndpointFailure(
-      jsonResponse({ error: 'capture_not_configured', provider: 'openai' }, 503),
+      jsonResponse({ error: 'capture_not_configured' }, 503),
       'capture_not_configured',
     );
     expect(failure.status).toBe(503);
-    // Actionable without disclosing which variable holds the key.
+    // Actionable without disclosing which variable holds the key, which vendor
+    // was resolved, or that the deployment has an admin console setting at all
+    // beyond where to change it.
     expect(failure.message).toMatch(/viewpoint\.config\.ts/);
-    expect(failure.message).toMatch(/server log/i);
+    expect(failure.message).toMatch(/admin console/i);
     expect(failure.message).toMatch(/nothing to fix client-side/i);
     expect(failure.message).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY|apiKeyEnv/);
+    expect(failure.message).not.toMatch(/openai\.com|anthropic\.com/i);
   });
 
   it('502 capture_upstream_error points at the server log, not the upstream body', async () => {
     const failure = await expectEndpointFailure(
-      jsonResponse({ error: 'capture_upstream_error', provider: 'openai' }, 502),
+      jsonResponse({ error: 'capture_upstream_error' }, 502),
       'capture_upstream_error',
     );
     expect(failure.message).toMatch(/server log/i);
@@ -232,7 +253,7 @@ describe('cloud providers — endpoint failure codes become clear errors', () =>
 
   it('502 capture_upstream_unreachable is distinguishable from a rejected request', async () => {
     const failure = await expectEndpointFailure(
-      jsonResponse({ error: 'capture_upstream_unreachable', provider: 'openai' }, 502),
+      jsonResponse({ error: 'capture_upstream_unreachable' }, 502),
       'capture_upstream_unreachable',
     );
     expect(failure.message).toMatch(/could not reach/i);
@@ -240,7 +261,7 @@ describe('cloud providers — endpoint failure codes become clear errors', () =>
 
   it('422 capture_output_truncated says how to fix it', async () => {
     const failure = await expectEndpointFailure(
-      jsonResponse({ error: 'capture_output_truncated', provider: 'openai' }, 422),
+      jsonResponse({ error: 'capture_output_truncated' }, 422),
       'capture_output_truncated',
     );
     expect(failure.message).toMatch(/token/i);
@@ -249,10 +270,7 @@ describe('cloud providers — endpoint failure codes become clear errors', () =>
 
   it('422 capture_parse_error carries the parser reason across the HTTP boundary', async () => {
     const failure = await expectEndpointFailure(
-      jsonResponse(
-        { error: 'capture_parse_error', reason: 'markdown_fenced', provider: 'openai' },
-        422,
-      ),
+      jsonResponse({ error: 'capture_parse_error', reason: 'markdown_fenced' }, 422),
       'capture_parse_error',
     );
     expect(failure.reason).toBe('markdown_fenced');
@@ -261,7 +279,7 @@ describe('cloud providers — endpoint failure codes become clear errors', () =>
 
   it('422 capture_parse_error survives a missing reason', async () => {
     const failure = await expectEndpointFailure(
-      jsonResponse({ error: 'capture_parse_error', provider: 'openai' }, 422),
+      jsonResponse({ error: 'capture_parse_error' }, 422),
       'capture_parse_error',
     );
     expect(failure.reason).toBeNull();
@@ -269,7 +287,7 @@ describe('cloud providers — endpoint failure codes become clear errors', () =>
 
   it('413 transcript_too_large tells the caller to shorten the window', async () => {
     const failure = await expectEndpointFailure(
-      jsonResponse({ error: 'transcript_too_large', provider: 'openai' }, 413),
+      jsonResponse({ error: 'transcript_too_large' }, 413),
       'transcript_too_large',
     );
     expect(failure.message).toMatch(/shorter window/i);
@@ -379,8 +397,11 @@ describe('cloud providers — defence in depth on the response', () => {
 
   it('holds the endpoint to the same extra-field rule it holds the model to', async () => {
     // The endpoint answers with {cards} and nothing else. If it ever grows a
-    // transport field, this fails loudly instead of the two sides drifting:
-    // one strict envelope is the whole reason the parser is shared.
+    // transport field — a `provider` naming the AI that answered is the obvious
+    // candidate, and exactly what batch BF removed from the request side — this
+    // fails loudly instead of the two sides drifting: one strict envelope is the
+    // whole reason the parser is shared. Which AI answered is not the browser's
+    // business, so it must not arrive in a response either.
     stubFetch(jsonResponse({ cards: [CARD], provider: 'openai' }));
     const provider = new OpenAICaptureProvider();
 

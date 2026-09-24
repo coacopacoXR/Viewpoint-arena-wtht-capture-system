@@ -36,23 +36,25 @@ RUN npm run build
 # ── Stage 2: serve ──────────────────────────────────────────────────────────
 FROM nginx:alpine AS runtime
 
-# The config is an envsubst TEMPLATE, not a plain conf.d file, and the
-# distinction is a security property: ${CAPTURE_SHARED_SECRET} is substituted at
-# CONTAINER START from the environment docker-compose passes in, so the secret
-# never enters a layer. A value baked in at build time is readable by anyone who
-# can `docker history` the image — the same reason the VITE_ build args above
-# carry only client-safe values.
+# The config is an envsubst TEMPLATE, not a plain conf.d file. app.conf currently
+# has no ${...} placeholder in it, and the template mechanism stays anyway: it is
+# what NGINX_ENVSUBST_FILTER below depends on, and it means a future
+# deployment-specific value is substituted at CONTAINER START from the environment
+# rather than baked into a layer. A value baked in at build time is readable by
+# anyone who can `docker history` the image — the same reason the VITE_ build args
+# above carry only client-safe values.
+#
+# The placeholder this used to carry was ${CAPTURE_SHARED_SECRET}, substituted
+# into an X-Capture-Token header on the two capture routes nginx proxied straight
+# to capture-service. Those routes now go to the `api` container, which adds the
+# header itself from its own env_file (lib/ai/router.ts), so the secret is no
+# longer this container's business — and the variable is deliberately NOT declared
+# here, because defining a credential in an image that nothing reads is how one
+# ends up in a debug session's `docker exec app env`.
 #
 # NGINX_ENVSUBST_FILTER restricts substitution to CAPTURE_* names. Without it
 # envsubst would also eat nginx's own $uri, $host and $proxy_add_x_forwarded_for,
 # which are not environment variables and must survive into the served config.
-#
-# Declared here as well as passed by compose so the variable is always DEFINED:
-# envsubst only substitutes names it was given, and an unlisted ${...} would
-# reach nginx verbatim, where it is an unknown-variable start-up failure. Empty
-# is a valid value — capture-service treats an empty secret as authentication
-# off, and `proxy_set_header X-Capture-Token ""` makes nginx omit the header.
-ENV CAPTURE_SHARED_SECRET=""
 ENV NGINX_ENVSUBST_FILTER=^CAPTURE_
 
 # Replaces the stock welcome-page site. See deploy/nginx/app.conf for why /api/*

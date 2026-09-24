@@ -48,3 +48,6 @@ capture-service/.env.local
 
 # Per-deployment config (contains *Env names pointing to secrets)
 viewpoint.config.ts
+
+# Qwen Code CLI scratch space
+.qwen/

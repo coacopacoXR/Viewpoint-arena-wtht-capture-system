@@ -117,8 +117,9 @@ Providers per job:
   already runs.
 
 Every provider has **Test connection**. Keys are stored server-side only,
-encrypted at rest with a key the installer generates
-(`SETTINGS_ENCRYPTION_KEY`), and are never sent back to the browser (the
+encrypted at rest (AES-256-GCM, key derived from the stack's `JWT_SECRET`,
+so no new secret to manage; rotating `JWT_SECRET` means re-entering keys),
+and are never sent back to the browser (the
 screen shows "key set · ends in …7f2a"). Settings made here override
 `viewpoint.config.ts`, which stays valid for people who manage config as code.
 

@@ -1,16 +1,18 @@
-// The nginx half of local capture (T4.4).
+// The nginx half of local capture (T4.4), re-pointed at the api by batch BF of
+// docs/plan/14-rooms-models-admin-ai.md.
 //
 // deploy/nginx/app.conf is not code that vitest can execute, and a mistake in it
 // fails in the one place nobody is looking: inside a container, at request time,
 // during an installation. Three specific mistakes are worth a red test because
 // each one is silent until it isn't:
 //
-//   1. the capture location landing BELOW `location /api/` in the file, where a
+//   1. a capture location landing BELOW `location /api/` in the file, where a
 //      reader (or a future edit) will assume the 501 block answers it;
 //   2. a LITERAL upstream hostname, which makes nginx refuse to start whenever
-//      the capture profile is inactive — i.e. on every default install;
-//   3. the shared secret hard-coded, or a second ${...} placeholder that
-//      envsubst would eat along with nginx's own variables.
+//      that service is not resolvable yet — i.e. during its own build;
+//   3. a capture route going back to capture-service directly, which would
+//      silently override the per-job provider an administrator chose, because
+//      nginx would have picked the AI before the api ever saw the request.
 //
 // The Dockerfile and compose assertions are here for the same reason: the
 // template only works if all three files agree.
@@ -97,33 +99,32 @@ describe('deploy/nginx/app.conf — /api/capture/local', () => {
   });
 
   it('resolves the upstream at request time through a VARIABLE, not a literal host', () => {
-    // A literal `proxy_pass http://capture-service:8080` is resolved when nginx
-    // parses the config, so the app container refuses to start on any install
-    // that is not running the capture profile — which is the default.
+    // A literal `proxy_pass http://api:8787` is resolved when nginx parses the
+    // config, so the app container refuses to start whenever `api` is not
+    // resolvable yet — which is the whole of its own build window.
     expect(CAPTURE_CODE).toContain('resolver 127.0.0.11');
-    expect(CAPTURE_CODE).toContain('set $capture_upstream http://capture-service:8080;');
-    expect(CAPTURE_CODE).toContain('proxy_pass $capture_upstream/capture;');
-    expect(CAPTURE_CODE).not.toMatch(/proxy_pass\s+http:\/\/capture-service/);
+    expect(CAPTURE_CODE).toContain('set $capture_upstream http://api:8787;');
+    expect(CAPTURE_CODE).not.toMatch(/proxy_pass\s+http:\/\//);
   });
 
-  it('names the service and port docker-compose actually uses', () => {
-    const service = COMPOSE.services['capture-service'];
-    expect(service, 'compose has no capture-service').toBeDefined();
-    // The service listens on CAPTURE_PORT inside the container and publishes
-    // nothing, so 8080 is the only way to reach it from `app`.
-    expect(service.environment?.CAPTURE_PORT).toBe('8080');
-    expect(service.ports).toBeUndefined();
-    // And the compose service NAME is the DNS name nginx resolves.
-    expect(CAPTURE_CODE).toContain('http://capture-service:8080');
+  it('goes to the api, not straight to capture-service', () => {
+    // The point of batch BF: nginx must not be the layer that decides which AI
+    // handles a recording, because a deployment now chooses per job from the admin
+    // console. A bypass here would silently ignore that choice for audio.
+    expect(CAPTURE_CODE).toContain('http://api:8787');
+    expect(CAPTURE_CODE).not.toContain('capture-service');
+    // No URI part on proxy_pass: server/vercelShim.ts routes on the path as it
+    // arrived, so `proxy_pass $upstream/api/capture/local` and
+    // `proxy_pass $upstream/capture` would both be wrong in different ways.
+    expect(CAPTURE_CODE).toMatch(/proxy_pass \$capture_upstream;/);
   });
 
-  it('adds X-Capture-Token from the environment, not from a literal', () => {
-    expect(CAPTURE_CODE).toContain(
-      'proxy_set_header X-Capture-Token "${CAPTURE_SHARED_SECRET}";',
-    );
-    // The header name must match lib/health/probes.ts's CAPTURE_AUTH_HEADER,
-    // which capture-service's auth.py is pinned against.
-    expect(CAPTURE_CODE).toContain('X-Capture-Token');
+  it('does NOT add the capture-service secret — the api does that now', () => {
+    // The secret moved with the routing: lib/ai/router.ts adds X-Capture-Token
+    // from the api container's own environment. Leaving the header here would mean
+    // two layers adding it and a secret in a container that no longer needs one.
+    expect(CAPTURE_CODE).not.toContain('X-Capture-Token');
+    expect(CAPTURE_CODE).not.toContain('CAPTURE_SHARED_SECRET');
   });
 
   it('allows an upload as large as the service default, and streams it', () => {
@@ -172,16 +173,20 @@ describe('deploy/nginx/app.conf — /api/capture/transcribe', () => {
     expect(TRANSCRIBE_CODE).toContain('limit_except POST { deny all; }');
   });
 
-  it('resolves the upstream at request time through a VARIABLE', () => {
+  it('resolves the upstream at request time through a VARIABLE, to the api', () => {
     expect(TRANSCRIBE_CODE).toContain('resolver 127.0.0.11');
-    expect(TRANSCRIBE_CODE).toContain('proxy_pass $transcribe_upstream/transcribe;');
-    expect(TRANSCRIBE_CODE).not.toMatch(/proxy_pass\s+http:\/\/capture-service/);
+    expect(TRANSCRIBE_CODE).toContain('set $transcribe_upstream http://api:8787;');
+    expect(TRANSCRIBE_CODE).toMatch(/proxy_pass \$transcribe_upstream;/);
+    // This is the path that used to make it impossible to choose a provider for
+    // audio at all: nginx had already picked capture-service before the api saw
+    // anything. It must not go back.
+    expect(TRANSCRIBE_CODE).not.toContain('capture-service');
+    expect(TRANSCRIBE_CODE).not.toMatch(/proxy_pass\s+http:\/\//);
   });
 
-  it('adds the shared-secret header', () => {
-    expect(TRANSCRIBE_CODE).toContain(
-      'proxy_set_header X-Capture-Token "${CAPTURE_SHARED_SECRET}";',
-    );
+  it('does NOT add the capture-service secret — the api does that now', () => {
+    expect(TRANSCRIBE_CODE).not.toContain('X-Capture-Token');
+    expect(TRANSCRIBE_CODE).not.toContain('CAPTURE_SHARED_SECRET');
   });
 
   it('has a smaller body limit than /api/capture/local (chunks, not full meetings)', () => {
@@ -205,15 +210,14 @@ describe('deploy/nginx/app.conf — /api/capture/transcribe', () => {
 // ─── Substitution ───────────────────────────────────────────────────────────
 
 describe('deploy/nginx/app.conf — envsubst surface', () => {
-  it('has exactly one placeholder, and it is the capture secret', () => {
-    // Matched against the RAW file, comments included: envsubst does not know
-    // what a comment is, so every ${...} anywhere in here is substituted.
-    const placeholders = APP_CONF.match(/\$\{[^}]*\}/g) ?? [];
-    expect(placeholders.length).toBeGreaterThan(0);
-    // Every other `${...}` would be substituted too — from an environment
-    // variable nobody set, which means an empty string in a directive, which
-    // means a config that parses and silently does the wrong thing.
-    expect([...new Set(placeholders)]).toEqual(['${CAPTURE_SHARED_SECRET}']);
+  it('has NO placeholder, because the secret it used to carry moved to the api', () => {
+    // Matched against the RAW file, comments included: envsubst does not know what
+    // a comment is, so every ${...} anywhere in here is substituted. This used to
+    // assert exactly one — ${CAPTURE_SHARED_SECRET} — for the X-Capture-Token
+    // header. Both capture paths now go to the api, which adds that header from its
+    // own environment, so a placeholder here would render a secret into a config
+    // that nothing reads.
+    expect(APP_CONF.match(/\$\{[^}]*\}/g) ?? []).toEqual([]);
   });
 
   it('keeps using nginx runtime variables, which the filter must not eat', () => {
@@ -244,12 +248,12 @@ describe('deploy/app.Dockerfile — the template is rendered at start-up', () =>
     expect(DOCKERFILE).toContain('ENV NGINX_ENVSUBST_FILTER=^CAPTURE_');
   });
 
-  it('defines the secret variable so an unset one cannot reach nginx verbatim', () => {
-    // envsubst only substitutes names it was given. An unlisted ${...} arrives
-    // at nginx as `${CAPTURE_SHARED_SECRET}`, which nginx reads as an unknown
-    // variable and refuses to start. Empty is the valid "authentication off"
-    // value; undefined is a broken container.
-    expect(DOCKERFILE).toMatch(/ENV\s+CAPTURE_SHARED_SECRET=""/);
+  it('no longer declares the capture secret, because nothing in app.conf reads it', () => {
+    // The inverse of what this used to assert. Defining a credential in an image
+    // whose config no longer references it is not neutral: it shows up in
+    // `docker exec app env` and in the image's config, and invites the next person
+    // to "fix" a capture problem by pointing nginx back at capture-service.
+    expect(DOCKERFILE).not.toMatch(/ENV\s+CAPTURE_SHARED_SECRET/);
   });
 
   it('removes the base image default site', () => {
@@ -257,33 +261,89 @@ describe('deploy/app.Dockerfile — the template is rendered at start-up', () =>
   });
 });
 
-describe('docker-compose.yml — the app service is given the secret', () => {
-  it('passes CAPTURE_SHARED_SECRET to app, with an empty default', () => {
+describe('docker-compose.yml — the capture routes are served by api', () => {
+  it('gives app no environment at all, so the secret is not where nothing reads it', () => {
+    // `app` is nginx serving a static build; the only variable it ever carried was
+    // the capture secret for the header it no longer adds. capture-service and
+    // whisper still take it, and they are the two services that check it.
     const app = COMPOSE.services.app;
     expect(app).toBeDefined();
-    // `${VAR:-}` rather than `${VAR:?}`: this file must stay validatable before
-    // install.sh has written anything, and an empty value is meaningful.
-    expect(app.environment?.CAPTURE_SHARED_SECRET).toBe('${CAPTURE_SHARED_SECRET:-}');
-    expect(COMPOSE_TEXT).toContain('CAPTURE_SHARED_SECRET: ${CAPTURE_SHARED_SECRET:-}');
+    expect(app.environment).toBeUndefined();
   });
 
-  it('still publishes no port for app or capture-service', () => {
+  it('tells api where the built-in stack is, so "Built-in" works for any capture.provider', () => {
+    // lib/ai/router.ts reads CAPTURE_SERVICE_URL first and falls back to
+    // capture.serviceUrl from viewpoint.config.ts. Without this, an install that
+    // chose a cloud provider in install.sh and then picked "Built-in" for
+    // transcription in the admin console would have no address to reach.
+    const api = COMPOSE.services.api;
+    expect(api.environment?.CAPTURE_SERVICE_URL).toBe(
+      '${CAPTURE_SERVICE_URL:-http://capture-service:8080}',
+    );
+  });
+
+  it('still gives capture-service and app no published port', () => {
     // The whole isolation argument in the compose header comment rests on this:
-    // the browser reaches capture-service through `app`, never directly.
+    // the browser reaches capture-service through `app` and `api`, never directly.
     expect(COMPOSE.services.app.ports).toBeUndefined();
+    expect(COMPOSE.services.api.ports).toBeUndefined();
     expect(COMPOSE.services['capture-service'].ports).toBeUndefined();
     expect(COMPOSE.services.whisper.ports).toBeUndefined();
   });
 
-  it('keeps app on the internal backend network where capture-service lives', () => {
+  it('keeps api on the internal backend network where capture-service lives', () => {
+    expect(COMPOSE.services.api.networks).toContain('backend');
     expect(COMPOSE.services.app.networks).toContain('backend');
     expect(COMPOSE.services['capture-service'].networks).toContain('backend');
   });
 });
 
+// ─── /api/capture/summary (BF) ─────────────────────────────────────────────
+//
+// The third AI job. Its own location exists for one reason — the generic /api/
+// block's 300s read timeout would cut off a whole-meeting summary running on a
+// small model on CPU, which is the exact configuration the built-in stack ships.
+
+describe('deploy/nginx/app.conf — /api/capture/summary', () => {
+  const SUMMARY_HEADER = 'location = /api/capture/summary {';
+  const SUMMARY_CODE = flat(blockOf(APP_CONF_CODE, SUMMARY_HEADER));
+
+  it('exists, above the /api/ block that would otherwise answer it', () => {
+    const summaryAt = APP_CONF_CODE.indexOf(SUMMARY_HEADER);
+    const apiAt = APP_CONF_CODE.indexOf('location /api/ {');
+    expect(summaryAt).toBeGreaterThan(0);
+    expect(apiAt).toBeGreaterThan(0);
+    expect(summaryAt).toBeLessThan(apiAt);
+  });
+
+  it('is POST-only, goes to the api, and carries no secret', () => {
+    expect(SUMMARY_CODE).toContain('limit_except POST { deny all; }');
+    expect(SUMMARY_CODE).toContain('set $summary_upstream http://api:8787;');
+    expect(SUMMARY_CODE).toMatch(/proxy_pass \$summary_upstream;/);
+    expect(SUMMARY_CODE).not.toContain('X-Capture-Token');
+  });
+
+  it('waits as long as /api/capture/local, not as long as a poll', () => {
+    expect(SUMMARY_CODE).toContain('proxy_read_timeout 900s;');
+    expect(SUMMARY_CODE).toContain('proxy_send_timeout 900s;');
+  });
+
+  it('carries no audio, so it gets the small body limit', () => {
+    const match = /client_max_body_size\s+(\d+)([km]?);/.exec(SUMMARY_CODE);
+    expect(match, 'no client_max_body_size in the summary block').not.toBeNull();
+    const bytes =
+      match?.[2] === 'k'
+        ? Number(match?.[1]) * 1024
+        : match?.[2] === 'm'
+          ? Number(match?.[1]) * 1024 * 1024
+          : Number(match?.[1]);
+    expect(bytes).toBeLessThan(209_715_200);
+  });
+});
+
 // ─── The access-check subrequest ────────────────────────────────────────────
 //
-// Both capture locations are held to the front-door password through
+// Every capture location is held to the front-door password through
 // `auth_request /_access_check`. That subrequest broke whole-meeting captures
 // the day it landed, in a way no small test caught.
 
@@ -307,10 +367,13 @@ describe('deploy/nginx/app.conf — /_access_check', () => {
     expect(ACCESS_CHECK).toContain('proxy_pass_request_body off;');
   });
 
-  it('guards both capture endpoints', () => {
-    expect(flat(blockOf(APP_CONF_CODE, 'location = /api/capture/local {')))
-      .toContain('auth_request /_access_check;');
-    expect(flat(blockOf(APP_CONF_CODE, 'location = /api/capture/transcribe {')))
-      .toContain('auth_request /_access_check;');
+  it.each([
+    'location = /api/capture/local {',
+    'location = /api/capture/transcribe {',
+    'location = /api/capture/summary {',
+  ])('guards %s', (header) => {
+    // Still worth asserting even though the api now enforces the same rule itself:
+    // this is the door that refuses a 200 MiB upload BEFORE it is forwarded.
+    expect(flat(blockOf(APP_CONF_CODE, header))).toContain('auth_request /_access_check;');
   });
 });

@@ -1,15 +1,17 @@
-"""The transcript → InsightCard extraction prompt.
+"""The transcript → InsightCard extraction prompt, and the minutes prompt.
 
-A port of lib/connectors/capture/extractionPrompt.ts. The TypeScript original is
-the authority and this copy must stay byte-identical: OpenAI, Anthropic,
-browser-side Ollama and this service all ask for the same payload precisely so
-that one parser can validate all of them. tests/test_typescript_parity.py fails
-the build if the two drift — if you change the prompt, change it in
-extractionPrompt.ts first and re-copy it here.
+Ports of lib/connectors/capture/extractionPrompt.ts and lib/ai/summaryPrompt.ts.
+The TypeScript originals are the authority and these copies must stay
+byte-identical: OpenAI, Anthropic, browser-side Ollama and this service all ask
+for the same payload precisely so that one parser can validate all of them, and
+a summary that is phrased differently here than in the cloud is a summary that
+reads differently depending on which provider an operator configured.
+tests/test_typescript_parity.py fails the build if either drifts — if you change
+a prompt, change it in the TypeScript first and re-copy it here.
 
-Kept as a literal string rather than shared from a single source because the
-two runtimes have no common module format; a parity test is the honest way to
-keep a contract that crosses a language boundary.
+Kept as literal strings rather than shared from a single source because the two
+runtimes have no common module format; a parity test is the honest way to keep a
+contract that crosses a language boundary.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import math
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 
-from .schemas import SlideContext, TranscriptChunk
+from .schemas import InsightCard, InsightType, SlideContext, TranscriptChunk
 
 # The JSON Schema Ollama constrains its reply to. A copy of
 # lib/connectors/capture/extractionSchema.json (the Docker build context is
@@ -197,4 +199,134 @@ def build_extraction_user_prompt(
             lines.append(f"[{line['speaker']}, t={sec}s] {line['text']}")
 
     lines.extend(["", "Transcript window:", format_transcript(transcript)])
+    return "\n".join(lines)
+
+
+# ─── The minutes prompt ─────────────────────────────────────────────────────
+#
+# Copied verbatim from SUMMARY_SYSTEM_PROMPT in lib/ai/summaryPrompt.ts. Do not
+# edit locally: tests/test_typescript_parity.py compares this string to the
+# TypeScript template literal byte for byte.
+SUMMARY_SYSTEM_PROMPT = """You are the minute-taker of a CAD design-review tool.
+
+You are given a real review meeting's transcript and the insight cards the app already extracted from it. Write the meeting's minutes.
+
+OUTPUT FORMAT — this is a hard requirement:
+Reply with Markdown and nothing else. No preamble, no closing remark, no code fence around the whole document. Start with a level-2 heading.
+
+Use exactly these sections, in this order, and omit a section only when there is genuinely nothing to put in it:
+
+## What was reviewed
+One or two sentences: the product or assembly, and what the meeting was for.
+
+## Decisions
+A bullet per decision that was actually taken, with the reasoning the speaker gave. Attribute each one to the person who made it.
+
+## Risks raised
+A bullet per risk, with its consequence and any mitigation that was proposed.
+
+## Actions
+A bullet per action as "- [ ] task — owner (by date)". Use the owner and date the speakers named; write "unassigned" when nobody was named, and omit the date when none was given.
+
+## Open questions
+A bullet per question that was asked and not settled.
+
+Rules:
+- Never invent a fact that is not in the transcript or the cards. If nobody said who owns an action, do not guess an owner.
+- Quote a speaker's own words only when the wording itself matters.
+- Use the component names the speakers actually used.
+- Write in the past tense and in plain sentences. No marketing language, no "the team collaboratively leveraged".
+- Keep it under 600 words. A minute nobody reads is not a minute."""
+
+#: `title`'s fallback in buildSummaryUserPrompt. A blank title becomes this
+#: rather than labelling the minutes "Meeting: " — the same reasoning as
+#: DEFAULT_SLIDE_TITLE on the extraction side.
+DEFAULT_SUMMARY_TITLE = "Design review"
+
+#: Cards are grouped the way the minutes' own sections are ordered, so the
+#: model reads risks before rationales before actions (SECTION_ORDER in the TS).
+SUMMARY_SECTION_ORDER = (InsightType.RISK, InsightType.RATIONALE, InsightType.ACTION)
+
+
+def format_summary_card(card: InsightCard, index: int) -> str:
+    """One card as `k0 [RISK] title: description (component: …; assignee: …)`.
+
+    A port of formatCard in lib/ai/summaryPrompt.ts: the same extras, in the
+    same order, joined the same way, so a model gets identical text from either
+    runtime. The `k` index is positional over the SECTION_ORDER-sorted list —
+    NOT over the order the cards arrived in — which matters because the minutes
+    are read next to the cards in the UI and a label that moved between the two
+    would be worse than none.
+    """
+    details = card.details
+    extras: list[str] = []
+    # Truthiness, not `is not None`: an empty string is as absent as a missing
+    # key here, exactly as the TypeScript `if (details.assignee)` treats it.
+    for label, value in (
+        ("component", details.component_reference),
+        ("assignee", details.assignee),
+        ("department", details.department),
+        ("due", details.due_date),
+        ("priority", details.priority),
+        ("impact", details.impact),
+        ("mitigation", details.mitigation_strategy),
+        ("driver", details.design_driver),
+    ):
+        if value:
+            extras.append(f"{label}: {value}")
+    suffix = f" ({'; '.join(extras)})" if extras else ""
+    return f"k{index} [{card.type}] {card.title}: {card.description}{suffix}"
+
+
+def build_summary_user_prompt(
+    transcript: list[TranscriptChunk],
+    cards: list[InsightCard],
+    title: str | None = None,
+) -> str:
+    """Build the user turn for a summary: date, meeting, cards, transcript.
+
+    A port of buildSummaryUserPrompt in lib/ai/summaryPrompt.ts, line for line.
+    Cards come BEFORE the transcript on purpose, as the TypeScript comment
+    explains: they are the app's own already-validated reading of the meeting,
+    and a model that has them in front of it while reading the raw transcript
+    attributes actions to the right people far more often than one asked to
+    rediscover them.
+
+    The transcript is rendered by the same format_transcript the extraction
+    prompt uses, so the c0…cN labels a card's `sourceMessageIds` refer to mean
+    the same thing in both prompts.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    lines = [
+        f"Today's date: {today}",
+        "",
+        f"Meeting: {(title or '').strip() or DEFAULT_SUMMARY_TITLE}",
+        "",
+    ]
+
+    ordered = [
+        card
+        for kind in SUMMARY_SECTION_ORDER
+        for card in cards
+        if card.type == kind
+    ]
+    lines.append(
+        "Insight cards already extracted from this meeting: none."
+        if not ordered
+        else "Insight cards already extracted from this meeting:"
+    )
+    lines.extend(
+        format_summary_card(card, index) for index, card in enumerate(ordered)
+    )
+    lines.append("")
+
+    lines.append(
+        "Transcript: none — write the minutes from the cards alone."
+        if not transcript
+        else "Transcript:"
+    )
+    # Appended unconditionally, empty string and all: `"\n".join` then ends the
+    # prompt with a bare newline when there was no transcript, which is what
+    # the TypeScript builder's `lines.join('\n')` produces for the same input.
+    lines.append(format_transcript(transcript))
     return "\n".join(lines)

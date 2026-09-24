@@ -1,8 +1,18 @@
 import { create } from 'zustand';
 import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, BoardroomLayout, LiveChatMessage } from './types';
-import { Vector3, Group } from 'three';
+import { Vector3 } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
 import { useReviewSetupStore } from './lib/reviewSetupStore';
+import type { SceneModelEntry } from './lib/scene/sceneEntries';
+import {
+  applySceneUpdate,
+  emptyScene,
+  sceneModelLabel,
+  type ModelEditors,
+  type RoomScene,
+  type SceneModel,
+  type SceneUpdate,
+} from './lib/scene/roomScene';
 
 const INITIAL_AGENTS: AgentState[] = [
   { id: '1', name: 'SYS.OP', role: 'PRESENTER', color: '#ff4400', behavior: 'IDLE', currentPoiId: null, attentionLevel: 0 },
@@ -155,8 +165,9 @@ const initObjectStates = (node: SceneNode, states: Record<string, ObjectState> =
     return states;
 };
 
-// Helper to count parts in scene tree
-const countParts = (node: SceneNode): number => {
+// Helper to count parts in a scene tree. Exported for the import status line,
+// which says how many parts a file turned into.
+export const countParts = (node: SceneNode): number => {
     let count = node.type === 'PART' || node.type === 'MESH' ? 1 : 0;
     if (node.children) {
         node.children.forEach(child => {
@@ -178,6 +189,209 @@ const derivePoisFromSceneTree = (node: SceneNode, out: PointOfInterest[] = []): 
     node.children?.forEach(child => derivePoisFromSceneTree(child, out));
     return out;
 };
+
+// ─── The room's scene ───────────────────────────────────────────────────────
+//
+// A room shows a LIST of models, not one: the product under review, a mating
+// part, a competitor's version, and the revisions of each. What follows is the
+// bookkeeping that turns that list — which the room server owns and relays as
+// SCENE_STATE — into something the tree, the renderer and the laser can use.
+
+/** The parsed half of one scene model, keyed in `sceneEntries` by SceneModel.id. */
+export type { SceneModelEntry } from './lib/scene/sceneEntries';
+
+/**
+ * A revision comparison in progress, and what to put back when it ends.
+ *
+ * Compare is a scene operation, not a local view: everybody in the room sees
+ * the same two revisions side by side, because a comparison one person can see
+ * and the person they are talking to cannot is not a comparison. That means
+ * entering it changes shared visibility and offsets, so leaving it has to undo
+ * exactly what it changed — which is what `restore` is for.
+ */
+export interface SceneCompare {
+    line: string;
+    olderId: string;
+    newerId: string;
+    restore: Array<{ id: string; visible: boolean; offset: [number, number, number] }>;
+}
+
+/** The root the scene models hang off in the combined tree. */
+export const SCENE_ROOT_ID = 'scene-root';
+
+/**
+ * Whether a model shows on THIS screen.
+ *
+ * Two different things decide it, and keeping them apart is the whole point:
+ * `model.visible` is shared — the room agreed it, the server holds it, and
+ * changing it changes everybody's screen. `localModelVisibility` is not: hiding
+ * a model so you can see the one behind it is your business, and somebody who is
+ * not allowed to change the room's models must still be able to do it. A local
+ * override wins while it exists, which is why the eye on a model row can mean
+ * either thing depending on who is clicking it.
+ */
+export function sceneModelVisible(
+    model: SceneModel,
+    localModelVisibility: Record<string, boolean>,
+): boolean {
+    return localModelVisibility[model.id] ?? model.visible;
+}
+
+/** The width of one model in scene units, which is what placement needs. */
+export function sceneEntryWidth(entry: SceneModelEntry): number {
+    return entry.size.x * entry.baseScale * entry.scale;
+}
+
+/**
+ * One top-level tree group per scene model, named "Bracket · Rev B".
+ *
+ * Each model's own root node keeps its id — that is the id its geometry carries
+ * in userData.modelId, so picking the model in the 3D view and selecting its row
+ * in the tree have to be the same id — and takes the line-and-revision label
+ * instead of the file's root group name, which is whatever the exporter called
+ * it and is usually "Scene" or the part number.
+ *
+ * Models whose bytes have not been parsed yet are simply absent: the tree shows
+ * their row from `scene.models` with a "loading" state, and the geometry arrives
+ * when the download does.
+ */
+function combinedSceneTree(scene: RoomScene, entries: Record<string, SceneModelEntry>): SceneNode | null {
+    const children: SceneNode[] = [];
+    for (const model of scene.models) {
+        const entry = entries[model.id];
+        if (entry) children.push({ ...entry.sceneTree, name: sceneModelLabel(model) });
+    }
+    if (children.length === 0) return null;
+    return { id: SCENE_ROOT_ID, name: 'Scene', type: 'GROUP', children };
+}
+
+/**
+ * Object states for a tree, keeping what is already there.
+ *
+ * Adding a model to a scene used to mean rebuilding every node's state, which
+ * collapsed the tree the room had opened and un-hid the parts somebody had
+ * hidden — the second model arriving would have wiped what the first one's
+ * walkthrough had set up. So states for ids that still exist are carried over
+ * and only new ids are initialised. Ids that are gone are dropped, because a
+ * state for a mesh that is no longer in the scene is how a hidden part comes
+ * back invisible after the model it belonged to was removed and re-added.
+ */
+function mergeObjectStates(
+    existing: Record<string, ObjectState>,
+    tree: SceneNode | null,
+): Record<string, ObjectState> {
+    if (!tree) return existing;
+    const next: Record<string, ObjectState> = {};
+    const walk = (node: SceneNode) => {
+        next[node.id] = existing[node.id] ?? { id: node.id, visible: true, selected: false, expanded: true };
+        node.children?.forEach(walk);
+    };
+    walk(tree);
+    return next;
+}
+
+/**
+ * Wiped when the scene is replaced rather than added to — "Replace everything",
+ * which is the import flow's fresh start and behaves the way importing a model
+ * always did. Adding a model next to the current one, or a revision of it, does
+ * NOT do this: the meeting is still about the same product, so its comments,
+ * transcript and cards stay.
+ */
+const FRESH_SCENE_RESET: Partial<AppState> = {
+    comments: [],
+    chatHistory: [],
+    insightCards: [],
+    activeAgentId: null,
+    leaderId: null,
+    splitScreenTarget: null,
+    isMeetingEnded: false,
+    time: 0,
+    commentMode: 'none',
+    pendingCommentPosition: null,
+    pendingCommentNodeId: null,
+    pendingCommentNodeName: null,
+    drawingCanvas: null,
+    capturedScreenshot: null,
+    drawingInteractionActive: false,
+    compare: null,
+    localModelVisibility: {},
+};
+
+/** Which built-in shows when the scene holds no models of its own. */
+const DEFAULT_BUILT_IN: ModelType = 'headphones';
+
+/** The model type the rest of the app reads, derived from the scene. */
+function activeModelTypeFor(scene: RoomScene): ModelType {
+    if (scene.models.length > 0) return 'imported';
+    return scene.builtIn ?? DEFAULT_BUILT_IN;
+}
+
+/** Drop the records for models the scene no longer holds. */
+function pruneToScene<T>(record: Record<string, T>, scene: RoomScene): Record<string, T> {
+    const next: Record<string, T> = {};
+    for (const model of scene.models) {
+        const value = record[model.id];
+        if (value !== undefined) next[model.id] = value;
+    }
+    return next;
+}
+
+/**
+ * The four fields that follow from the scene: which model type the app is in,
+ * the combined tree, and the node states and agent targets derived from it.
+ */
+function derivedFromScene(
+    scene: RoomScene,
+    state: AppState,
+    entries: Record<string, SceneModelEntry>,
+    fresh: boolean,
+) {
+    const activeModelType = activeModelTypeFor(scene);
+    const importedSceneTree = combinedSceneTree(scene, entries);
+    const tree = getCurrentSceneTree(
+        activeModelType,
+        importedSceneTree,
+        state.bicycleSceneTree,
+        state.headphonesSceneTree,
+    );
+    return {
+        activeModelType,
+        importedSceneTree,
+        objectStates: fresh ? initObjectStates(tree) : mergeObjectStates(state.objectStates, tree),
+        pois: derivePoisFromSceneTree(tree),
+    };
+}
+
+/**
+ * Make `scene` the scene, and everything that follows from it follow.
+ *
+ * One function because three callers need exactly the same bookkeeping — a
+ * SCENE_STATE from the room server, a curation being opened, and a local
+ * prediction of an operation this client just sent — and a divergence between
+ * them is the kind of bug that shows up as one participant's tree being out of
+ * step with everybody else's.
+ */
+function adoptScene(scene: RoomScene, state: AppState, fresh: boolean): Partial<AppState> {
+    const entries = pruneToScene(state.sceneEntries, scene);
+    const last = scene.models[scene.models.length - 1];
+    // Keep pointing at whatever the scale slider was on while it is still in the
+    // scene, so a model arriving does not move the slider somebody is dragging.
+    const activeSceneModelId = scene.models.some((model) => model.id === state.activeSceneModelId)
+        ? state.activeSceneModelId
+        : last
+          ? last.id
+          : null;
+    return {
+        scene,
+        sceneEntries: entries,
+        localModelVisibility: pruneToScene(state.localModelVisibility, scene),
+        expandedSceneModels: pruneToScene(state.expandedSceneModels, scene),
+        activeSceneModelId,
+        isImporting: false,
+        ...(fresh ? FRESH_SCENE_RESET : {}),
+        ...derivedFromScene(scene, state, entries, fresh),
+    };
+}
 
 
 interface AppState {
@@ -241,15 +455,37 @@ interface AppState {
   // Scene Graph State
   objectStates: Record<string, ObjectState>;
 
-  // --- NEW: Model Type ---
+  // --- Models: the room's scene ---
+  /** Which model the app renders. Derived from `scene` — see activeModelTypeFor. */
   activeModelType: ModelType;
   isImporting: boolean;
-  importedMeshes: Group | null;
+  /**
+   * What is on screen, shared by the room. The room server holds the truth and
+   * relays it whole as SCENE_STATE; this copy is what the renderer and the tree
+   * read. Changing it locally is only ever a prediction of what the server will
+   * relay back — see applyLocalSceneUpdate.
+   */
+  scene: RoomScene;
+  /** Who may change the models. Enforced by the room server; the UI reads it to disable what would be refused. */
+  modelEditors: ModelEditors;
+  /** Parsed geometry per SceneModel.id. Absent until the file has been fetched and parsed. */
+  sceneEntries: Record<string, SceneModelEntry>;
+  /** Per-model visibility for THIS screen only. Overrides SceneModel.visible while present. */
+  localModelVisibility: Record<string, boolean>;
+  /** The model the scale slider and the import status refer to. */
+  activeSceneModelId: string | null;
+  /** Which model rows are open in the tree. Kept out of objectStates: a row's expansion is not a node's. */
+  expandedSceneModels: Record<string, boolean>;
+  compare: SceneCompare | null;
+  /** A SCENE_REFUSED the room server sent this client, in words. Shown once in the model tree. */
+  sceneRefusal: string | null;
+  /**
+   * The scene models as one tree, one top-level group per model. Derived from
+   * `scene` and `sceneEntries`; keeps its old name because the consumers —
+   * RecordingContext, DialogueEngine, SpatialComments — resolve a node id to the
+   * name it should be read out as, and that is exactly what this is for.
+   */
   importedSceneTree: SceneNode | null;
-  importedFileName: string | null;
-  importedScale: number;
-  importedBaseScale: number;
-  importedBasePosition: Vector3 | null;
 
   // Built-in models' real scene trees, populated when the GLB loads.
   // Until then, getCurrentSceneTree falls back to the hand-written constants.
@@ -338,11 +574,29 @@ interface AppState {
   toggleNodeExpanded: (id: string) => void;
   selectNode: (id: string | null) => void;
 
-  // --- NEW: Model Import Actions ---
+  // --- Model Import Actions ---
   setActiveModelType: (type: ModelType) => void;
   setIsImporting: (importing: boolean) => void;
-  setImportedModel: (meshes: Group, sceneTree: SceneNode, fileName: string, baseScale: number, basePosition: Vector3) => void;
-  setImportedScale: (scale: number) => void;
+  /**
+   * Adopt a scene — from SCENE_STATE, or from a curation being opened.
+   * `fresh` also wipes the meeting's content, which is what replacing the whole
+   * scene means and what adding to it does not.
+   */
+  setRoomScene: (scene: RoomScene, options?: { fresh?: boolean }) => void;
+  setModelEditors: (editors: ModelEditors) => void;
+  /** Apply one operation to the local copy, the way the room server would. */
+  applyLocalSceneUpdate: (update: SceneUpdate, options?: { fresh?: boolean }) => void;
+  /** Record a model's parsed geometry. Idempotent: the loader may offer it twice. */
+  upsertSceneModel: (entry: SceneModelEntry) => void;
+  /** Drop parsed geometry for models the scene no longer holds. */
+  pruneSceneEntries: () => void;
+  setSceneModelScale: (id: string, scale: number) => void;
+  /** Hide or show a model on THIS screen only — never sent to the room. */
+  setLocalModelVisibility: (id: string, visible: boolean) => void;
+  setActiveSceneModel: (id: string | null) => void;
+  toggleSceneModelExpanded: (id: string) => void;
+  setSceneCompare: (compare: SceneCompare | null) => void;
+  setSceneRefusal: (message: string | null) => void;
   setBuiltInSceneTree: (type: 'bicycle' | 'headphones', tree: SceneNode) => void;
 
   // --- NEW: Comment Actions ---
@@ -370,6 +624,8 @@ interface AppState {
   toggleCommentExpanded: (id: string) => void;
 
   // --- NEW: Import Status Actions ---
+  /** What the model tree's status area says: a failure, or what just succeeded. */
+  setImportStatus: (error: string | null, success: string | null) => void;
   clearImportStatus: () => void;
 
   // --- BOARDROOM MODE ---
@@ -456,16 +712,19 @@ export const useStore = create<AppState>((set, get) => ({
   knowledgeBase: KB_DB,
   objectStates: initObjectStates(HEADPHONES_SCENE_TREE),
 
-  // --- NEW: Model Type ---
+  // --- Models: the room's scene ---
   activeModelType: 'headphones',
   modelTransform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
   isImporting: false,
-  importedMeshes: null,
+  scene: emptyScene(),
+  modelEditors: 'host',
+  sceneEntries: {},
+  localModelVisibility: {},
+  activeSceneModelId: null,
+  expandedSceneModels: {},
+  compare: null,
+  sceneRefusal: null,
   importedSceneTree: null,
-  importedFileName: null,
-  importedScale: 1,
-  importedBaseScale: 1,
-  importedBasePosition: null,
   bicycleSceneTree: null,
   headphonesSceneTree: null,
 
@@ -640,7 +899,11 @@ export const useStore = create<AppState>((set, get) => ({
   setModelTransform: (modelTransform) => set({ modelTransform }),
 
   setActiveModelType: (type) => set((state) => {
-      const tree = type === 'bicycle' ? BICYCLE_SCENE_TREE : type === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
+      // 'imported' is not something a caller picks: it is what the scene reads
+      // as when it holds models, and there is nothing to show when it does not.
+      // Choosing a built-in clears the list, which is what switching models has
+      // always meant — the preset replaces what was there.
+      if (type === 'imported') return state;
       // Only a REAL model change wipes the meeting's content. This used to
       // clear unconditionally, and the room re-applies the model on every
       // REVIEW_CONFIG sync — so committing a pin (which updates the review)
@@ -648,62 +911,66 @@ export const useStore = create<AppState>((set, get) => ({
       // participants' screens moments after they arrived. Found live
       // 2026-09-23 while testing commit-as-comment.
       const sameModel = state.activeModelType === type;
-      return {
-          activeModelType: type,
-          objectStates: initObjectStates(tree),
-          pois: derivePoisFromSceneTree(tree),
-          ...(sameModel ? {} : {
-            comments: [],
-            chatHistory: [],
-            insightCards: [],
-          }),
-          drawingInteractionActive: false,
-          importedScale: 1,
-          importedBaseScale: 1,
-          importedBasePosition: null
-      };
+      return adoptScene({ models: [], builtIn: type }, state, !sameModel);
   }),
 
   setIsImporting: (importing) => set({ isImporting: importing }),
 
-  // Real model import - sets the parsed meshes and scene tree
-  setImportedModel: (meshes, sceneTree, fileName, baseScale, basePosition) => set(() => {
-      const partCount = countParts(sceneTree);
-      const modelName = fileName.replace(/\.[^/.]+$/, '');
+  setRoomScene: (scene, options) => set((state) => adoptScene(scene, state, options?.fresh ?? false)),
+
+  applyLocalSceneUpdate: (update, options) => {
+      const state = get();
+      const next = applySceneUpdate(state.scene, update);
+      // The reducer returned the same object, so there is nothing to adopt —
+      // unless the caller asked for a fresh start, which is a change to the
+      // MEETING even when it is not a change to the list.
+      if (next === state.scene && !options?.fresh) return;
+      state.setRoomScene(next, options);
+  },
+
+  setModelEditors: (modelEditors) => set({ modelEditors }),
+
+  upsertSceneModel: (entry) => set((state) => {
+      const previous = state.sceneEntries[entry.id];
+      // The same geometry can be offered twice — an import parses the file to
+      // measure it, and the loader parses whatever the scene says is missing.
+      // Keep the scale the user dialled in rather than resetting it under them.
+      const merged: SceneModelEntry = previous ? { ...entry, scale: previous.scale } : entry;
+      const entries = { ...state.sceneEntries, [entry.id]: merged };
       return {
-          activeModelType: 'imported' as ModelType,
-          importedMeshes: meshes,
-          importedSceneTree: sceneTree,
-          importedFileName: fileName,
-          importedScale: 1,
-          importedBaseScale: baseScale,
-          importedBasePosition: basePosition,
-          objectStates: initObjectStates(sceneTree),
-          pois: derivePoisFromSceneTree(sceneTree),
-          comments: [],
-          chatHistory: [],
-          insightCards: [],
-          isImporting: false,
-          importError: null,
-          importSuccess: `Successfully imported "${fileName}" as ${modelName} (${partCount} parts)`,
-          // Reset any active selections
-          activeAgentId: null,
-          leaderId: null,
-          splitScreenTarget: null,
-          isMeetingEnded: false,
-          time: 0,
-          // Reset comment mode
-          commentMode: 'none',
-          pendingCommentPosition: null,
-          pendingCommentNodeId: null,
-          pendingCommentNodeName: null,
-          drawingCanvas: null,
-          capturedScreenshot: null,
-          drawingInteractionActive: false
+          sceneEntries: entries,
+          activeSceneModelId: state.activeSceneModelId ?? entry.id,
+          ...derivedFromScene(state.scene, state, entries, false),
       };
   }),
 
-  setImportedScale: (scale) => set({ importedScale: scale }),
+  pruneSceneEntries: () => set((state) => {
+      const entries = pruneToScene(state.sceneEntries, state.scene);
+      if (Object.keys(entries).length === Object.keys(state.sceneEntries).length) return state;
+      return { sceneEntries: entries, ...derivedFromScene(state.scene, state, entries, false) };
+  }),
+
+  setSceneModelScale: (id, scale) => set((state) => {
+      const entry = state.sceneEntries[id];
+      if (!entry || entry.scale === scale) return state;
+      return { sceneEntries: { ...state.sceneEntries, [id]: { ...entry, scale } } };
+  }),
+
+  setLocalModelVisibility: (id, visible) => set((state) => ({
+      localModelVisibility: { ...state.localModelVisibility, [id]: visible },
+  })),
+
+  setActiveSceneModel: (id) => set({ activeSceneModelId: id }),
+
+  toggleSceneModelExpanded: (id) => set((state) => ({
+      expandedSceneModels: { ...state.expandedSceneModels, [id]: !state.expandedSceneModels[id] },
+  })),
+
+  setSceneCompare: (compare) => set({ compare }),
+
+  setSceneRefusal: (message) => set({ sceneRefusal: message }),
+
+  setImportStatus: (importError, importSuccess) => set({ importError, importSuccess }),
 
   setBuiltInSceneTree: (type, tree) => set({
     [type === 'bicycle' ? 'bicycleSceneTree' : 'headphonesSceneTree']: tree,

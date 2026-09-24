@@ -714,7 +714,13 @@ def test_transcribe_deletes_the_recording(service: Service) -> None:
 
 def test_the_documented_routes_are_the_only_routes(service: Service) -> None:
     schema = service.client.get("/openapi.json").json()
-    assert set(schema["paths"]) == {"/health", "/capture", "/transcribe"}
+    assert set(schema["paths"]) == {
+        "/health",
+        "/capture",
+        "/transcribe",
+        "/extract",
+        "/summarize",
+    }
     assert schema["paths"]["/capture"]["post"]["responses"]["200"] is not None
     # The error vocabulary is published too, so T4.4 does not have to guess it.
     assert "413" in schema["paths"]["/capture"]["post"]["responses"]

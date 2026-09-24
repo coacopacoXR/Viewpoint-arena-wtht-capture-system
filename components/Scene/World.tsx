@@ -14,6 +14,7 @@ import Headphones from './Headphones';
 import ImportedModel from './ImportedModel';
 import Agent from './Agent';
 import { useStore } from '../../store';
+import { useSceneModelLoader } from '../../lib/scene/useSceneModelLoader';
 
 interface WorldProps {
   hideAgents?: boolean;
@@ -32,7 +33,13 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
   const hideAgents = hideAgentsOverride ?? storeHideAgents;
   const activeModelType = useStore(state => state.activeModelType);
   const modelTransform = useStore(state => state.modelTransform);
-  
+
+  // Whatever the room's scene lists but this browser has not parsed yet gets
+  // downloaded and parsed here, so a late joiner ends up looking at the same
+  // geometry as everybody else. Mounted in World because World is the one
+  // component every canvas in the app renders.
+  useSceneModelLoader();
+
   // Ref to track throttle
   const lastTimeUpdate = useRef(0);
 
@@ -92,15 +99,20 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
           rotation={modelTransform.rotation}
           scale={modelTransform.scale}
         >
-          {activeModelType === 'imported' ? (
-            <ImportedModel />
-          ) : activeModelType === 'bicycle' ? (
+          {/* A built-in shows only while the scene holds no models of its own:
+              activeModelType is derived from the scene, so 'imported' means the
+              list is not empty and the preset steps aside. */}
+          {activeModelType === 'bicycle' ? (
             <Bicycle />
           ) : activeModelType === 'headphones' ? (
             <Headphones />
-          ) : (
+          ) : activeModelType === 'synth' ? (
             <Product />
-          )}
+          ) : null}
+          {/* Every model the room's scene holds, each at its own offset. Renders
+              nothing at all when the list is empty, which is why it can sit here
+              unconditionally next to the presets. */}
+          <ImportedModel />
         </group>
 
         <ContactShadows

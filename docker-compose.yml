@@ -49,7 +49,7 @@
 #      between that network and any external interface, in either direction.
 #   3. It also sits on `models` (not internal, because Ollama and Whisper have
 #      to be able to fetch models). Reachability still comes only from
-#      containers on those two networks — `app` and `whisper`.
+#      containers on those two networks — `api`, `app` and `whisper`.
 #   4. It requires CAPTURE_SHARED_SECRET on EVERY route once that variable is
 #      set, which install.sh always sets. Network isolation is the primary
 #      control; the secret is the one that still holds if somebody publishes the
@@ -98,9 +98,10 @@
 # The api/*.ts files are Vercel functions. Here the `api` service runs the same
 # files with server/api-server.ts, and nginx in `app` proxies /api/* to it, so
 # /api/public-config, /api/health, TURN credentials, Onshape sign-in and Teams
-# notifications work exactly as on Vercel. /api/capture/local alone is proxied
-# by nginx straight to capture-service, to stream large recordings without a
-# detour through Node.
+# notifications work exactly as on Vercel. That now includes every /api/capture/*
+# path: they used to be proxied straight to capture-service, which meant nginx —
+# not the deployment — decided which AI handled audio. lib/ai/router.ts decides
+# now, per job, from a setting an administrator can change without a redeploy.
 
 name: viewpoint-arena
 
@@ -220,25 +221,19 @@ services:
       # Attached so the app CAN reach capture-service and the db layer.
       # `internal: true` means that reachability never extends to the host.
       - backend
-    environment:
-      # Read by the nginx entrypoint's envsubst when it renders
-      # /etc/nginx/templates/default.conf.template, so the value lives in the
-      # container's environment and never in an image layer. It is what lets
-      # nginx add X-Capture-Token to /api/capture/local: the browser posts to a
-      # same-origin URL and never learns the secret, which is the only reason
-      # capture-service can keep publishing no port at all.
-      #
-      # `${VAR:-}`, not `${VAR:?}`: an empty value is valid and means
-      # authentication off (capture-service's own reading of an empty secret),
-      # and `proxy_set_header X-Capture-Token ""` makes nginx omit the header
-      # rather than send an empty one. install.sh always sets a real value.
-      CAPTURE_SHARED_SECRET: ${CAPTURE_SHARED_SECRET:-}
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1/nginx-health']
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+    # No `environment:` block, and that is a change worth noticing. This service
+    # used to be given CAPTURE_SHARED_SECRET so its nginx could add X-Capture-Token
+    # to the two capture paths it proxied straight to capture-service. Those paths
+    # now go to `api` (see "HOW /api/* IS SERVED" above), which adds the header
+    # itself from its own env_file, so the secret has no business being in this
+    # container's environment at all. A secret present where nothing reads it is a
+    # secret one `docker compose exec app env` away.
 
   # ── API: the api/*.ts functions, the same files Vercel runs ─────────────
   # server/api-server.ts serves them over plain HTTP; nginx in `app` proxies
@@ -265,6 +260,17 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # Where the built-in AI stack is, as THIS container reaches it. lib/ai/
+      # router.ts reads it first and falls back to capture.serviceUrl from
+      # viewpoint.config.ts, so an install that chose `capture.provider: 'local'`
+      # needs neither — but an install that chose a cloud provider and then picked
+      # "Built-in" for transcription in the admin console does, and without this
+      # the two ways of saying the same thing would disagree.
+      #
+      # Not from .env: it is a compose service name, not a deployment choice, and
+      # install.sh should not have to know it.
+      CAPTURE_SERVICE_URL: ${CAPTURE_SERVICE_URL:-http://capture-service:8080}
     volumes:
       # The per-deployment master config, written by install.sh. Read-only: the
       # API reads it, nothing in the stack may change it.

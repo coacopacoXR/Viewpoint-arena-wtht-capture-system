@@ -22,11 +22,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from capture_service.config import Settings, load_settings
 from capture_service.main import create_app
+from capture_service.prompt import EXTRACTION_JSON_SCHEMA
 from capture_service.schemas import TranscriptChunk
 from capture_service.transcribe import DEFAULT_SPEAKER_ID
 
@@ -56,6 +58,30 @@ def sentinel_chunk() -> TranscriptChunk:
     return make_chunk(SECRET_SPEECH)
 
 
+def wire_chunk(
+    text: str = "The bracket weld will crack under load.",
+    *,
+    speaker_id: str = DEFAULT_SPEAKER_ID,
+    start_ms: int = 0,
+    end_ms: int = 4200,
+) -> dict[str, Any]:
+    """`make_chunk` as a caller spells it in a JSON body: camelCase, plain dict.
+
+    /extract and /summarize take a transcript in the request body rather than
+    producing one from audio, so their tests build the wire shape directly.
+    """
+    return {
+        "speakerId": speaker_id,
+        "text": text,
+        "startMs": start_ms,
+        "endMs": end_ms,
+    }
+
+
+def sentinel_wire_chunk() -> dict[str, Any]:
+    return wire_chunk(SECRET_SPEECH)
+
+
 # A card that satisfies every rule the parser enforces, in the shape the
 # extraction prompt asks for (no id, no timestamp: the app mints both).
 VALID_CARD: dict[str, Any] = {
@@ -82,6 +108,17 @@ def card(**overrides: Any) -> dict[str, Any]:
 def cards_payload(*cards: dict[str, Any]) -> str:
     """The exact reply the extraction prompt asks a model for."""
     return json.dumps({"cards": list(cards)})
+
+
+def wire_card(**overrides: Any) -> dict[str, Any]:
+    """A card in the FULL wire shape, as a caller sends it back to /summarize.
+
+    VALID_CARD is what a MODEL emits: no `id`, no `timestamp`, because the app
+    mints both. A card arriving at /summarize has already been through a
+    provider and carries them, and `InsightCard` requires both — so a test that
+    posted VALID_CARD would be testing the 400, not the route.
+    """
+    return {"id": "insight-1", "timestamp": 1_700_000_000_000, **VALID_CARD, **overrides}
 
 
 # ─── Fakes ──────────────────────────────────────────────────────────────────
@@ -133,9 +170,20 @@ class FakeLlm:
         self.reply = cards_payload(VALID_CARD) if reply is None else reply
         self.error = error
         self.calls: list[tuple[str, str]] = []
+        # Recorded separately from `calls` because the schema is the one part
+        # of an LLM request a test cannot infer from the prompts: /summarize
+        # must send None (free markdown) and /extract must not.
+        self.schemas: list[dict[str, object] | None] = []
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        schema: dict[str, object] | None = EXTRACTION_JSON_SCHEMA,
+    ) -> str:
         self.calls.append((system, user))
+        self.schemas.append(schema)
         if self.error is not None:
             raise self.error
         return self.reply
@@ -151,6 +199,10 @@ class FakeLlm:
     @property
     def last_user_prompt(self) -> str:
         return self.calls[-1][1]
+
+    @property
+    def last_schema(self) -> dict[str, object] | None:
+        return self.schemas[-1]
 
 
 @dataclass
@@ -211,16 +263,33 @@ class Service:
         content_type: str = "audio/wav",
         fields: dict[str, Any] | None = None,
         include_audio: bool = True,
-    ) -> Any:
+    ) -> httpx.Response:
         files = {"audio": (filename, audio, content_type)} if include_audio else {}
         return self.client.post("/capture", files=files, data=fields or {})
 
     def post_transcribe(
         self, audio: bytes = FAKE_AUDIO, *, filename: str = "meeting.wav"
-    ) -> Any:
+    ) -> httpx.Response:
         return self.client.post(
             "/transcribe", files={"audio": (filename, audio, "audio/wav")}
         )
+
+    def post_extract(self, body: dict[str, Any] | None = None) -> httpx.Response:
+        """POST a JSON body to /extract, merged over a one-chunk transcript."""
+        payload: dict[str, Any] = {"transcript": [wire_chunk()]}
+        payload.update(body or {})
+        return self.client.post("/extract", json=payload)
+
+    def post_summarize(self, body: dict[str, Any] | None = None) -> httpx.Response:
+        """POST a JSON body to /summarize, merged over a one-chunk transcript.
+
+        Merging keeps `post_summarize({"cards": [...]})` a request with
+        something in it. To exercise the both-empty refusal, pass
+        `{"transcript": [], "cards": []}` or post through `client` directly.
+        """
+        payload: dict[str, Any] = {"transcript": [wire_chunk()]}
+        payload.update(body or {})
+        return self.client.post("/summarize", json=payload)
 
 
 @pytest.fixture

@@ -24,6 +24,26 @@ export interface ModelImportResult {
     fileName: string;
     baseScale: number;
     basePosition: THREE.Vector3;
+    /**
+     * The bounding box in the model's OWN units, before baseScale normalises it.
+     * Placement needs a width to put one model beside another, and measuring it
+     * here costs nothing: centerModel already has the box in hand.
+     */
+    size: { x: number; y: number; z: number };
+}
+
+/** How parseModelFile should build the tree it returns. */
+export interface ParseModelOptions {
+    /**
+     * Prefix for every node id, and so for every userData.modelId.
+     *
+     * One scene can hold several models and each numbers its nodes from zero, so
+     * without a prefix the second model's `imported_4` is the first one's
+     * `imported_4`: one tree row for two meshes, and a pin that resolves to the
+     * wrong geometry. Callers pass sceneModelPrefix(hash), which is the same on
+     * every client — see lib/scene/roomScene.ts.
+     */
+    treePrefix?: string;
 }
 
 /** Tips a Z-up CAD model onto three.js's Y-up frame. See UP_AXIS_BY_EXTENSION. */
@@ -177,7 +197,7 @@ const applySceneDefaults = (root: THREE.Object3D) => {
     });
 };
 
-const centerModel = (root: THREE.Group): { baseScale: number; basePosition: THREE.Vector3 } => {
+const centerModel = (root: THREE.Group): { baseScale: number; basePosition: THREE.Vector3; size: { x: number; y: number; z: number } } => {
     const box = new THREE.Box3().setFromObject(root);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -188,7 +208,7 @@ const centerModel = (root: THREE.Group): { baseScale: number; basePosition: THRE
 
     const baseScale = maxDim > 0 ? 2 / maxDim : 1;
 
-    return { baseScale, basePosition };
+    return { baseScale, basePosition, size: { x: size.x, y: size.y, z: size.z } };
 };
 
 const loadGLTF = async (file: File): Promise<THREE.Object3D> => {
@@ -302,7 +322,7 @@ export const validateModelFile = (file: File): string | null => {
     return null;
 };
 
-export async function parseModelFile(file: File): Promise<ModelImportResult> {
+export async function parseModelFile(file: File, options: ParseModelOptions = {}): Promise<ModelImportResult> {
     const extension = modelFileExtension(file.name);
 
     let loadedObject: THREE.Object3D;
@@ -373,11 +393,11 @@ export async function parseModelFile(file: File): Promise<ModelImportResult> {
 
     applySceneDefaults(rootGroup);
 
-    const { baseScale, basePosition } = centerModel(rootGroup);
+    const { baseScale, basePosition, size } = centerModel(rootGroup);
 
     const counter = { value: 0 };
-    const sceneTree = buildSceneTree(rootGroup, counter) ?? {
-        id: 'imported_root',
+    const sceneTree = buildSceneTree(rootGroup, counter, options.treePrefix ?? 'imported') ?? {
+        id: `${options.treePrefix ?? 'imported'}_root`,
         name: rootGroup.name,
         type: 'GROUP'
     };
@@ -387,7 +407,8 @@ export async function parseModelFile(file: File): Promise<ModelImportResult> {
         sceneTree,
         fileName: file.name,
         baseScale,
-        basePosition
+        basePosition,
+        size
     };
 }
 

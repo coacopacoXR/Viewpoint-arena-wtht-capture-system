@@ -5,21 +5,31 @@
 //
 //   NO CREDENTIAL EXISTS IN THIS MODULE OR IN ANY CALL TO IT.
 //
-// There is no apiKey option, no Authorization header, no process.env and no
+// There is no key option, no Authorization header, no process.env and no
 // import.meta.env read. The browser posts a transcript to our own serverless
-// function; that function holds the key in server-side process.env. This is
-// the rule in docs/plan/02-connector-adapters.md §2 — "never call these
-// directly from the browser with a key" — and the reason the two providers are
-// 30-line files instead of SDK integrations.
+// function; that function holds whatever credential the deployment configured,
+// server-side. This is the rule in docs/plan/02-connector-adapters.md §2 —
+// "never call these directly from the browser with a key".
+//
+// NOR IS THERE A PROVIDER NAME, and that is new (plan 14, batch BF). This client
+// used to send `provider: 'openai'` and the endpoint used to dispatch on it. It
+// does not now: lib/ai/router.ts resolves the AI for the cards job from a setting
+// an administrator chose, from viewpoint.config.ts, or from the built-in stack.
+// A browser that named the provider would be a second place the decision is made,
+// and the two would eventually disagree — so the request carries the transcript
+// and the context and nothing about the AI. That is also why the error messages
+// below say "capture/extract" instead of naming a vendor: this module does not
+// know which one answered, and must not pretend to.
 
 import type { InsightCard } from '../../../types';
 import type { SlideContext, TranscriptChunk } from './types';
 import type { CaptureParseFailureReason } from './parseInsightCards';
 import { validateExtractionPayload } from './parseInsightCards';
 
-export type CloudCaptureProvider = 'openai' | 'anthropic';
-
 export const EXTRACT_ENDPOINT = '/api/capture/extract';
+
+/** The label every message here carries. Not a vendor: see the header. */
+const WHERE = 'capture/extract';
 
 type FetchFn = typeof globalThis.fetch;
 
@@ -52,7 +62,6 @@ export class CaptureEndpointError extends Error {
 }
 
 export async function extractInsightsViaEndpoint(
-  provider: CloudCaptureProvider,
   transcript: TranscriptChunk[],
   context: SlideContext,
   options: ExtractClientOptions = {},
@@ -65,21 +74,21 @@ export async function extractInsightsViaEndpoint(
     response = await doFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, transcript, context }),
+      body: JSON.stringify({ transcript, context }),
     });
   } catch {
     // Fetch's own message is dropped: it embeds the URL, and a caller may have
     // pointed `endpoint` somewhere it should not have.
     throw new CaptureEndpointError(
       'network',
-      `capture/${provider}: could not reach ${endpoint}. The serverless ` +
-        `function is not answering — check that the deployment includes api/` +
-        `capture/extract.ts and that the network allows the request.`,
+      `${WHERE}: could not reach ${endpoint}. The serverless function is not ` +
+        `answering — check that the deployment includes api/capture/extract.ts ` +
+        `and that the network allows the request.`,
     );
   }
 
   if (!response.ok) {
-    throw await toEndpointError(provider, endpoint, response);
+    throw await toEndpointError(endpoint, response);
   }
 
   // A 200 that is not our function: an SPA fallback or a misrouted proxy
@@ -90,7 +99,7 @@ export async function extractInsightsViaEndpoint(
   if (!contentType.includes('application/json')) {
     throw new CaptureEndpointError(
       'endpoint_unavailable',
-      `capture/${provider}: ${endpoint} answered ${response.status} ` +
+      `${WHERE}: ${endpoint} answered ${response.status} ` +
         `${contentType || 'with no content type'} instead of JSON. The ` +
         `serverless function is not running — under \`vite preview\` and any ` +
         `other static host, api/* is not executed and the SPA fallback ` +
@@ -105,22 +114,29 @@ export async function extractInsightsViaEndpoint(
   } catch {
     throw new CaptureEndpointError(
       'endpoint_unavailable',
-      `capture/${provider}: ${endpoint} returned a body that was not valid JSON.`,
+      `${WHERE}: ${endpoint} returned a body that was not valid JSON.`,
       response.status,
     );
   }
 
   // The endpoint has already parsed and validated the model output, but its
   // response still crosses a network and a proxy: re-validating means a
-  // half-built card cannot reach the UI even if the server changes shape.
+  // half-built card cannot reach the UI even if the server changes shape. It
+  // also means a provider this client has never heard of — a webhook, an
+  // enterprise gateway — cannot produce a card the app would not have accepted
+  // from OpenAI.
   return validateExtractionPayload(payload, {
     defaultAgentId: transcript[0]?.speakerId,
   });
 }
 
 /**
- * HEAD probe: is a cloud key configured on the server? Lets a UI say "capture
- * is not configured" instead of failing an extraction the user waited for.
+ * HEAD probe: is the extraction endpoint deployed and unlocked?
+ *
+ * It cannot say which AI is behind it, and no longer pretends to: the answer to
+ * "is capture configured" lives in the admin console's AI section, which is the
+ * only place that can see the setting. This probe is what lets a UI say "capture
+ * is unavailable here" instead of failing an extraction the user waited for.
  */
 export async function probeExtractEndpoint(
   options: ExtractClientOptions = {},
@@ -138,7 +154,6 @@ export async function probeExtractEndpoint(
 // ─── Error translation ──────────────────────────────────────────────────────
 
 async function toEndpointError(
-  provider: CloudCaptureProvider,
   endpoint: string,
   response: Response,
 ): Promise<CaptureEndpointError> {
@@ -150,61 +165,87 @@ async function toEndpointError(
 
   switch (code) {
     case 'capture_not_configured':
-      // Points at the config file, not at a variable name: which variable
-      // holds the key is deployment internals, and the browser is not told.
-      // The server log names it, which is where the operator will look.
+      // Points at the admin console and the config file, not at a variable name
+      // or a vendor: which key the deployment holds is deployment internals, and
+      // the browser is not told. The server log names the missing piece.
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: the server has no API key for ${provider}. ` +
-          `It is configured server-side only — check the capture section of ` +
-          `viewpoint.config.ts and the deployment's secret store, then read ` +
-          `the server log for the variable that is missing. No key is ever ` +
-          `sent to the browser, so there is nothing to fix client-side.`,
+        `${WHERE}: the server has no usable AI configured for this job. It is ` +
+          `configured server-side only — choose one in the admin console's AI ` +
+          `section, or check the capture section of viewpoint.config.ts and the ` +
+          `deployment's secret store. No key is ever sent to the browser, so ` +
+          `there is nothing to fix client-side.`,
         response.status,
       );
     case 'capture_upstream_error':
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: the ${provider} API rejected the extraction ` +
-          `request. The upstream response is not forwarded to the browser — ` +
-          `check the server log for the status and detail.`,
+        `${WHERE}: the AI provider rejected the extraction request. The ` +
+          `upstream response is not forwarded to the browser — check the server ` +
+          `log for the status and detail.`,
         response.status,
       );
     case 'capture_upstream_unreachable':
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: the server could not reach the ${provider} API.`,
+        `${WHERE}: the server could not reach the AI provider it is configured ` +
+          `to use.`,
+        response.status,
+      );
+    case 'capture_upstream_timeout':
+      return new CaptureEndpointError(
+        code,
+        `${WHERE}: the AI provider did not answer in time. A small model on CPU ` +
+          `takes seconds per extraction and much longer while it cold-loads; ` +
+          `retry, or choose a faster provider in the admin console's AI section.`,
+        response.status,
+      );
+    case 'capture_endpoint_unavailable':
+      return new CaptureEndpointError(
+        code,
+        `${WHERE}: something answered the server's request that was not the AI ` +
+          `API it called — usually a base URL pointing at a proxy, a gateway's ` +
+          `error page or the wrong port. Check the provider's URL in the admin ` +
+          `console's AI section.`,
         response.status,
       );
     case 'capture_output_truncated':
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: the model ran out of output tokens before ` +
-          `finishing the JSON. Shorten the transcript window, or raise the ` +
-          `output limit in api/capture/extract.ts.`,
+        `${WHERE}: the model ran out of output tokens before finishing the ` +
+          `JSON. Shorten the transcript window, or choose a model with a larger ` +
+          `context window.`,
         response.status,
       );
     case 'capture_parse_error':
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: the model did not return usable InsightCard ` +
-          `JSON (${body?.reason ?? 'unknown reason'}). The raw model output ` +
-          `is not forwarded because it quotes the transcript.`,
+        `${WHERE}: the model did not return usable InsightCard JSON ` +
+          `(${body?.reason ?? 'unknown reason'}). The raw model output is not ` +
+          `forwarded because it quotes the transcript.`,
         response.status,
         body?.reason ?? null,
       );
     case 'transcript_too_large':
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: the transcript window exceeds the server's ` +
-          `size limit. Extract over a shorter window.`,
+        `${WHERE}: the transcript window exceeds the server's size limit. ` +
+          `Extract over a shorter window.`,
         response.status,
       );
     case 'empty_transcript':
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: the transcript window was empty — there was ` +
-          `nothing to extract from.`,
+        `${WHERE}: the transcript window was empty — there was nothing to ` +
+          `extract from.`,
+        response.status,
+      );
+    case 'request_closed':
+      // The client hung up. Nothing to fix and nobody to tell: the tab that
+      // would have shown the message is the one that left.
+      return new CaptureEndpointError(
+        code,
+        `${WHERE}: the request was cancelled before the extraction finished.`,
         response.status,
       );
     case 'invalid_transcript':
@@ -213,15 +254,14 @@ async function toEndpointError(
     case 'invalid_body':
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: the server rejected the request payload ` +
-          `(${code}). This is a client bug, not a model failure.`,
+        `${WHERE}: the server rejected the request payload (${code}). This is ` +
+          `a client bug, not a model failure.`,
         response.status,
       );
     default:
       return new CaptureEndpointError(
         code,
-        `capture/${provider}: ${endpoint} returned ${response.status} ` +
-          `(${code}).`,
+        `${WHERE}: ${endpoint} returned ${response.status} (${code}).`,
         response.status,
       );
   }

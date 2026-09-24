@@ -180,6 +180,53 @@ class EmptyTranscript(CaptureServiceError):
         )
 
 
+class EmptyTranscriptRequest(CaptureServiceError):
+    """A JSON request body carried no transcript chunks at all.
+
+    Shares the `empty_transcript` code with EmptyTranscript above — one code
+    for "there was nothing to extract from", so lib/connectors/capture/
+    extractClient.ts and local.ts keep a single `case` for it — but NOT its
+    status. EmptyTranscript is 422: the request was well-formed and Whisper
+    genuinely found no speech in it. This one is 400, because the client sent
+    an empty array and nothing else went wrong; that is the status
+    api/capture/extract.ts uses for the same mistake on the cloud path, and
+    matching it means a caller sees one behaviour whichever provider answered.
+
+    Kept as a separate class rather than a `status` argument on
+    EmptyTranscript: the two have different messages pointing at different
+    fixes (check the recording vs. check the caller), and errors.py's rule is
+    that a class is a situation, not a parameterisation of one.
+    """
+
+    code = "empty_transcript"
+    status = 400
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The request body contained no transcript chunks. Extraction "
+            "needs at least one chunk; the caller sent an empty transcript."
+        )
+
+
+class EmptySummaryInput(CaptureServiceError):
+    """Neither a transcript nor any cards were sent to summarise.
+
+    Either input alone is enough to write minutes from — a meeting whose
+    transcript is gone but whose cards survived still summarises, and a
+    transcript with no cards is the normal case for a provider that only does
+    summarisation. Only the combination of both being empty is a client bug.
+    """
+
+    code = "empty_summary_input"
+    status = 400
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The request body contained neither transcript chunks nor insight "
+            "cards, so there is nothing to write minutes from."
+        )
+
+
 class TranscriberUnavailable(CaptureServiceError):
     """faster-whisper is not installed, or the model could not be loaded."""
 

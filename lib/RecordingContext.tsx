@@ -98,7 +98,18 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   usePointingTimeline(localUserId);
 
   const isHost = sessionHostId === localUserId || sessionHostId === null;
-  const canRecord = isHost && captureProvider === 'local';
+  // Recording is offered unless the deployment asked for the MOCK capture
+  // provider, and that is the only provider check left in the browser.
+  //
+  // It used to be `captureProvider === 'local'`: recording was shown only when
+  // the config named capture-service, because that was the only backend that
+  // could take a whole recording. Plan 14 batch BF moved the choice server-side
+  // (lib/ai/router.ts), so a deployment on OpenAI, on an Azure resource, on a
+  // company gateway or on its own webhook can all transcribe a recording now —
+  // and a browser that still gated the UI on one config value would hide a
+  // working feature from every one of them. Which AI answers is not this
+  // component's business, and it no longer asks.
+  const canRecord = isHost && captureProvider !== 'mock';
 
   const provider = useMemo(() => new LocalCaptureProvider(), []);
 

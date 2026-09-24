@@ -1,291 +1,102 @@
-// POST /api/capture/extract   — transcript → InsightCard[] via a cloud LLM
-// HEAD /api/capture/extract   — configuration check (200 when a key is present)
-//
-// Server-side proxy for the OpenAI and Anthropic capture providers. The API
-// key is read from process.env ONLY, using the env var NAME from
-// viewpoint.config.ts (`capture.apiKeyEnv`) when the config names this
-// provider, and falling back to the conventional OPENAI_API_KEY /
-// ANTHROPIC_API_KEY. The browser clients (lib/connectors/capture/openai.ts,
-// anthropic.ts) hold no credential and cannot be given one — this is the rule
-// in docs/plan/02-connector-adapters.md §2: "never call these directly from
-// the browser with a key".
-//
-// SECURITY — nothing in an error response may contain:
-//   1. the API key (or its env var name),
-//   2. the raw upstream response body,
-//   3. the transcript, or
-//   4. the model's output (which quotes the transcript).
-// Every failure therefore returns a short machine-readable code, and the
-// detail that an operator needs goes to the server log instead.
-
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { requestIsUnlocked } from '../_lib/accessControl.ts';
+import type { TranscriptChunk } from '../../lib/connectors/capture/types.ts';
+import { describeResolution, resolveJob, runJob } from '../../lib/ai/router.ts';
 import {
-  EXTRACTION_SYSTEM_PROMPT,
-  buildExtractionUserPrompt,
-} from '../../lib/connectors/capture/extractionPrompt.ts';
-import {
-  CaptureExtractionError,
-  parseInsightCards,
-} from '../../lib/connectors/capture/parseInsightCards.ts';
-import type {
-  SlideContext,
-  TranscriptChunk,
-} from '../../lib/connectors/capture/types.ts';
+  enforceCaptureAccess,
+  parseGrounded,
+  parseSlideContext,
+  parseTranscriptChunk,
+  sendJobError,
+} from './_request.ts';
 
-type CloudProvider = 'openai' | 'anthropic';
+/**
+ * POST /api/capture/extract — a transcript in, InsightCards out.
+ *
+ * This endpoint used to hold the cloud half of the capture contract: it picked
+ * OpenAI or Anthropic from the request body, put the key from its own environment
+ * in the header, and refused to echo a byte of anything back. It now holds only
+ * the third of those. Which AI answers is decided by lib/ai/router.ts, from a
+ * per-job setting an administrator chose, from viewpoint.config.ts, or from the
+ * built-in stack — and the browser no longer says which it wanted, because it no
+ * longer needs to know.
+ *
+ * Everything else about the contract is unchanged: the request shape, the
+ * `{ cards }` response the browser re-validates with the same strict parser, the
+ * transcript budget, and the error vocabulary.
+ *
+ * ── SECURITY ────────────────────────────────────────────────────────────────
+ * THE TRANSCRIPT IS PROPRIETARY AND THIS ENDPOINT IS ON THE INTERNET.
+ * A request body carries what a company's engineers said about a design that
+ * has not shipped. The rules below are the whole reason this file is short.
+ *
+ * 1. NEVER ECHO THE TRANSCRIPT BACK. Not in an error, not in a log line, not in
+ *    a debug field. A failure is reported as a code and, for a parse failure, the
+ *    parser's `reason` enum — both from a closed vocabulary in lib/ai/router.ts.
+ * 2. NEVER FORWARD MODEL OUTPUT. The strict parser's messages quote the payload
+ *    they rejected; that quoting stays inside the parser and its log line, and
+ *    only its reason is returned.
+ * 3. NO CREDENTIAL HERE OR IN ANY RESPONSE. The key a cloud provider needs is
+ *    read by the router from the encrypted settings store or from a named
+ *    environment variable, and goes into one header. Nothing on any code path can
+ *    name it, and there is no default.
+ * 4. REFUSE WHAT YOU DO NOT UNDERSTAND. Unknown fields, malformed chunks, a
+ *    malformed component list: 400. Silently dropping a component list is how a
+ *    model starts inventing component ids that do not exist in anyone's CAD tree.
+ */
 
-const DEFAULT_API_KEY_ENV: Record<CloudProvider, string> = {
-  openai: 'OPENAI_API_KEY',
-  anthropic: 'ANTHROPIC_API_KEY',
-};
+// ── Transcript budget ───────────────────────────────────────────────────────
+//
+// These two numbers are the contract with capture-service: its
+// MAX_TRANSCRIPT_CHUNKS and MAX_TRANSCRIPT_CHARS are pinned against them by
+// capture-service/tests/test_typescript_parity.py, so a recording that is too
+// long for one path is too long for both and an operator learns one limit.
+// Change them here first, then in capture_service/transcribe.py.
 
-// Only used when viewpoint.config.ts is absent or does not select this
-// provider. A real deployment sets capture.model in the config.
-const DEFAULT_MODEL: Record<CloudProvider, string> = {
-  openai: 'gpt-4o-mini',
-  anthropic: 'claude-sonnet-4-5',
-};
-
-const UPSTREAM_URL: Record<CloudProvider, string> = {
-  openai: 'https://api.openai.com/v1/chat/completions',
-  anthropic: 'https://api.anthropic.com/v1/messages',
-};
-
-const ANTHROPIC_VERSION = '2023-06-01';
-
-// Boundary limits: this endpoint spends real money on whatever it is sent, so
-// an oversized window is rejected before it reaches the model rather than
-// after.
+/** Hard cap on chunks in one extraction window. */
 const MAX_CHUNKS = 2000;
+
+/** Hard cap on total transcript characters sent to a model in one call. */
 const MAX_TRANSCRIPT_CHARS = 200_000;
-/** Generous ceiling for the model's answer; a truncated reply is reported as such. */
-const MAX_OUTPUT_TOKENS = 4096;
 
-// ─── Config resolution (mirrors api/turn-credentials.ts) ────────────────────
-
-async function resolveCloudConfig(
-  provider: CloudProvider,
-): Promise<{ apiKeyEnv: string; model: string }> {
-  try {
-    const { loadConfig } = await import('../../lib/config/loadConfig.ts');
-    const config = await loadConfig();
-    const capture = config.capture;
-    // Only honour the config when it actually selects this provider; a
-    // deployment running capture.provider 'mock' has no business lending its
-    // (unrelated) key name to a cloud extraction request.
-    if (capture.provider === provider) {
-      return { apiKeyEnv: capture.apiKeyEnv, model: capture.model };
-    }
-  } catch {
-    // No viewpoint.config.ts (local dev, or this repo's default) — fall back
-    // to the conventional names rather than failing the request.
-  }
-  return {
-    apiKeyEnv: DEFAULT_API_KEY_ENV[provider],
-    model: DEFAULT_MODEL[provider],
-  };
+interface ExtractRequestBody {
+  transcript?: unknown;
+  context?: unknown;
+  /**
+   * The optional grounded-capture context (batch D of
+   * docs/local-capture-plan.md).
+   *
+   * The cloud path used to DROP these three fields — only the local path
+   * forwarded them — which meant the component list, the pointing timeline and
+   * the live speaker-labelled transcript were collected by the browser, sent over
+   * the wire, and thrown away. They now reach whichever provider the router chose,
+   * because a webhook or an openai-compatible gateway is at least as able to use
+   * them as our own service is.
+   */
+  grounded?: unknown;
+  /**
+   * Accepted and IGNORED.
+   *
+   * Older browser bundles name the provider they want. The server decides now, so
+   * the field is tolerated rather than refused — a stale tab open across a deploy
+   * should keep working, not start 400ing — and has no effect on anything.
+   */
+  provider?: unknown;
 }
 
-/** True when at least one of the two cloud providers has a usable key. */
-async function anyCloudKeyConfigured(): Promise<boolean> {
-  for (const provider of ['openai', 'anthropic'] as const) {
-    const { apiKeyEnv } = await resolveCloudConfig(provider);
-    if (process.env[apiKeyEnv]) return true;
-  }
-  return false;
-}
-
-// ─── Request validation ─────────────────────────────────────────────────────
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function parseTranscript(value: unknown): TranscriptChunk[] | null {
-  if (!Array.isArray(value)) return null;
-
-  const chunks: TranscriptChunk[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) return null;
-    if (!isNonEmptyString(entry.speakerId)) return null;
-    if (typeof entry.text !== 'string') return null;
-    if (!isFiniteNumber(entry.startMs) || !isFiniteNumber(entry.endMs)) return null;
-    if (entry.startMs < 0 || entry.endMs < entry.startMs) return null;
-    chunks.push({
-      speakerId: entry.speakerId,
-      text: entry.text,
-      startMs: entry.startMs,
-      endMs: entry.endMs,
-    });
-  }
-  return chunks;
-}
-
-/** Size is checked separately from shape so the two report different codes. */
-function isTooLarge(transcript: TranscriptChunk[]): boolean {
-  if (transcript.length > MAX_CHUNKS) return true;
-  return (
-    transcript.reduce((total, chunk) => total + chunk.text.length, 0) >
-    MAX_TRANSCRIPT_CHARS
-  );
-}
-
-function parseContext(value: unknown): SlideContext | null {
-  if (!isRecord(value)) return null;
-  if (!isFiniteNumber(value.agendaIdx)) return null;
-  if (!isNonEmptyString(value.slideTitle)) return null;
-
-  const context: SlideContext = {
-    agendaIdx: value.agendaIdx,
-    slideTitle: value.slideTitle,
-  };
-  if (value.hoveredPartName !== undefined) {
-    if (!isNonEmptyString(value.hoveredPartName)) return null;
-    context.hoveredPartName = value.hoveredPartName;
-  }
-  if (value.laserTargetPartName !== undefined) {
-    if (!isNonEmptyString(value.laserTargetPartName)) return null;
-    context.laserTargetPartName = value.laserTargetPartName;
-  }
-  return context;
-}
-
-// ─── Upstream calls ─────────────────────────────────────────────────────────
-
-interface UpstreamResult {
-  /** The model's text, or null when the response carried none. */
-  text: string | null;
-  /** True when the model stopped because it ran out of output tokens. */
-  truncated: boolean;
-}
-
-async function callOpenAI(
-  model: string,
-  apiKey: string,
-  userPrompt: string,
-): Promise<UpstreamResult> {
-  const resp = await fetch(UPSTREAM_URL.openai, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
-      // Constrains the reply to valid JSON. It does NOT constrain the schema —
-      // parseInsightCards is still the authority on shape.
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-    }),
-  });
-
-  if (!resp.ok) throw new UpstreamError(resp.status, await drain(resp));
-
-  const data = (await resp.json().catch(() => null)) as {
-    choices?: Array<{
-      message?: { content?: unknown };
-      finish_reason?: string;
-    }>;
-  } | null;
-
-  const choice = data?.choices?.[0];
-  const content = choice?.message?.content;
-  return {
-    text: typeof content === 'string' ? content : null,
-    truncated: choice?.finish_reason === 'length',
-  };
-}
-
-async function callAnthropic(
-  model: string,
-  apiKey: string,
-  userPrompt: string,
-): Promise<UpstreamResult> {
-  const resp = await fetch(UPSTREAM_URL.anthropic, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      system: EXTRACTION_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userPrompt }],
-    }),
-  });
-
-  if (!resp.ok) throw new UpstreamError(resp.status, await drain(resp));
-
-  const data = (await resp.json().catch(() => null)) as {
-    content?: Array<{ type?: string; text?: unknown }>;
-    stop_reason?: string;
-  } | null;
-
-  // A reply can be split across several text blocks; concatenate them.
-  const text = (data?.content ?? [])
-    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text as string)
-    .join('');
-
-  return {
-    text: text.length > 0 ? text : null,
-    truncated: data?.stop_reason === 'max_tokens',
-  };
-}
-
-/** Carries the upstream status plus a body that must never reach the client. */
-class UpstreamError extends Error {
-  readonly status: number;
-  /** Server-log only. */
-  readonly upstreamBody: string;
-
-  constructor(status: number, upstreamBody: string) {
-    super(`upstream returned ${status}`);
-    this.name = 'UpstreamError';
-    this.status = status;
-    this.upstreamBody = upstreamBody;
-  }
-}
-
-async function drain(resp: Response): Promise<string> {
-  try {
-    return (await resp.text()).slice(0, 500);
-  } catch {
-    return '';
-  }
-}
-
-/** Defence in depth for the server log: strip the key even from upstream text. */
-function redact(text: string, apiKey: string): string {
-  if (!apiKey) return text;
-  return text.split(apiKey).join('<redacted>');
-}
-
-// ─── Handler ────────────────────────────────────────────────────────────────
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export async function handler(req: VercelRequest, res: VercelResponse) {
+  // HEAD is the probe lib/connectors/capture/extractClient.ts's
+  // probeExtractEndpoint uses, so a UI can say "capture is not available here"
+  // instead of failing an extraction the user waited for. It answers from the
+  // RESOLUTION alone and makes no upstream call: a health poll that spent money
+  // on a model call would be a health poll nobody could afford to run.
   if (req.method === 'HEAD') {
-    // A HEAD probe cannot know which provider the caller means, so it reports
-    // whether EITHER cloud key is configured. Used by the browser clients to
-    // tell "not configured" from "unreachable".
-    res.status((await anyCloudKeyConfigured()) ? 200 : 503).end();
+    if (!enforceCaptureAccess(req, res)) return;
+    const resolved = describeResolution(await resolveJob('cards'));
+    if (resolved.missingSecret) {
+      res.status(503).json({ error: 'capture_not_configured' });
+      return;
+    }
+    res.status(200).json({});
     return;
   }
 
@@ -295,117 +106,94 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  // A POST here bills the deployment's own OpenAI or Anthropic key, so it is
-  // held to the front-door password when one is set. The HEAD probe above is
-  // deliberately left open: it only reports whether a key exists, and server-
-  // side health checks call it without a browser cookie.
-  if (!requestIsUnlocked(req as unknown as { cookies?: Record<string, string> })) {
-    res.status(401).json({ error: 'locked' });
-    return;
-  }
+  // Front-door password when the deployment has one. Runs before any transcript
+  // is read: a request from someone who has not been admitted does not get as far
+  // as a validation error that could describe what they sent.
+  if (!enforceCaptureAccess(req, res)) return;
 
-  const body: unknown = req.body;
-  if (!isRecord(body)) {
-    res.status(400).json({ error: 'invalid_body' });
-    return;
-  }
+  const body = (req.body ?? {}) as ExtractRequestBody;
 
-  const provider = body.provider;
-  if (provider !== 'openai' && provider !== 'anthropic') {
-    // Deliberately names no other provider: this endpoint only ever proxies
-    // the two cloud vendors whose keys live here.
-    res.status(400).json({ error: 'invalid_provider' });
-    return;
-  }
-
-  const transcript = parseTranscript(body.transcript);
-  if (transcript === null) {
-    res.status(400).json({ error: 'invalid_transcript' });
-    return;
-  }
-  if (transcript.length === 0) {
+  // ── Validate the transcript ────────────────────────────────────────────────
+  if (!Array.isArray(body.transcript) || body.transcript.length === 0) {
     res.status(400).json({ error: 'empty_transcript' });
     return;
   }
-  if (isTooLarge(transcript)) {
-    // Rejected before the model sees it: this endpoint spends real money on
-    // whatever it is sent.
-    res.status(413).json({ error: 'transcript_too_large', provider });
+  if (body.transcript.length > MAX_CHUNKS) {
+    res.status(413).json({ error: 'transcript_too_large', maxChunks: MAX_CHUNKS });
     return;
   }
-  const context = parseContext(body.context);
+
+  const transcript: TranscriptChunk[] = [];
+  for (const raw of body.transcript) {
+    const chunk = parseTranscriptChunk(raw);
+    if (chunk === null) {
+      // The field NAMES that failed, never their values: a value here is
+      // transcript.
+      res.status(400).json({ error: 'invalid_body', fields: ['transcript'] });
+      return;
+    }
+    transcript.push(chunk);
+  }
+
+  // Enforce the character budget AFTER shape validation, so a malformed chunk
+  // can't hide behind a too-large body.
+  const totalChars = transcript.reduce((sum, c) => sum + c.text.length, 0);
+  if (totalChars > MAX_TRANSCRIPT_CHARS) {
+    res.status(413).json({
+      error: 'transcript_too_large',
+      maxChars: MAX_TRANSCRIPT_CHARS,
+    });
+    return;
+  }
+
+  // ── Validate the spatial context ───────────────────────────────────────────
+  const context = parseSlideContext(body.context);
   if (context === null) {
-    res.status(400).json({ error: 'invalid_context' });
+    res.status(400).json({ error: 'invalid_body', fields: ['context'] });
     return;
   }
 
-  const { apiKeyEnv, model } = await resolveCloudConfig(provider);
-  const apiKey = process.env[apiKeyEnv];
-  if (!apiKey) {
-    // Names the variable in the SERVER LOG, because that is what an operator
-    // needs in order to fix the deployment. The response names only the
-    // provider: which variable holds the key is deployment internals, the same
-    // reasoning that makes api/public-config.ts refuse to return err.message.
-    console.error(`[capture/extract] ${provider} API key is not set: ${apiKeyEnv} is empty`);
-    res.status(503).json({ error: 'capture_not_configured', provider });
-    return;
-  }
-
-  const userPrompt = buildExtractionUserPrompt(transcript, context);
-  const defaultAgentId = transcript[0].speakerId;
-
-  let result: UpstreamResult;
-  try {
-    result =
-      provider === 'openai'
-        ? await callOpenAI(model, apiKey, userPrompt)
-        : await callAnthropic(model, apiKey, userPrompt);
-  } catch (err) {
-    if (err instanceof UpstreamError) {
-      console.error(
-        `[capture/extract] ${provider} upstream ${err.status}: ` +
-          redact(err.upstreamBody, apiKey),
-      );
-      // Status only. The upstream body is never forwarded: it can quote the
-      // prompt, which contains the transcript.
-      res.status(502).json({ error: 'capture_upstream_error', provider });
-      return;
-    }
-    console.error(`[capture/extract] ${provider} request failed`);
-    res.status(502).json({ error: 'capture_upstream_unreachable', provider });
-    return;
-  }
-
-  if (result.truncated) {
-    console.error(`[capture/extract] ${provider} output hit the token limit`);
-    res.status(422).json({ error: 'capture_output_truncated', provider });
+  // ── Validate the grounded context (optional) ───────────────────────────────
+  const grounded = parseGrounded(body.grounded);
+  if (grounded === null) {
+    res.status(400).json({ error: 'invalid_body', fields: ['grounded'] });
     return;
   }
 
   try {
-    const cards = parseInsightCards(result.text, { defaultAgentId });
-    // The success body is EXACTLY the envelope the parser enforces, with no
-    // transport metadata mixed in — that is what lets the browser client
-    // re-validate it verbatim with the same strict rules (extra fields
-    // included) instead of needing a second, laxer schema for our own API.
-    res.status(200).json({ cards });
-  } catch (err) {
-    if (err instanceof CaptureExtractionError) {
-      // `reason` is an enum and safe to return. err.message is NOT: it quotes
-      // the model output, which quotes the transcript.
-      console.error(
-        `[capture/extract] ${provider} unparseable output: ${err.reason}`,
-      );
-      res.status(422).json({
-        error: 'capture_parse_error',
-        reason: err.reason,
-        provider,
-      });
+    // The router resolves the provider for this job and calls it. Every failure
+    // it can report is an AiJobError carrying a code and a status and nothing
+    // else, which is what makes sendJobError safe to hand the whole try block.
+    const result = await runJob('cards', {
+      transcript,
+      context,
+      grounded,
+      signal: requestSignal(req),
+    });
+    if (result.job !== 'cards') {
+      // Unreachable: runJob answers the job it was asked for. Guarded rather than
+      // cast, because a cast here would be the one place a future refactor could
+      // quietly send the wrong shape to the browser.
+      res.status(502).json({ error: 'capture_upstream_error' });
       return;
     }
-    // Anything unexpected is still reported as a parse failure rather than
-    // propagated: an unhandled throw would surface as a 500 with a stack.
-    console.error('[capture/extract] unexpected parse failure');
-    res.status(422).json({ error: 'capture_parse_error', provider });
+    res.status(200).json({ cards: result.cards });
+  } catch (err) {
+    sendJobError(res, err, 'extract');
   }
 }
+
+/**
+ * The caller's abort signal, when the runtime exposes one.
+ *
+ * Vercel's Node runtime attaches `signal` to the request; plain Node does not,
+ * and neither does the test double. Optional on purpose: a deployment without one
+ * simply loses the ability to stop an in-flight cloud call when the client hangs
+ * up, which is what happened before this existed too.
+ */
+function requestSignal(req: VercelRequest): AbortSignal | undefined {
+  const candidate = (req as unknown as { signal?: unknown }).signal;
+  return candidate instanceof AbortSignal ? candidate : undefined;
+}
+
+export default handler;

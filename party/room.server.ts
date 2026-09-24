@@ -2,6 +2,23 @@ import type * as Party from 'partykit/server';
 import type { InsightCard, SpatialComment, LiveChatMessage, XRParticipantData } from '../types';
 import type { ReviewDraft } from '../lib/reviewSetupStore';
 import { verifyAccessToken, type VerifiedAccount } from './verifyJwt';
+import {
+  applySceneUpdate as reduceSceneUpdate,
+  emptyScene,
+  mayChangeModels,
+  MAX_SCENE_MODELS,
+  type ModelEditors,
+  type RoomScene,
+  type SceneRefusalReason,
+  type SceneStatePayload,
+  type SceneUpdate,
+} from '../lib/scene/roomScene';
+import {
+  asModelEditors,
+  asRoomScene,
+  asSceneUpdate,
+  sceneFromLegacyReference,
+} from '../lib/scene/sceneWire';
 
 export type WebRTCSignalData =
   | { type: 'offer'; sdp: RTCSessionDescriptionInit }
@@ -9,7 +26,8 @@ export type WebRTCSignalData =
   | { type: 'ice'; candidate?: RTCIceCandidateInit };
 
 /**
- * What is on screen, by reference — and nothing else.
+ * What is on screen, by reference — the shape batch BA introduced, kept only so
+ * a client that has not been updated can still be understood.
  *
  * `hash` is the SHA-256 the file was stored under (POST /api/models). Clients
  * fetch the bytes from /api/models/<hash> instead of receiving them here, which
@@ -19,8 +37,10 @@ export type WebRTCSignalData =
  * the hash because utils/modelLoader.ts dispatches on the extension, and `size`
  * is what a client shows while the download runs.
  *
- * Both are absent for the built-in models, which ship with the app and have
- * nothing to fetch.
+ * This server no longer SENDS one — it holds a whole scene (RoomScene) and
+ * relays that as SCENE_STATE. An arriving MODEL_CHANGE is translated into
+ * "the scene is this one model", which is what the message always meant back
+ * when the scene could only hold one; see sceneFromLegacyReference.
  */
 export interface ModelReference {
   modelType: 'synth' | 'bicycle' | 'imported';
@@ -87,6 +107,10 @@ type RoomMessage =
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
   | { type: 'MODEL_CHANGE'; payload: IncomingModelChange }
+  | { type: 'SCENE_STATE'; payload: SceneStatePayload }
+  | { type: 'SCENE_UPDATE'; payload: SceneUpdate }
+  | { type: 'SCENE_REFUSED'; payload: { reason: SceneRefusalReason } }
+  | { type: 'SET_MODEL_EDITORS'; payload: { modelEditors: ModelEditors } }
   | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
@@ -125,7 +149,14 @@ const MAX_PERSISTED_ADMISSIONS = 200;
 
 // Where the on-screen model is kept between restarts. See persistCurrentModel
 // for why this one is persisted when almost nothing else here is.
+//
+// Written by batch BA and no longer written now — a room that upgrades finds its
+// model under this key and onStart translates it into a scene. Kept as a name so
+// that translation has something to read.
 const MODEL_KEY = 'current-model';
+
+// Where the scene is kept between restarts, and with it who may change it.
+const SCENE_KEY = 'room-scene';
 
 /**
  * A persisted or received model reference, or null when it is not one.
@@ -170,11 +201,21 @@ export default class RoomServer implements Party.Server {
   // Takeover-mode policy — held server-side so late joiners get a consistent view
   takeoverModeEnabled = false;
   takeoverApprovedUserIds: string[] = [];
-  // The model on screen, by reference: a hash, the name it was imported under
-  // and its size. Persisted to room storage (MODEL_KEY) so a restart does not
-  // drop it, and replayed to each new connection. Never the bytes — see
-  // ModelReference.
-  currentModel: ModelReference | null = null;
+  // What is on screen: every model in the room's scene, each by reference (a
+  // hash, a name, a line and a revision), plus which built-in is up when there
+  // are none. Persisted to room storage (SCENE_KEY) so a restart does not drop
+  // it, and relayed whole to every connection on every change. Never the bytes
+  // — see ModelReference.
+  //
+  // Held HERE rather than on the clients, and changed only by an operation
+  // applied to this copy, because the alternative is two people who each send
+  // "the scene is this list" and the second one silently undoes the first: they
+  // were both working from a list that was already out of date.
+  scene: RoomScene = emptyScene();
+  // Who may change the models. Enforced here rather than only by hiding a
+  // button: the websocket is the thing that has to say no, because a button
+  // anybody can put back with devtools is not a permission.
+  modelEditors: ModelEditors = 'host';
   // Persisted curated review config (viewpoints, pins, agenda…)
   reviewConfig: ReviewDraft | null = null;
   // Persisted spatial comments for late joiners
@@ -244,14 +285,18 @@ export default class RoomServer implements Party.Server {
    * The join policy is NOT restored: it goes back to 'ask', which is the safe
    * direction, and a host who wanted an open link can say so again.
    *
-   * The model on screen IS restored, for the same reason as the admitted set:
-   * an upgrade restarts this container during a meeting, and a room that came
-   * back with nobody's model in it would leave every reconnecting participant
-   * staring at the default headphones while the review carries on about a
-   * bracket. What is restored is a hash, a name and a length — restoring it
-   * costs one small read, and the bytes stay in the store they were uploaded
-   * to. A record written before models were synced by reference carries those
-   * bytes inline and is dropped instead; see asModelReference.
+   * The scene IS restored, for the same reason as the admitted set: an upgrade
+   * restarts this container during a meeting, and a room that came back with
+   * nobody's models in it would leave every reconnecting participant staring at
+   * the default headphones while the review carries on about a bracket. What is
+   * restored is a hash, a name, a line and a revision per model — restoring it
+   * costs one small read, and the bytes stay in the store they were uploaded to.
+   *
+   * A record written before models were synced by reference carries those bytes
+   * inline and is dropped instead; see asModelReference. A record written by
+   * batch BA, which held ONE model rather than a list, is translated into the
+   * one-model scene it always meant, so a room that upgrades mid-review keeps
+   * the model it was looking at.
    */
   async onStart() {
     try {
@@ -265,10 +310,29 @@ export default class RoomServer implements Party.Server {
       // No storage on this runtime — carry on with an empty set.
     }
     try {
-      this.currentModel = asModelReference(await this.room.storage.get(MODEL_KEY));
+      const saved = await this.room.storage.get(SCENE_KEY);
+      if (typeof saved === 'object' && saved !== null) {
+        const record = saved as Record<string, unknown>;
+        const scene = asRoomScene(record);
+        if (scene) {
+          this.scene = scene;
+          // 'host' when the record predates the setting, which is the default
+          // and the safe direction: a room that comes back permissive is a room
+          // where anybody can swap the product under discussion.
+          this.modelEditors = asModelEditors(record.modelEditors) ?? 'host';
+        }
+      }
     } catch {
-      // No storage on this runtime — the room comes back with no model, which is
-      // what it did before, and the next import puts one up.
+      // No storage on this runtime — the room comes back with no models, which
+      // is what it did before, and the next import puts one up.
+    }
+    if (this.scene.models.length > 0 || this.scene.builtIn !== null) return;
+    try {
+      const legacy = asModelReference(await this.room.storage.get(MODEL_KEY));
+      const translated = legacy ? sceneFromLegacyReference(legacy) : null;
+      if (translated) this.scene = translated;
+    } catch {
+      // Same as above: nothing to restore from, so the room starts empty.
     }
   }
 
@@ -288,19 +352,18 @@ export default class RoomServer implements Party.Server {
   }
 
   /**
-   * Write the on-screen model back, the way persistAdmitted does.
+   * Write the scene, and who may change it, back — the way persistAdmitted does.
    *
-   * Fire-and-forget for the same reason: a model change must not wait on a disk
-   * write, and a failed write costs a late joiner the model until somebody
-   * imports again, not a broken room. There is no cap to apply because there is
-   * nothing to grow — this is a hash, a name and a length, which is the whole
-   * benefit of syncing by reference rather than by payload.
+   * Fire-and-forget for the same reason: a scene change must not wait on a disk
+   * write, and a failed write costs a late joiner the models until somebody
+   * changes the scene again, not a broken room. There is no cap to apply beyond
+   * MAX_SCENE_MODELS, enforced on the way in, because there is nothing here that
+   * grows on its own — this is a hash, a name, a line, a revision and a position
+   * per model, which is the whole benefit of syncing by reference.
    */
-  private persistCurrentModel(): void {
-    const model = this.currentModel;
-    if (!model) return;
+  private persistScene(): void {
     try {
-      void this.room.storage.put(MODEL_KEY, model).catch(() => {});
+      void this.room.storage.put(SCENE_KEY, this.sceneStatePayload()).catch(() => {});
     } catch {
       // No storage on this runtime.
     }
@@ -318,6 +381,66 @@ export default class RoomServer implements Party.Server {
     if (this.modelChangeDropLogged) return;
     this.modelChangeDropLogged = true;
     console.log(`[room] dropped a MODEL_CHANGE: ${reason}`);
+  }
+
+  /** The scene plus who may change it — what SCENE_STATE carries and storage keeps. */
+  private sceneStatePayload(): SceneStatePayload {
+    return {
+      models: this.scene.models,
+      builtIn: this.scene.builtIn,
+      modelEditors: this.modelEditors,
+    };
+  }
+
+  /**
+   * Why this connection may not change the models, or null when it may.
+   *
+   * The host is whoever computeHost() says — the first person in, which is the
+   * same answer the client was given by HOST_CHANGE, so the button it disabled
+   * and the refusal it gets here are the same judgement made twice rather than
+   * two different judgements that can disagree.
+   */
+  private sceneRefusalFor(senderUserId: string | undefined): SceneRefusalReason | null {
+    if (mayChangeModels(this.modelEditors, senderUserId ?? null, this.computeHost())) return null;
+    return this.modelEditors === 'host' ? 'host-only' : 'not-an-editor';
+  }
+
+  /**
+   * Tell ONE connection that its change was refused, and why.
+   *
+   * Targeted rather than relayed: the room does not need to hear that somebody
+   * tried, and the person who tried needs to hear it or their screen would sit
+   * there looking as though the click did nothing. Nothing else happens — the
+   * scene is untouched, so there is no SCENE_STATE to send and no reason for
+   * anybody else's screen to change.
+   */
+  private refuseScene(conn: Party.Connection, reason: SceneRefusalReason): void {
+    conn.send(JSON.stringify({ type: 'SCENE_REFUSED', payload: { reason } } as RoomMessage));
+  }
+
+  /**
+   * Apply one operation to this room's scene, then tell everybody the result.
+   *
+   * Relayed to the sender too, and that is the point of the design: there is one
+   * copy of the list, it lives here, and every client — including the one that
+   * asked for the change — learns what the scene now is from this message rather
+   * than from its own optimistic guess. A client that was refused, or that asked
+   * for something another client had already done, ends up correct either way.
+   */
+  private applySceneUpdate(update: SceneUpdate, sender: Party.Connection): void {
+    if (update.op === 'add' && this.scene.models.length >= MAX_SCENE_MODELS) {
+      this.refuseScene(sender, 'scene-full');
+      return;
+    }
+    const next = reduceSceneUpdate(this.scene, update);
+    // The reducer returns the same object when the operation changed nothing —
+    // an unknown id, a duplicate add, a flag that already had that value. There
+    // is then nothing to write and nothing to say: relaying a scene nobody's
+    // copy differs from would redraw every participant's model tree for nothing.
+    if (next === this.scene) return;
+    this.scene = next;
+    this.persistScene();
+    this.relay(JSON.stringify({ type: 'SCENE_STATE', payload: this.sceneStatePayload() } as RoomMessage));
   }
 
   private computeHost(): string | null {
@@ -352,9 +475,13 @@ export default class RoomServer implements Party.Server {
       type: 'HOST_CHANGE',
       payload: { hostId: this.computeHost() },
     } as RoomMessage));
-    if (this.currentModel) {
-      conn.send(JSON.stringify({ type: 'MODEL_CHANGE', payload: this.currentModel } as RoomMessage));
-    }
+    // The scene always goes, even when it is empty: it carries `modelEditors`
+    // too, and a participant who arrives before anybody has imported anything
+    // still needs to know whether the import button is theirs to press.
+    conn.send(JSON.stringify({
+      type: 'SCENE_STATE',
+      payload: this.sceneStatePayload(),
+    } as RoomMessage));
     if (this.reviewConfig) {
       conn.send(JSON.stringify({ type: 'REVIEW_CONFIG', payload: { config: this.reviewConfig } } as RoomMessage));
     }
@@ -868,11 +995,56 @@ export default class RoomServer implements Party.Server {
         payload: { enabled: this.takeoverModeEnabled, approvedUserIds: this.takeoverApprovedUserIds },
       } as RoomMessage));
 
+    } else if (msg.type === 'SCENE_UPDATE') {
+      // The room's scene, changed by one operation rather than replaced by one
+      // list. Validated first: this payload came from a browser and is about to
+      // be written into room state, into persisted storage, and out to every
+      // other connection, so a field this server has never heard of must not be
+      // able to ride along.
+      const senderId = this.connToUser.get(sender.id);
+      const refusal = this.sceneRefusalFor(senderId);
+      if (refusal) {
+        this.refuseScene(sender, refusal);
+        return;
+      }
+      const update = asSceneUpdate(msg.payload);
+      if (!update) {
+        this.refuseScene(sender, 'unreadable-update');
+        return;
+      }
+      this.applySceneUpdate(update, sender);
+
+    } else if (msg.type === 'SET_MODEL_EDITORS') {
+      // Host-only, and a step above the scene itself: whoever may change the
+      // models decides what everybody else's import button does, so letting a
+      // non-host set it would have been letting them grant themselves the right.
+      const senderId = this.connToUser.get(sender.id);
+      if (senderId !== this.computeHost() || !this.admitted.has(senderId)) {
+        this.refuseScene(sender, 'host-only-setting');
+        return;
+      }
+      const editors = asModelEditors(msg.payload.modelEditors);
+      if (!editors) {
+        this.refuseScene(sender, 'unreadable-update');
+        return;
+      }
+      this.modelEditors = editors;
+      this.persistScene();
+      this.audit('model_editors', {
+        actorName: this.participants.get(senderId)?.name ?? '',
+        actorId: senderId,
+        detail: Array.isArray(editors) ? `named:${editors.length}` : editors,
+      });
+      this.relay(JSON.stringify({
+        type: 'SCENE_STATE',
+        payload: this.sceneStatePayload(),
+      } as RoomMessage));
+
     } else if (msg.type === 'MODEL_CHANGE') {
       // A client that has not been updated still sends the file itself. Dropped
-      // rather than relayed or stored: this server keeps currentModel in memory
-      // and replays it to every connection that joins, so accepting it would put
-      // up to 50 MB per import back on exactly the path the reference shape
+      // rather than relayed or stored: this server keeps the scene in memory and
+      // replays it to every connection that joins, so accepting it would put up
+      // to 50 MB per import back on exactly the path the reference shape
       // removed. Nothing the sender can see breaks — their own screen already
       // shows the model they imported — and the line in the log names the cause.
       if (typeof msg.payload.fileBase64 === 'string') {
@@ -890,9 +1062,29 @@ export default class RoomServer implements Party.Server {
         this.dropModelChange('it was not a model reference this server could read.');
         return;
       }
-      this.currentModel = reference;
-      this.persistCurrentModel();
-      this.relay(JSON.stringify({ type: 'MODEL_CHANGE', payload: reference } as RoomMessage), [sender.id]);
+      // Permission is checked on the translated change, not waived because the
+      // message arrived in the old shape: an un-updated client is still a client,
+      // and "who may change models" would mean nothing to one that had not
+      // reloaded since the setting was introduced.
+      const refusal = this.sceneRefusalFor(this.connToUser.get(sender.id));
+      if (refusal) {
+        this.refuseScene(sender, refusal);
+        return;
+      }
+      const translated = sceneFromLegacyReference(reference);
+      if (!translated) {
+        this.dropModelChange('it could not be read as a model this room could fetch.');
+        return;
+      }
+      // "The scene is this one model", which is what the message always meant
+      // when the scene could only hold one. Replaces whatever was there, so a
+      // room with an old client in it behaves the way that client expects.
+      this.scene = translated;
+      this.persistScene();
+      this.relay(JSON.stringify({
+        type: 'SCENE_STATE',
+        payload: this.sceneStatePayload(),
+      } as RoomMessage));
 
     } else if (msg.type === 'REVIEW_CONFIG') {
       this.reviewConfig = msg.payload.config;

@@ -1,11 +1,16 @@
 // OpenAICaptureProvider — browser-safe TranscriptCaptureProvider.
 //
-// Holds no credential and cannot be given one: there is no apiKey option, and
-// nothing in this file reads process.env or import.meta.env. The transcript
-// goes to our own serverless function (api/capture/extract.ts), which reads
-// OPENAI_API_KEY — or whatever capture.apiKeyEnv names — from server-side
-// process.env and calls OpenAI itself.
+// Holds no credential and cannot be given one: there is no key option, and
+// nothing in this file reads process.env or import.meta.env. The transcript goes
+// to our own serverless function (api/capture/extract.ts) and comes back as
+// cards.
 //
+// Since plan 14 batch BF this class no longer names a vendor to the server, and
+// that is not an oversight: lib/ai/router.ts decides which AI extracts the cards,
+// from the admin console's AI section, from viewpoint.config.ts, or from the
+// built-in stack. What is left here is the browser-side half of the
+// TranscriptCaptureProvider contract — the shape a caller can rely on whichever
+// provider answers — which is why there is no SDK integration in this file.
 // See docs/plan/02-connector-adapters.md §2: "never call these directly from
 // the browser with a key".
 
@@ -36,22 +41,22 @@ export class OpenAICaptureProvider implements TranscriptCaptureProvider {
     transcript: TranscriptChunk[],
     context: SlideContext,
   ): Promise<InsightCard[]> {
-    return extractInsightsViaEndpoint('openai', transcript, context, this._options);
+    return extractInsightsViaEndpoint(transcript, context, this._options);
   }
 
-  /** True when the server has an OpenAI key configured. Never exposes it. */
+  /** True when the extraction endpoint is deployed and unlocked. Never a key. */
   async isConfigured(): Promise<boolean> {
     return probeExtractEndpoint(this._options);
   }
 
   /**
-   * Can the server-side extraction proxy be reached?
+   * Can the server-side extraction endpoint be reached?
    *
-   * This is the only thing a browser-side provider can honestly check: the key
-   * lives in api/capture/extract.ts's process.env and is never sent here, so
-   * "is OpenAI configured" is not a question this module can answer. The HEAD
-   * probe reports whether the proxy is deployed and holds a cloud key at all —
-   * it cannot say which vendor's, because the probe names no provider.
+   * This is the only thing a browser-side provider can honestly check: the
+   * credential and the choice of AI both live server-side and neither is sent
+   * here, so "is OpenAI configured" is not a question this module can answer —
+   * the admin console's AI section is. The HEAD probe reports whether the
+   * endpoint is deployed and unlocked at all.
    *
    * It never runs an extraction: that would spend money on every health poll.
    */

@@ -401,13 +401,23 @@ async function toLocalCaptureError(
   }
 
   switch (code) {
+    // Both spellings, on purpose. `capture_not_configured` is what the server-side
+    // AI router emits (lib/ai/router.ts) when no provider could be resolved for the
+    // job — no CAPTURE_SERVICE_URL, no capture.serviceUrl, or a cloud provider with
+    // no stored key. `not_configured` is the older code from when
+    // api/capture/local.ts resolved the address itself, and it is kept because a
+    // rolling deploy can pair this bundle with a server that still says it. Only
+    // one of the two can ever arrive; rendering neither would leave the operator
+    // with a bare code string and no idea which file to open.
     case 'not_configured':
+    case 'capture_not_configured':
       return new LocalCaptureError(
         code,
-        `${where}. This deployment has no capture-service configured — set ` +
-          `capture.provider 'local' and capture.serviceUrl in ` +
-          `viewpoint.config.ts, then restart. No secret is sent to the browser, ` +
-          `so there is nothing to fix client-side.`,
+        `${where}. This deployment has no AI configured for this job. Choose one ` +
+          `in the admin console's AI section, or set capture.provider and (for the ` +
+          `built-in stack) capture.serviceUrl in viewpoint.config.ts and restart. ` +
+          `No secret is sent to the browser, so there is nothing to fix ` +
+          `client-side.`,
         response.status,
       );
     case 'upload_too_large':

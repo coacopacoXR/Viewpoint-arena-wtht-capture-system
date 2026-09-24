@@ -310,6 +310,61 @@ create policy "own review participants update" on review_participants
   for update to authenticated using (user_id = auth.uid());
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Application settings (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md
+-- batch BF). One row per setting, written from the admin console's AI section
+-- and read back by the server-side AI router (lib/ai/settingsStore.ts).
+--
+-- `value` holds the non-secret half of a setting (which provider, which model,
+-- an endpoint URL); `secret` holds the encrypted half (an API key, a webhook
+-- header value) as the `v1:<iv>:<tag>:<ct>` string lib/ai/secretBox.ts writes.
+-- The column is text rather than bytea so PostgREST can carry it as JSON and so
+-- a dump of this table is still not a dump of the keys: the ciphertext is only
+-- readable with a key derived from JWT_SECRET, which lives in the api
+-- container's environment and not here.
+--
+-- THIS TABLE IS THE ONE EXCEPTION TO THE REST OF THIS FILE. Every other table
+-- here is wide open on purpose — the app has no per-person identity to key a
+-- policy on, and the front-door password guards the origin instead. This one
+-- holds credentials, so RLS is enabled with NO POLICIES AT ALL, which in
+-- Postgres means deny: the anon and authenticated roles — the two a browser's
+-- Supabase key can select — get nothing, not even a row count. Only a request
+-- carrying a service-role JWT reaches it, because that role has BYPASSRLS, and
+-- only the api container can mint one (api/_lib/serviceRole.ts signs it with
+-- JWT_SECRET, which never reaches a browser).
+--
+-- So the browser cannot read these settings, cannot write them, and cannot
+-- discover that they exist. The admin console reaches them only through
+-- /api/admin/ai, which is behind requireAdmin and which returns
+-- { set: true, last4 } for a secret instead of the secret.
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists app_settings (
+  key text primary key,
+  value jsonb not null default '{}'::jsonb,
+  secret text,
+  updated_at timestamptz not null default now(),
+  updated_by text not null default ''
+);
+
+alter table app_settings enable row level security;
+
+-- No policies, and that is the point: see the block comment above. The drops
+-- are here so a re-run of this file removes any policy an earlier version, or
+-- a well-meaning `grant … to anon` added by hand, may have left behind. An
+-- enabled RLS table with zero policies denies everything to every non-bypass
+-- role, which is exactly what a credentials table wants.
+do $$
+declare
+  policy_name text;
+begin
+  for policy_name in
+    select polname from pg_policy
+    where polrelid = 'public.app_settings'::regclass
+  loop
+    execute format('drop policy %I on public.app_settings', policy_name);
+  end loop;
+end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Grants for the self-hosted PostgREST stack.
 --
 -- On a bundled install the deploy/db/roles.sql init script creates the anon
@@ -327,5 +382,28 @@ begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
     grant select, insert, update, delete on all tables in schema public to anon, authenticated;
     grant usage, select on all sequences in schema public to anon, authenticated;
+  end if;
+end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- …except app_settings, which the block above just granted along with every
+-- other table. This revoke is LAST ON PURPOSE: `grant … on all tables in
+-- schema public` is evaluated when it runs, so it picks up app_settings like
+-- any other table, and a table-level grant is checked BEFORE Row Level
+-- Security. Without this, the two browser roles would have select on the
+-- credentials table and RLS-with-no-policies would be the only thing stopping
+-- them — one mechanism instead of two, and the weaker one to bet a set of API
+-- keys on. The supabase/postgres image also installs a DEFAULT PRIVILEGES rule
+-- that grants new tables to anon and authenticated as they are created, which
+-- is why revoking here is not enough on its own for a table added later: any
+-- new table holding a secret needs its own revoke in this same position.
+--
+-- Idempotent like everything else in this file, so install.sh re-applying it on
+-- every run keeps the two mechanisms agreeing after an upgrade.
+-- ─────────────────────────────────────────────────────────────────────────────
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on public.app_settings from anon, authenticated;
   end if;
 end $$;

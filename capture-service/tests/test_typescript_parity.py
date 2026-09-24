@@ -7,8 +7,8 @@ These tests read the TypeScript SOURCE and fail when it drifts.
 
 They are the reason the duplication in capture_service/prompt.py and
 capture_service/parse_cards.py is safe: a change to
-lib/connectors/capture/extractionPrompt.ts or parseInsightCards.ts breaks this
-file until the Python copy is updated to match.
+lib/connectors/capture/extractionPrompt.ts, lib/ai/summaryPrompt.ts or
+parseInsightCards.ts breaks this file until the Python copy is updated to match.
 
 The tests read files two directories up, so they require a full checkout of the
 repository (which is what CI checks out). They fail loudly rather than skipping
@@ -35,11 +35,19 @@ from capture_service.parse_cards import (
     PRIORITIES,
     STATUSES,
 )
-from capture_service.prompt import EXTRACTION_SYSTEM_PROMPT
+from capture_service.prompt import (
+    EXTRACTION_SYSTEM_PROMPT,
+    SUMMARY_SYSTEM_PROMPT,
+    build_summary_user_prompt,
+    format_summary_card,
+)
 from capture_service.schemas import (
     InsightCard,
     InsightDetails,
+    InsightType,
+    Priority,
     SlideContext,
+    Status,
     TranscriptChunk,
 )
 from capture_service.transcribe import MAX_TRANSCRIPT_CHARS, MAX_TRANSCRIPT_CHUNKS
@@ -50,6 +58,11 @@ TYPES_TS = REPO_ROOT / "types.ts"
 EXTRACT_ENDPOINT_TS = REPO_ROOT / "api" / "capture" / "extract.ts"
 EXTRACT_CLIENT_TS = CAPTURE_TS / "extractClient.ts"
 OLLAMA_DIRECT_TS = CAPTURE_TS / "ollamaDirect.ts"
+SUMMARY_PROMPT_TS = REPO_ROOT / "lib" / "ai" / "summaryPrompt.ts"
+# The server-side AI router (plan 14, batch BF). It owns the output-token ceiling
+# for every cloud provider now; api/capture/extract.ts used to, and still owns the
+# transcript budget the request-validation tests below pin.
+ROUTER_TS = REPO_ROOT / "lib" / "ai" / "router.ts"
 
 
 def read_typescript(path: Path) -> str:
@@ -167,6 +180,165 @@ def test_the_user_prompt_layout_matches_the_typescript_builder() -> None:
         assert fragment in source, f"{fragment} is no longer how the TS builder renders"
 
 
+# ─── The minutes prompt ─────────────────────────────────────────────────────
+#
+# lib/ai/summaryPrompt.ts is the authority for POST /summarize, in the same way
+# extractionPrompt.ts is for /capture and /extract. The system prompt is a
+# verbatim copy; the user prompt is a reimplementation, so its layout is pinned
+# fragment by fragment and then by rendering one.
+
+
+def test_the_summary_prompt_is_byte_identical_to_the_typescript_one() -> None:
+    source = read_typescript(SUMMARY_PROMPT_TS)
+    match = re.search(r"SUMMARY_SYSTEM_PROMPT\s*=\s*`(.*?)`;", source, re.S)
+    assert match, "could not find SUMMARY_SYSTEM_PROMPT in summaryPrompt.ts"
+    assert SUMMARY_SYSTEM_PROMPT == match.group(1), (
+        "The Python copy of the summary prompt has drifted from "
+        "lib/ai/summaryPrompt.ts. The TypeScript file is the authority: change "
+        "it there, then re-copy it verbatim into capture_service/prompt.py."
+    )
+
+
+def test_the_summary_prompt_keeps_the_sections_and_the_action_format() -> None:
+    # Asserted separately from the byte-for-byte copy above so that a rewrite of
+    # the prompt still fails on the two things the minutes are judged by: the
+    # section list the reader expects, and the checkbox format the Manager
+    # workspace turns back into an action.
+    source = read_typescript(SUMMARY_PROMPT_TS)
+    for section in (
+        "## What was reviewed",
+        "## Decisions",
+        "## Risks raised",
+        "## Actions",
+        "## Open questions",
+    ):
+        assert section in SUMMARY_SYSTEM_PROMPT, section
+        assert section in source, section
+    assert '"- [ ] task — owner (by date)"' in source
+
+
+def test_the_summary_user_prompt_fragments_are_how_the_typescript_renders_them() -> None:
+    source = read_typescript(SUMMARY_PROMPT_TS)
+    for fragment in (
+        "`Today's date: ${new Date().toISOString().slice(0, 10)}`",
+        "`Meeting: ${title?.trim() || 'Design review'}`",
+        "'Insight cards already extracted from this meeting: none.'",
+        "'Insight cards already extracted from this meeting:'",
+        "`k${index} [${card.type}] ${card.title}: ${card.description}${suffix}`",
+        "` (${extras.join('; ')})`",
+        "'Transcript: none — write the minutes from the cards alone.'",
+        "'Transcript:'",
+        # The same chunk labels the extraction prompt uses, so a card's
+        # sourceMessageIds mean the same thing in both prompts.
+        "`c${i} [${start}-${end}] ${chunk.speakerId}: ${chunk.text}`",
+        "const SECTION_ORDER = ['RISK', 'RATIONALE', 'ACTION'] as const;",
+    ):
+        assert fragment in source, f"{fragment} is no longer how the TS builder renders"
+
+
+def test_the_summary_card_extras_come_out_in_the_typescript_order() -> None:
+    source = read_typescript(SUMMARY_PROMPT_TS)
+    labels = re.findall(r"extras\.push\(`(\w+): \$\{details\.", source)
+    assert labels == [
+        "component",
+        "assignee",
+        "department",
+        "due",
+        "priority",
+        "impact",
+        "mitigation",
+        "driver",
+    ], "formatCard in summaryPrompt.ts renders its extras in a new order"
+
+    rendered = format_summary_card(
+        InsightCard(
+            id="insight-1",
+            type=InsightType.RISK,
+            agent_id="speaker-1",
+            title="Weld cracks",
+            description="It will crack before the yield target.",
+            timestamp=0,
+            details=InsightDetails(
+                priority=Priority.HIGH,
+                status=Status.OPEN,
+                assignee="Alice",
+                due_date="2026-09-30",
+                component_reference="left_cup",
+                impact="Warranty returns",
+                mitigation_strategy="Add a gusset",
+                design_driver="Stiffness target",
+                department="Frame",
+            ),
+        ),
+        0,
+    )
+    # Values here contain no colon, so the label is everything before the first
+    # one. `status` is deliberately absent from `labels`: the TS does not
+    # render it, and neither may this.
+    suffix = rendered.split(" (", 1)[1].rstrip(")")
+    assert [part.split(":")[0].strip() for part in suffix.split("; ")] == labels
+    assert rendered.startswith("k0 [RISK] Weld cracks: ")
+
+
+def _fixture_card(card_type: InsightType, title: str) -> InsightCard:
+    return InsightCard(
+        id=f"insight-{title}",
+        type=card_type,
+        agent_id="speaker-1",
+        title=title,
+        description="Because the weld will crack.",
+        timestamp=0,
+        details=InsightDetails(priority=Priority.HIGH),
+    )
+
+
+def test_the_summary_user_prompt_layout_matches_the_typescript_builder() -> None:
+    prompt = build_summary_user_prompt(
+        [
+            TranscriptChunk(
+                speaker_id="speaker-1",
+                text="The weld will crack.",
+                start_ms=0,
+                end_ms=4200,
+            )
+        ],
+        # Sent action-first on purpose: SECTION_ORDER re-sorts them, and the
+        # k-labels are positional over the sorted list.
+        [
+            _fixture_card(InsightType.ACTION, "Re-run the FEA"),
+            _fixture_card(InsightType.RISK, "Weld cracks"),
+        ],
+        "Rear triangle weld",
+    )
+    lines = prompt.split("\n")
+    assert lines[0].startswith("Today's date: ")
+    assert lines[1] == ""
+    assert lines[2] == "Meeting: Rear triangle weld"
+    assert lines[3] == ""
+    assert lines[4] == "Insight cards already extracted from this meeting:"
+    assert lines[5].startswith("k0 [RISK] Weld cracks: ")
+    assert lines[6].startswith("k1 [ACTION] Re-run the FEA: ")
+    assert lines[7] == ""
+    assert lines[8] == "Transcript:"
+    assert lines[9] == "c0 [00:00-00:04] speaker-1: The weld will crack."
+    assert len(lines) == 10, "the transcript is the last section"
+
+
+def test_absent_summary_inputs_are_named_the_way_the_builder_names_them() -> None:
+    prompt = build_summary_user_prompt([], [])
+    assert "Insight cards already extracted from this meeting: none." in prompt
+    # The trailing newline is what the TypeScript `lines.join('\n')` produces
+    # when formatTranscript returns "" — not padding invented here.
+    assert prompt.endswith(
+        "Transcript: none — write the minutes from the cards alone.\n"
+    )
+
+
+def test_a_blank_summary_title_falls_back_to_the_typescript_default() -> None:
+    for title in (None, "", "   "):
+        assert "Meeting: Design review" in build_summary_user_prompt([], [], title)
+
+
 # ─── The card shape ─────────────────────────────────────────────────────────
 
 
@@ -258,7 +430,13 @@ def test_the_parse_failure_reason_literal_covers_the_same_vocabulary() -> None:
 
 
 def test_the_output_token_limit_matches_the_typescript_providers() -> None:
-    for path in (OLLAMA_DIRECT_TS, EXTRACT_ENDPOINT_TS):
+    # Two TypeScript copies of the ceiling, and this test is why there are only
+    # two: the browser-side Ollama provider (which talks to Ollama directly, with
+    # no server in between) and the server-side router (which calls every other
+    # provider). api/capture/extract.ts no longer appears here because batch BF
+    # moved the upstream calls out of the endpoint and into lib/ai/router.ts —
+    # the endpoint validates a request, it does not talk to a model.
+    for path in (OLLAMA_DIRECT_TS, ROUTER_TS):
         source = read_typescript(path)
         match = re.search(r"MAX_OUTPUT_TOKENS\s*=\s*(\d+)", source)
         assert match, f"could not find MAX_OUTPUT_TOKENS in {path.name}"

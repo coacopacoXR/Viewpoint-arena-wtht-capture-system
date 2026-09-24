@@ -90,6 +90,26 @@ def test_the_request_is_a_non_streaming_json_mode_chat_completion() -> None:
     }
 
 
+def test_a_schema_less_call_omits_the_format_key_entirely() -> None:
+    # POST /summarize asks for markdown. Ollama's structured-output mode is
+    # switched off by ABSENCE of `format`: sending `format: null` is not
+    # documented to mean "unconstrained", and sending the card schema would
+    # make the model answer the schema instead of the prompt.
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": "## Actions"}, "done_reason": "stop"})
+
+    reply = make_client(handler).complete(SYSTEM, USER, schema=None)
+
+    assert reply == "## Actions"
+    assert "format" not in seen[0]
+    # Everything else is unchanged: one knob differs between the two jobs.
+    assert seen[0]["stream"] is False
+    assert seen[0]["options"] == {"temperature": 0, "num_predict": MAX_OUTPUT_TOKENS}
+
+
 def test_the_prompt_is_passed_through_verbatim() -> None:
     # The client knows nothing about prompts: whatever the pipeline builds is
     # what Ollama receives, unmodified and untruncated.

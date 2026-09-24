@@ -19,11 +19,10 @@ import type { InsightCard } from '../../types';
 import type { PinSeverity } from '../../lib/reviewSetupStore';
 
 // Split-screen meeting workspace for the host. Top: persistent slide-context
-// hero anchored to the active agenda slide, then — only when the deployment
-// selected capture.provider 'local' — the post-meeting recording controls.
-// Below: tabbed surfaces for action triage, follow-up notes, curated
-// viewpoint/pin editing, capture transcript, comments, and chat. Absorbs the
-// right side-panel entirely.
+// hero anchored to the active agenda slide, then the post-meeting recording
+// controls (which hide themselves on a mock-capture deployment). Below: tabbed
+// surfaces for action triage, follow-up notes, curated viewpoint/pin editing,
+// capture transcript, comments, and chat. Absorbs the right side-panel entirely.
 
 type TabId = 'actions' | 'notes' | 'curated' | 'capture' | 'comments' | 'chat';
 
@@ -99,7 +98,7 @@ const ManagerPanel: React.FC = () => {
       {/* ─── Persistent slide-context hero ──────────────────────────────────── */}
       <SlideHero />
 
-      {/* ─── Post-meeting recording (host-only, capture.provider 'local') ─────── */}
+      {/* ─── Post-meeting recording (host-only) ─────────────────────────────── */}
       <RecordingControls />
 
       {/* ─── Tab bar ────────────────────────────────────────────────────────── */}

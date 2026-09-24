@@ -1,4 +1,4 @@
-"""Ollama client for the single-pass extraction call.
+"""Ollama client for the extraction and summary calls.
 
 Mirrors the request lib/connectors/capture/ollamaDirect.ts sends, so the same
 model, the same prompt and the same JSON mode produce the same payload whether
@@ -51,8 +51,22 @@ class LlmClient(Protocol):
         """Human-readable backend name, reported by GET /health."""
         ...
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        schema: dict[str, object] | None = EXTRACTION_JSON_SCHEMA,
+    ) -> str:
         """Return the model's raw text reply.
+
+        @param schema constrains the reply's shape when the backend can. The
+                default is the InsightCard schema, because that is what the
+                extraction job — the reason this client exists — needs. Pass
+                None for a free-text answer (POST /summarize returns markdown)
+                and the constraint is omitted entirely: an implementation must
+                not fall back to a default here, or a summary would come back
+                as JSON-shaped prose or not at all.
 
         @raises CaptureServiceError subclass when there is no usable reply.
                 Implementations must not raise anything else.
@@ -93,23 +107,36 @@ class OllamaClient:
     def close(self) -> None:
         self._http.close()
 
-    def complete(self, system: str, user: str) -> str:
-        payload = {
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        schema: dict[str, object] | None = EXTRACTION_JSON_SCHEMA,
+    ) -> str:
+        payload: dict[str, object] = {
             "model": self._model,
             # Non-negotiable: a streaming reply would have to be reassembled
             # before it could be parsed, and there is nothing to stream to.
             "stream": False,
-            # Ollama's structured-output mode with the exact card schema, not
-            # just "some JSON": a live run with plain "json" got the details
-            # fields flattened onto the card, and the strict parser rightly
-            # refused the lot. parse_cards is still the authority on the shape.
-            "format": EXTRACTION_JSON_SCHEMA,
             "options": {"temperature": 0, "num_predict": MAX_OUTPUT_TOKENS},
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
+        if schema is not None:
+            # Ollama's structured-output mode with the exact card schema, not
+            # just "some JSON": a live run with plain "json" got the details
+            # fields flattened onto the card, and the strict parser rightly
+            # refused the lot. parse_cards is still the authority on the shape.
+            #
+            # The key is OMITTED rather than sent as null when there is no
+            # schema, because /summarize asks for markdown: constraining that
+            # call to the card schema would make Ollama answer with a card
+            # envelope (or refuse), and `format: null` is not documented to
+            # mean "unconstrained".
+            payload["format"] = schema
 
         try:
             response = self._http.post(CHAT_PATH, json=payload)

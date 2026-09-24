@@ -20,13 +20,21 @@ against the TypeScript source.
 Enums mirror the TypeScript string-literal unions value-for-value; parse_cards
 derives its allowlists from them so a value cannot be legal in one place and
 illegal in another.
+
+The two JSON request bodies (`ExtractRequest`, `SummaryRequest`) are the
+text-only half of the same contract: the server-side AI router
+(docs/plan/14-rooms-models-admin-ai.md) picks a provider per job, so the
+transcription and the extraction may come from different places and the
+service needs routes that take a transcript instead of a recording. They are
+the only request MODELS here — /capture and /transcribe are multipart forms,
+whose fields FastAPI validates individually.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def _to_camel(snake: str) -> str:
@@ -143,6 +151,55 @@ class InsightCard(WireModel):
     kb_recommendations: list[str] | None = None
 
 
+# ─── Request bodies ─────────────────────────────────────────────────────────
+
+
+class ExtractRequest(WireModel):
+    """POST /extract: a transcript in, InsightCards out. No audio anywhere.
+
+    The three grounded fields are typed `object` on purpose. Everywhere else
+    in this file a strict type is the point, but these three are advisory
+    context, and /capture's rule for them is that a malformed value degrades
+    to "not sent" instead of failing a request that would otherwise have
+    worked — a client that JSON-stringified one by mistake must not lose the
+    whole extraction over it. main._filter_* is therefore the single authority
+    on their shape and their caps, and it is applied to whatever arrives here.
+    """
+
+    transcript: list[TranscriptChunk]
+    context: SlideContext | None = None
+    component_tree: object | None = Field(
+        default=None,
+        description='[{ "id", "name", "path" }] from the loaded model tree. Advisory: a malformed value is ignored.',
+    )
+    pointing_segments: object | None = Field(
+        default=None,
+        description='[{ "userId", "userName", "partId", "partName", "fromMs", "toMs" }]. Advisory.',
+    )
+    transcript_hint: object | None = Field(
+        default=None,
+        description='[{ "speaker", "text", "offsetMs" }] attribution hint. Advisory; never a source of truth.',
+    )
+
+
+class SummaryRequest(WireModel):
+    """POST /summarize: a transcript and/or cards in, markdown minutes out.
+
+    Both lists default to empty because either alone is enough to write from:
+    cards-only is what a caller has when the transcript was not kept, and
+    transcript-only is what a caller has when extraction was routed to a
+    different provider. Only both-empty is refused (EmptySummaryInput).
+
+    `cards` is the full InsightCard wire shape, `extra="forbid"` included, so
+    a malformed card is a 400 invalid_request naming the field rather than a
+    500 or a silently dropped insight.
+    """
+
+    transcript: list[TranscriptChunk] = Field(default_factory=list)
+    cards: list[InsightCard] = Field(default_factory=list)
+    title: str | None = None
+
+
 # ─── Response envelopes ─────────────────────────────────────────────────────
 #
 # Each response is EXACTLY its envelope and nothing else. api/capture/extract.ts
@@ -153,6 +210,18 @@ class InsightCard(WireModel):
 
 class CaptureResponse(WireModel):
     cards: list[InsightCard]
+
+
+class SummaryResponse(WireModel):
+    """Markdown minutes, and nothing else.
+
+    A single string field with no structure to validate is the point: the
+    answer is prose a person reads, so there is no envelope for a parser to
+    reject and no reason to put a JSON round trip between the model and the
+    reader (lib/ai/summaryPrompt.ts makes the same call).
+    """
+
+    summary: str
 
 
 class TranscribeResponse(WireModel):

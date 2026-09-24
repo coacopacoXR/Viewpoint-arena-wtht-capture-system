@@ -1,12 +1,35 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { useStore, getCurrentSceneTree } from '../../store';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
+import {
+    countParts,
+    getCurrentSceneTree,
+    SCENE_ROOT_ID,
+    sceneEntryWidth,
+    sceneModelVisible,
+    useStore,
+} from '../../store';
 import { SceneNode } from '../../types';
-import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle, CheckCircle2, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle, CheckCircle2, X, GitCompare, Trash2, Users, Lock, Globe } from 'lucide-react';
 import { clsx } from 'clsx';
-import { parseModelFile, validateModelFile } from '../../utils/modelLoader';
+import { parseModelFile, validateModelFile, type ModelImportResult } from '../../utils/modelLoader';
 import { MODEL_FILE_ACCEPT } from '../../utils/modelFormats';
 import { MODEL_UPLOAD_NETWORK_MESSAGE, uploadModelFile } from '../../lib/modelsClient';
 import { usePresence } from '../../lib/PresenceContext';
+import {
+    describeSceneRefusal,
+    FIRST_REVISION,
+    lineFromFileName,
+    revisionTargets,
+    mayChangeModels,
+    nextRevisionFor,
+    sceneModelId,
+    sceneModelLabel,
+    sceneModelPrefix,
+    type ModelEditors,
+    type SceneModel,
+    type SceneUpdate,
+} from '../../lib/scene/roomScene';
+import { compareOffsets, nextToOffset, type SceneExtent } from '../../lib/scene/placement';
+import { sceneModelEntry } from '../../lib/scene/sceneEntries';
 
 // Find all ancestor ids of a node in the tree (excluding the node itself)
 function findAncestorIds(root: SceneNode, targetId: string): string[] {
@@ -27,6 +50,44 @@ function findAncestorIds(root: SceneNode, targetId: string): string[] {
 
   search(root, []);
   return ancestors;
+}
+
+/**
+ * What this participant is allowed to do to the scene, and why not if not.
+ *
+ * The room server enforces this and answers SCENE_REFUSED when it disagrees;
+ * reading the same setting here is what lets the button say so BEFORE the click
+ * rather than after it. A disabled control with a reason beats one that appears
+ * to do nothing.
+ */
+function useScenePermissions() {
+    const modelEditors = useStore(state => state.modelEditors);
+    const sessionHostId = useStore(state => state.sessionHostId);
+    const { localUserId } = usePresence();
+    const isHost = sessionHostId === localUserId || sessionHostId === null;
+    const canChangeModels = mayChangeModels(modelEditors, localUserId || null, sessionHostId);
+    return {
+        isHost,
+        canChangeModels,
+        modelEditors,
+        reason: canChangeModels
+            ? null
+            : describeSceneRefusal(modelEditors === 'host' ? 'host-only' : 'not-an-editor'),
+    };
+}
+
+/** The newest revision of a line, which is the one a new revision follows and hides. */
+function latestOfLine(models: SceneModel[], line: string): SceneModel | null {
+    let latest: SceneModel | null = null;
+    for (const model of models) {
+        if (model.line !== line) continue;
+        const candidate = model.revision.trim().toUpperCase();
+        const current = latest ? latest.revision.trim().toUpperCase() : '';
+        if (!latest || candidate.length > current.length || (candidate.length === current.length && candidate > current)) {
+            latest = model;
+        }
+    }
+    return latest;
 }
 
 const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth }) => {
@@ -82,8 +143,8 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
                 {/* Expand Toggle */}
                 <div className="w-4 flex items-center justify-center mr-1" onClick={isGroup ? handleToggleExpand : undefined}>
                     {isGroup && (
-                        isExpanded 
-                        ? <ChevronDown size={12} className="text-gray-500" /> 
+                        isExpanded
+                        ? <ChevronDown size={12} className="text-gray-500" />
                         : <ChevronRight size={12} className="text-gray-500" />
                     )}
                 </div>
@@ -105,7 +166,7 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
                 </span>
 
                 {/* Visibility Toggle */}
-                <div 
+                <div
                     className="w-5 h-5 flex items-center justify-center rounded hover:bg-gray-200 text-gray-400 hover:text-gray-700 ml-1"
                     onClick={handleToggleVis}
                 >
@@ -117,7 +178,7 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
             {isGroup && isExpanded && node.children && (
                 <div className="flex flex-col relative">
                     {/* Tree Guide Line */}
-                    <div className="absolute left-[calc(12px*var(--depth)+9px)] top-0 bottom-0 w-px bg-gray-200" style={{'--depth': depth} as any}></div>
+                    <div className="absolute left-[calc(12px*var(--depth)+9px)] top-0 bottom-0 w-px bg-gray-200" style={{'--depth': depth} as React.CSSProperties}></div>
                     {node.children.map(child => (
                         <TreeNode key={child.id} node={child} depth={depth + 1} />
                     ))}
@@ -127,23 +188,391 @@ const TreeNode: React.FC<{ node: SceneNode; depth: number }> = ({ node, depth })
     );
 };
 
+/**
+ * One top-level row per model in the scene: "Bracket · Rev B".
+ *
+ * Its eye is the one control here that means two different things, and the
+ * difference is the point of the batch. Somebody who may change the room's
+ * models sends setVisible, and everybody's screen changes. Somebody who may not
+ * hides it on their own screen only — hiding a model so you can see the one
+ * behind it is not a change to what the review is about, and locking that behind
+ * the host's permission would have made a read-only guest unable to look at
+ * their own picture.
+ */
+const SceneModelRow: React.FC<{ model: SceneModel; onCompare: (line: string) => void }> = ({ model, onCompare }) => {
+    const entry = useStore(state => state.sceneEntries[model.id]);
+    const expanded = useStore(state => Boolean(state.expandedSceneModels[model.id]));
+    const toggleExpanded = useStore(state => state.toggleSceneModelExpanded);
+    const localModelVisibility = useStore(state => state.localModelVisibility);
+    const setLocalModelVisibility = useStore(state => state.setLocalModelVisibility);
+    const applyLocalSceneUpdate = useStore(state => state.applyLocalSceneUpdate);
+    const setActiveSceneModel = useStore(state => state.setActiveSceneModel);
+    const selectNode = useStore(state => state.selectNode);
+    const revisionsInLine = useStore(state => state.scene.models.filter(m => m.line === model.line).length);
+    const isComparing = useStore(state => state.compare?.line === model.line);
+    const { broadcastSceneUpdate } = usePresence();
+    const { canChangeModels, reason } = useScenePermissions();
+
+    const isVisible = sceneModelVisible(model, localModelVisibility);
+
+    const handleToggleVis = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (canChangeModels) {
+            const update: SceneUpdate = { op: 'setVisible', id: model.id, visible: !isVisible };
+            broadcastSceneUpdate(update);
+            applyLocalSceneUpdate(update);
+        } else {
+            // Local only, and deliberately so — see the comment on this component.
+            setLocalModelVisibility(model.id, !isVisible);
+        }
+    };
+
+    const handleRemove = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        const update: SceneUpdate = { op: 'remove', id: model.id };
+        broadcastSceneUpdate(update);
+        applyLocalSceneUpdate(update);
+    };
+
+    return (
+        <div className="flex flex-col select-none">
+            <div
+                data-testid={`scene-model-row-${model.id}`}
+                className={clsx(
+                    "flex items-center h-7 px-2 cursor-pointer transition-colors border-l-2",
+                    isVisible ? "border-blue-400 bg-blue-50/40" : "border-transparent hover:bg-gray-50"
+                )}
+                style={{ paddingLeft: '4px' }}
+                onClick={() => {
+                    setActiveSceneModel(model.id);
+                    selectNode(entry ? entry.sceneTree.id : null);
+                }}
+            >
+                <div
+                    className="w-4 flex items-center justify-center mr-1"
+                    onClick={(e) => { e.stopPropagation(); toggleExpanded(model.id); }}
+                >
+                    {entry?.sceneTree.children
+                        ? expanded
+                            ? <ChevronDown size={12} className="text-gray-500" />
+                            : <ChevronRight size={12} className="text-gray-500" />
+                        : null}
+                </div>
+
+                <div className="mr-2 text-gray-500"><Box size={12} /></div>
+
+                <span
+                    className={clsx(
+                        "text-[10px] font-mono truncate flex-1",
+                        isVisible ? "font-bold text-gray-800" : "text-gray-500",
+                        !isVisible && "opacity-60 line-through"
+                    )}
+                >
+                    {sceneModelLabel(model)}
+                </span>
+
+                {!entry && <Loader2 size={10} className="animate-spin text-gray-400 mr-1" />}
+
+                {canChangeModels && revisionsInLine > 1 && (
+                    <div
+                        title={isComparing ? 'Comparing revisions of this line' : `Compare revisions of ${model.line}`}
+                        className={clsx(
+                            "w-5 h-5 flex items-center justify-center rounded hover:bg-gray-200 ml-0.5",
+                            isComparing ? "text-blue-600" : "text-gray-400 hover:text-gray-700"
+                        )}
+                        onClick={(e) => { e.stopPropagation(); onCompare(model.line); }}
+                    >
+                        <GitCompare size={10} />
+                    </div>
+                )}
+
+                {canChangeModels && (
+                    <div
+                        title="Remove this model from the room's scene"
+                        className="w-5 h-5 flex items-center justify-center rounded hover:bg-red-100 text-gray-400 hover:text-red-600 ml-0.5"
+                        onClick={handleRemove}
+                    >
+                        <Trash2 size={10} />
+                    </div>
+                )}
+
+                <div
+                    title={canChangeModels ? 'Hide or show for everyone' : (reason ?? 'Hide or show on your screen only')}
+                    className="w-5 h-5 flex items-center justify-center rounded hover:bg-gray-200 text-gray-400 hover:text-gray-700 ml-1"
+                    onClick={handleToggleVis}
+                >
+                    {isVisible ? <Eye size={10} /> : <EyeOff size={10} />}
+                </div>
+            </div>
+
+            {expanded && entry && (
+                <div className="flex flex-col relative">
+                    <div className="absolute left-[9px] top-0 bottom-0 w-px bg-gray-200"></div>
+                    {(entry.sceneTree.children ?? []).map(child => (
+                        <TreeNode key={child.id} node={child} depth={1} />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+/**
+ * Pick two revisions of a line and put them side by side.
+ *
+ * A scene operation, not a local view: it changes shared visibility and shared
+ * offsets, so everybody in the room sees the same comparison — which is the only
+ * version of "compare" worth having in a meeting where one person is driving.
+ */
+const ComparePicker: React.FC<{ line: string; onClose: () => void }> = ({ line, onClose }) => {
+    // Selected whole and filtered here, not in the selector: a selector that
+    // returns a new array on every call is a new snapshot on every call, and
+    // useSyncExternalStore re-renders until it finds one that is equal.
+    const allModels = useStore(state => state.scene.models);
+    const models = useMemo(() => allModels.filter(m => m.line === line), [allModels, line]);
+    const sceneEntries = useStore(state => state.sceneEntries);
+    const compare = useStore(state => state.compare);
+    const setSceneCompare = useStore(state => state.setSceneCompare);
+    const applyLocalSceneUpdate = useStore(state => state.applyLocalSceneUpdate);
+    const { broadcastSceneUpdate } = usePresence();
+    const [olderId, setOlderId] = useState(models[0]?.id ?? '');
+    const [newerId, setNewerId] = useState(models[models.length - 1]?.id ?? '');
+
+    const send = (updates: SceneUpdate[]) => {
+        // Predicted locally as well as sent, so the two revisions move the moment
+        // the button is pressed rather than a round trip later.
+        for (const update of updates) {
+            broadcastSceneUpdate(update);
+            applyLocalSceneUpdate(update);
+        }
+    };
+
+    const active = compare?.line === line ? compare : null;
+    const ready = Boolean(sceneEntries[olderId]) && Boolean(sceneEntries[newerId]);
+
+    const start = () => {
+        const older = models.find(m => m.id === olderId);
+        const newer = models.find(m => m.id === newerId);
+        const olderEntry = sceneEntries[olderId];
+        const newerEntry = sceneEntries[newerId];
+        if (!older || !newer || !olderEntry || !newerEntry || older.id === newer.id) return;
+        // What to put back when the comparison ends. Snapshotted from the shared
+        // scene as it is NOW, so leaving Compare restores what the room had
+        // rather than what this participant happens to remember.
+        const restore = [older, newer].map(m => ({ id: m.id, visible: m.visible, offset: m.offset }));
+        const offsets = compareOffsets(
+            { offset: older.offset, width: sceneEntryWidth(olderEntry) },
+            { offset: newer.offset, width: sceneEntryWidth(newerEntry) },
+        );
+        send([
+            { op: 'setVisible', id: older.id, visible: true },
+            { op: 'setVisible', id: newer.id, visible: true },
+            { op: 'setOffset', id: older.id, offset: offsets.older },
+            { op: 'setOffset', id: newer.id, offset: offsets.newer },
+        ]);
+        setSceneCompare({ line, olderId: older.id, newerId: newer.id, restore });
+    };
+
+    const stop = () => {
+        if (!active) return;
+        // Restore FIRST, then clear: applyLocalSceneUpdate with a fresh flag
+        // would drop the snapshot, and the snapshot is what is being restored.
+        active.restore.forEach((item) => {
+            const setVisible: SceneUpdate = { op: 'setVisible', id: item.id, visible: item.visible };
+            const setOffset: SceneUpdate = { op: 'setOffset', id: item.id, offset: item.offset };
+            broadcastSceneUpdate(setVisible);
+            applyLocalSceneUpdate(setVisible);
+            broadcastSceneUpdate(setOffset);
+            applyLocalSceneUpdate(setOffset);
+        });
+        setSceneCompare(null);
+    };
+
+    return (
+        <div className="mx-2 my-1 p-2 bg-blue-50 border border-blue-200 rounded text-[9px] text-blue-800">
+            <div className="flex items-center justify-between mb-1">
+                <span className="font-bold uppercase tracking-wide text-[8px]">Compare {line}</span>
+                <button onClick={onClose} className="text-blue-400 hover:text-blue-700"><X size={10} /></button>
+            </div>
+
+            {active ? (
+                <button
+                    onClick={stop}
+                    className="w-full px-2 py-1 rounded bg-white border border-blue-300 text-blue-700 font-bold hover:bg-blue-100"
+                >
+                    Leave comparison
+                </button>
+            ) : (
+                <>
+                    <label className="block mb-1">
+                        <span className="block text-[8px] uppercase text-blue-500 mb-0.5">Older</span>
+                        <select
+                            value={olderId}
+                            onChange={e => setOlderId(e.target.value)}
+                            className="w-full px-1 py-0.5 rounded border border-blue-200 bg-white font-mono"
+                        >
+                            {models.map(m => <option key={m.id} value={m.id}>Rev {m.revision}</option>)}
+                        </select>
+                    </label>
+                    <label className="block mb-1.5">
+                        <span className="block text-[8px] uppercase text-blue-500 mb-0.5">Newer</span>
+                        <select
+                            value={newerId}
+                            onChange={e => setNewerId(e.target.value)}
+                            className="w-full px-1 py-0.5 rounded border border-blue-200 bg-white font-mono"
+                        >
+                            {models.map(m => <option key={m.id} value={m.id}>Rev {m.revision}</option>)}
+                        </select>
+                    </label>
+                    <button
+                        onClick={start}
+                        disabled={!ready || olderId === newerId}
+                        className={clsx(
+                            "w-full px-2 py-1 rounded font-bold",
+                            ready && olderId !== newerId
+                                ? "bg-blue-500 text-white hover:bg-blue-600"
+                                : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                        )}
+                    >
+                        {ready ? 'Show side by side' : 'Waiting for the files…'}
+                    </button>
+                </>
+            )}
+        </div>
+    );
+};
+
+/**
+ * Host-only: who may change the models in this room.
+ *
+ * Enforced by the room server, not by this control — a person who is not the
+ * host does not see it, and if they sent the message anyway the server would
+ * refuse it. What is here is the honest label for a rule that already applies.
+ */
+const ModelEditorsControl: React.FC = () => {
+    const modelEditors = useStore(state => state.modelEditors);
+    const setModelEditors = useStore(state => state.setModelEditors);
+    const { remoteParticipantList, localUserId, broadcastSetModelEditors } = usePresence();
+    const localName = useStore(state => state.currentUser);
+    const [choosing, setChoosing] = useState(false);
+
+    const named: string[] = Array.isArray(modelEditors) ? modelEditors : [];
+    const people = [
+        { userId: localUserId, name: `${localName} (you)` },
+        ...remoteParticipantList.map(p => ({ userId: p.userId, name: p.name })),
+    ];
+
+    const choose = (editors: ModelEditors) => {
+        // Sent, then applied locally: the server only takes this from the host and
+        // relays the whole scene back, so the local step is what makes the button
+        // feel like it did something. Outside a room it is all there is.
+        broadcastSetModelEditors(editors);
+        setModelEditors(editors);
+    };
+
+    const togglePerson = (userId: string) => {
+        choose(named.includes(userId) ? named.filter(id => id !== userId) : [...named, userId]);
+    };
+
+    return (
+        <div className="mt-2 pt-2 border-t border-gray-200">
+            <div className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wide text-gray-400 mb-1">
+                <Users size={9} />
+                <span>Who can change models</span>
+            </div>
+            <div className="flex gap-1">
+                <button
+                    onClick={() => choose('host')}
+                    title="Only the host can import, hide, move or remove models"
+                    className={clsx(
+                        "flex-1 px-1 py-1 rounded text-[8px] font-bold flex items-center justify-center gap-0.5 border",
+                        modelEditors === 'host' ? "bg-blue-500 text-white border-blue-500" : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                    )}
+                >
+                    <Lock size={8} /> Host only
+                </button>
+                <button
+                    onClick={() => choose('everyone')}
+                    title="Anyone in the room can change the models"
+                    className={clsx(
+                        "flex-1 px-1 py-1 rounded text-[8px] font-bold flex items-center justify-center gap-0.5 border",
+                        modelEditors === 'everyone' ? "bg-blue-500 text-white border-blue-500" : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                    )}
+                >
+                    <Globe size={8} /> Everyone
+                </button>
+                <button
+                    onClick={() => setChoosing(c => !c)}
+                    title="Choose which people may change the models"
+                    className={clsx(
+                        "flex-1 px-1 py-1 rounded text-[8px] font-bold flex items-center justify-center gap-0.5 border",
+                        Array.isArray(modelEditors) ? "bg-blue-500 text-white border-blue-500" : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                    )}
+                >
+                    <Users size={8} /> Choose…
+                </button>
+            </div>
+
+            {(choosing || Array.isArray(modelEditors)) && (
+                <div className="mt-1 max-h-24 overflow-y-auto custom-scrollbar border border-gray-200 rounded bg-white">
+                    {people.map(person => (
+                        <label
+                            key={person.userId}
+                            className="flex items-center gap-1.5 px-1.5 py-1 text-[9px] text-gray-700 hover:bg-gray-50 cursor-pointer"
+                        >
+                            <input
+                                type="checkbox"
+                                checked={named.includes(person.userId)}
+                                onChange={() => togglePerson(person.userId)}
+                                className="accent-blue-500"
+                            />
+                            <span className="truncate font-mono">{person.name}</span>
+                        </label>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+/**
+ * The one file the user picked, held between the upload and the answer to
+ * "what should this do to the scene".
+ */
+interface PendingImport {
+    fileName: string;
+    hash: string;
+    parsed: ModelImportResult;
+}
+
+type ImportChoice = 'revision' | 'beside' | 'replace';
+
 const SceneTree: React.FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const activeModelType = useStore(state => state.activeModelType);
     const isImporting = useStore(state => state.isImporting);
     const setIsImporting = useStore(state => state.setIsImporting);
-    const setImportedModel = useStore(state => state.setImportedModel);
+    const scene = useStore(state => state.scene);
+    const sceneEntries = useStore(state => state.sceneEntries);
+    const activeSceneModelId = useStore(state => state.activeSceneModelId);
+    const applyLocalSceneUpdate = useStore(state => state.applyLocalSceneUpdate);
+    const upsertSceneModel = useStore(state => state.upsertSceneModel);
+    const setActiveSceneModel = useStore(state => state.setActiveSceneModel);
+    const sceneRefusal = useStore(state => state.sceneRefusal);
+    const setSceneRefusal = useStore(state => state.setSceneRefusal);
     const importedSceneTree = useStore(state => state.importedSceneTree);
     const bicycleSceneTree = useStore(state => state.bicycleSceneTree);
     const headphonesSceneTree = useStore(state => state.headphonesSceneTree);
-    const importedFileName = useStore(state => state.importedFileName);
-    const importedScale = useStore(state => state.importedScale);
-    const setImportedScale = useStore(state => state.setImportedScale);
     const importSuccess = useStore(state => state.importSuccess);
+    const setImportStatus = useStore(state => state.setImportStatus);
     const clearImportStatus = useStore(state => state.clearImportStatus);
 
-    const { broadcastModelChange } = usePresence();
+    const { broadcastSceneUpdate } = usePresence();
+    const { canChangeModels, isHost, reason: cannotChangeReason } = useScenePermissions();
+
     const [importError, setImportError] = useState<string | null>(null);
+    const [pending, setPending] = useState<PendingImport | null>(null);
+    const [compareLine, setCompareLine] = useState<string | null>(null);
     // Fraction of the file that has reached the server, or null when nothing is
     // being shared. Kept out of the zustand store: it changes many times a
     // second during an upload and only this panel renders it.
@@ -152,14 +581,37 @@ const SceneTree: React.FC = () => {
     const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree, bicycleSceneTree, headphonesSceneTree);
     const objectStates = useStore(state => state.objectStates);
     const toggleExpanded = useStore(state => state.toggleNodeExpanded);
+    const toggleSceneModelExpanded = useStore(state => state.toggleSceneModelExpanded);
+    const expandedSceneModels = useStore(state => state.expandedSceneModels);
 
-    // Auto-expand ancestors when a node is selected (from 3D view or elsewhere)
+    // The line a new revision would continue: the one the tree is pointing at,
+    // or the last model added. Saying which line it is on the button is what
+    // makes that choice visible rather than a guess the user has to check.
+    const activeLine = useMemo(
+        () => scene.models.find(m => m.id === activeSceneModelId)?.line ?? null,
+        [scene, activeSceneModelId],
+    );
+
+    // Auto-expand ancestors when a node is selected (from 3D view or elsewhere).
+    // With several models in the scene the ancestors can include a model's own
+    // root, whose expansion lives in expandedSceneModels rather than objectStates.
     const prevSelectedIdRef = useRef<string | null>(null);
     useEffect(() => {
       const selectedId = Object.keys(objectStates).find(id => objectStates[id]?.selected) ?? null;
       if (selectedId && selectedId !== prevSelectedIdRef.current) {
+        const rootIdByModel = new Map<string, string>();
+        for (const model of scene.models) {
+          const entry = sceneEntries[model.id];
+          if (entry) rootIdByModel.set(entry.sceneTree.id, model.id);
+        }
         const ancestors = findAncestorIds(currentTree, selectedId);
         ancestors.forEach(ancestorId => {
+          if (ancestorId === SCENE_ROOT_ID) return;
+          const modelId = rootIdByModel.get(ancestorId);
+          if (modelId) {
+            if (!expandedSceneModels[modelId]) toggleSceneModelExpanded(modelId);
+            return;
+          }
           const ancestorState = objectStates[ancestorId];
           if (ancestorState && !ancestorState.expanded) {
             toggleExpanded(ancestorId);
@@ -167,7 +619,7 @@ const SceneTree: React.FC = () => {
         });
       }
       prevSelectedIdRef.current = selectedId;
-    }, [objectStates, currentTree, toggleExpanded]);
+    }, [objectStates, currentTree, toggleExpanded, scene, sceneEntries, expandedSceneModels, toggleSceneModelExpanded]);
 
     // Auto-clear success message after 5 seconds
     useEffect(() => {
@@ -178,6 +630,22 @@ const SceneTree: React.FC = () => {
             return () => clearTimeout(timer);
         }
     }, [importSuccess, clearImportStatus]);
+
+    /**
+     * Send each operation to the room, then make the same change locally.
+     *
+     * Both, always. The room server is the truth and will relay the resulting
+     * scene back — to this client too — so the local step is a prediction that
+     * the echo either confirms or replaces. It is still needed: the review setup
+     * page has no room to send to, and even in a room the model should appear on
+     * the importer's screen before the round trip finishes.
+     */
+    const applySceneUpdates = (updates: SceneUpdate[], options?: { fresh?: boolean }) => {
+        updates.forEach((update, index) => {
+            broadcastSceneUpdate(update);
+            applyLocalSceneUpdate(update, index === 0 ? options : undefined);
+        });
+    };
 
     const handleImportClick = () => {
         fileInputRef.current?.click();
@@ -201,61 +669,147 @@ const SceneTree: React.FC = () => {
         setImportError(null);
         setShareProgress(null);
 
-        try {
-            // Parse the uploaded model file
-            const result = await parseModelFile(file);
-
-            // Set the imported model in the store
-            setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition);
-        } catch (error) {
-            console.error('Model import error:', error);
-            setImportError(error instanceof Error ? error.message : 'Failed to import model file');
-            setIsImporting(false);
-            if (fileInputRef.current) {
-                fileInputRef.current.value = '';
-            }
-            return;
-        }
-
-        // Stored on the server, then shared with the room BY HASH. Two steps on
-        // purpose: the parse above already put the model on this screen, so a
-        // failure here means "nobody else can see it", not "the import failed" —
-        // and the message says exactly that.
+        // Stored on the server FIRST, then parsed. Two steps on purpose, and the
+        // order is the one batch BA chose: the hash is what the scene holds, so
+        // a file this server cannot store is a file the room can never see, and
+        // saying so before parsing 200 MB is kinder than saying it after.
         //
-        // There is no sharing cap any more. The old 50 MB one existed because
-        // the file travelled through the room socket as base64, which the server
-        // then held in memory and replayed to every connection; the ceiling now
-        // is the 200 MB the picker already enforces and the api enforces again.
+        // There is no sharing cap any more. The old 50 MB one existed because the
+        // file travelled through the room socket as base64; the ceiling now is the
+        // 200 MB the picker enforces and the api enforces again.
+        let stored;
         try {
             setShareProgress(0);
-            const stored = await uploadModelFile(file, setShareProgress);
-            broadcastModelChange({
-                modelType: 'imported',
-                hash: stored.hash,
-                fileName: stored.fileName,
-                size: stored.size,
-            });
+            stored = await uploadModelFile(file, setShareProgress);
         } catch (error) {
             console.error('Model sharing error:', error);
             setImportError(error instanceof Error ? error.message : MODEL_UPLOAD_NETWORK_MESSAGE);
+            setShareProgress(null);
+            setIsImporting(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
         } finally {
             setShareProgress(null);
         }
 
-        // Clear input for re-selection
-        if (fileInputRef.current) {
-            fileInputRef.current.value = '';
+        const id = sceneModelId(stored.hash);
+        const already = useStore.getState().scene.models.find(m => m.id === id);
+        if (already) {
+            // The id comes from the hash, so the same file twice is the same
+            // model. Saying so beats an add that silently does nothing.
+            setImportError(`That file is already in the scene as ${sceneModelLabel(already)}.`);
+            setIsImporting(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
         }
+
+        let parsed: ModelImportResult;
+        try {
+            // Parsed here as well as by the loader, and not wasted: the width of
+            // the parsed model is what "put it next to the others" measures
+            // against, and handing the result to the store saves the loader
+            // parsing the same bytes a second time.
+            parsed = await parseModelFile(file, { treePrefix: sceneModelPrefix(stored.hash) });
+        } catch (error) {
+            console.error('Model import error:', error);
+            setImportError(error instanceof Error ? error.message : 'Failed to import model file');
+            setIsImporting(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            return;
+        }
+
+        setIsImporting(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+
+        if (useStore.getState().scene.models.length === 0) {
+            // Nothing in the scene, so there is nothing to ask about: it goes in
+            // at the origin, which is the only place there is.
+            finishImport({ fileName: stored.fileName, hash: stored.hash, parsed }, 'beside');
+            return;
+        }
+        setPending({ fileName: stored.fileName, hash: stored.hash, parsed });
     };
+
+    /**
+     * Put an uploaded, parsed file into the scene, the way the user just asked.
+     *
+     * Three answers to one question, and they differ in what happens to what was
+     * already there — which is the thing the plan was about. A revision hides
+     * the version it supersedes, because a review continues on the new one; a
+     * different model goes beside what is there, because both are under
+     * discussion; a replacement starts again, and takes the meeting's content
+     * with it the way importing always did.
+     */
+    const finishImport = (imported: PendingImport, choice: ImportChoice, revisionLine: string | null = null) => {
+        const models = useStore.getState().scene.models;
+        // Read fresh, not from the render closure: this runs after an upload and
+        // a parse, during which the loader may have measured models that were
+        // still downloading when the file was picked.
+        const entries = useStore.getState().sceneEntries;
+        const width = imported.parsed.size.x * imported.parsed.baseScale;
+        const line = choice === 'revision' && revisionLine
+            ? revisionLine
+            : lineFromFileName(imported.fileName);
+        const previous = choice === 'revision' && revisionLine ? latestOfLine(models, revisionLine) : null;
+
+        // A model still downloading has no measured width. Every import is
+        // normalised to about two scene units across, so the new file's own width
+        // is the honest estimate for one that has not been measured yet.
+        const extents: SceneExtent[] = models.map(model => {
+            const entry = entries[model.id];
+            return { offset: model.offset, width: entry ? sceneEntryWidth(entry) : width };
+        });
+
+        const offset: [number, number, number] =
+            choice === 'beside'
+                ? nextToOffset(extents, width)
+                : choice === 'revision' && previous
+                  ? previous.offset
+                  : [0, 0, 0];
+
+        const model: SceneModel = {
+            id: sceneModelId(imported.hash),
+            hash: imported.hash,
+            fileName: imported.fileName,
+            line,
+            revision: choice === 'revision' ? nextRevisionFor(models, line) : FIRST_REVISION,
+            visible: true,
+            offset,
+        };
+
+        const updates: SceneUpdate[] = [];
+        if (choice === 'revision' && previous) {
+            // The revision it supersedes goes dark rather than being deleted: it
+            // is the version the older comments and pins were raised against, and
+            // Compare needs it to still be there.
+            updates.push({ op: 'setVisible', id: previous.id, visible: false });
+        }
+        if (choice === 'replace') {
+            for (const existing of models) updates.push({ op: 'remove', id: existing.id });
+        }
+        updates.push({ op: 'add', model });
+
+        applySceneUpdates(updates, choice === 'replace' ? { fresh: true } : undefined);
+        // After the scene, not before: adopting a scene drops the parsed geometry
+        // of any model it no longer holds, so an entry added first would be thrown
+        // away by the very change that asks for it.
+        upsertSceneModel(sceneModelEntry(model, imported.parsed));
+        setActiveSceneModel(model.id);
+        setPending(null);
+        setImportStatus(
+            null,
+            `Imported "${imported.fileName}" as ${sceneModelLabel(model)} (${countParts(imported.parsed.sceneTree)} parts)`,
+        );
+    };
+
+    const activeEntry = activeSceneModelId ? sceneEntries[activeSceneModelId] : undefined;
+    const activeModel = scene.models.find(m => m.id === activeSceneModelId);
 
     // Get display name for current model
     const getModelFileName = () => {
-        if (activeModelType === 'imported' && importedFileName) {
-            return importedFileName;
-        }
-        if (activeModelType === 'bicycle') {
-            return 'urban_commuter_bicycle.step';
-        }
+        if (activeEntry) return activeEntry.fileName;
+        if (activeModelType === 'bicycle') return 'urban_commuter_bicycle.step';
+        if (activeModelType === 'headphones') return 'momentum_4.glb';
         return 'synth_assembly.step';
     };
 
@@ -266,6 +820,11 @@ const SceneTree: React.FC = () => {
                 <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-bold uppercase text-gray-500 tracking-wide">Model Tree</span>
                     <div className="flex items-center gap-1">
+                        {scene.models.length > 0 && (
+                            <span className="text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold">
+                                {scene.models.length} {scene.models.length === 1 ? 'model' : 'models'}
+                            </span>
+                        )}
                         {(activeModelType === 'bicycle' || activeModelType === 'imported') && (
                             <span className="text-[8px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold">
                                 3D
@@ -278,10 +837,11 @@ const SceneTree: React.FC = () => {
                 {/* Import Model Button */}
                 <button
                     onClick={handleImportClick}
-                    disabled={isImporting}
+                    disabled={isImporting || !canChangeModels}
+                    title={cannotChangeReason ?? 'Import a 3D model into this room'}
                     className={clsx(
                         "w-full px-3 py-2 rounded text-[10px] font-bold flex items-center justify-center gap-2 transition-all",
-                        isImporting
+                        isImporting || !canChangeModels
                             ? "bg-gray-100 text-gray-400 cursor-not-allowed"
                             : "bg-blue-500 text-white hover:bg-blue-600 shadow-sm"
                     )}
@@ -294,7 +854,7 @@ const SceneTree: React.FC = () => {
                     ) : (
                         <>
                             <Upload size={12} />
-                            Import 3D Model
+                            {canChangeModels ? 'Import 3D Model' : 'Import locked'}
                         </>
                     )}
                 </button>
@@ -307,25 +867,77 @@ const SceneTree: React.FC = () => {
                     className="hidden"
                 />
 
+                {/* One question, inline. A browser dialog would have been less
+                    code and much worse: it cannot say what each answer does to
+                    the models already on screen, which is the whole decision. */}
+                {pending && (
+                    <div className="mt-2 p-2 bg-white border border-blue-300 rounded text-[9px] text-gray-700">
+                        <div className="flex items-center justify-between mb-1.5">
+                            <span className="font-bold uppercase tracking-wide text-[8px] text-gray-500">
+                                Add “{pending.fileName}”
+                            </span>
+                            <button onClick={() => setPending(null)} className="text-gray-400 hover:text-gray-700">
+                                <X size={10} />
+                            </button>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                            {revisionTargets(scene.models, pending.fileName, activeLine).map(line => (
+                                <button
+                                    key={line}
+                                    onClick={() => finishImport(pending, 'revision', line)}
+                                    className="px-2 py-1 rounded border border-gray-200 hover:bg-blue-50 hover:border-blue-300 text-left"
+                                >
+                                    <span className="block font-bold text-[9px] text-gray-800">
+                                        New revision of {line}
+                                    </span>
+                                    <span className="block text-[8px] text-gray-500">
+                                        Becomes Rev {nextRevisionFor(scene.models, line)} and hides the one before it
+                                    </span>
+                                </button>
+                            ))}
+                            <button
+                                onClick={() => finishImport(pending, 'beside')}
+                                className="px-2 py-1 rounded border border-gray-200 hover:bg-blue-50 hover:border-blue-300 text-left"
+                            >
+                                <span className="block font-bold text-[9px] text-gray-800">Add next to it</span>
+                                <span className="block text-[8px] text-gray-500">
+                                    A new line, placed beside what is there. Nothing is hidden.
+                                </span>
+                            </button>
+                            <button
+                                onClick={() => finishImport(pending, 'replace')}
+                                className="px-2 py-1 rounded border border-gray-200 hover:bg-red-50 hover:border-red-300 text-left"
+                            >
+                                <span className="block font-bold text-[9px] text-gray-800">Replace everything</span>
+                                <span className="block text-[8px] text-gray-500">
+                                    Clears the scene and this meeting's comments, chat and cards
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Current Model Info */}
                 <div className="mt-2 text-[9px] text-gray-400 flex items-center gap-1">
                     <FileBox size={10} />
                     <span className="truncate">{getModelFileName()}</span>
                 </div>
 
-                {activeModelType === 'imported' && (
+                {activeEntry && activeModel && (
                     <div className="mt-2 text-[9px] text-gray-500">
                         <div className="flex items-center justify-between">
-                            <span className="font-semibold uppercase tracking-wide text-[8px] text-gray-400">Scale</span>
-                            <span className="text-[9px] text-gray-600 font-mono">{importedScale.toFixed(2)}x</span>
+                            <span className="font-semibold uppercase tracking-wide text-[8px] text-gray-400">
+                                Scale · {sceneModelLabel(activeModel)}
+                            </span>
+                            <span className="text-[9px] text-gray-600 font-mono">{activeEntry.scale.toFixed(2)}x</span>
                         </div>
                         <input
                             type="range"
                             min="0.1"
                             max="10"
                             step="0.05"
-                            value={importedScale}
-                            onChange={e => setImportedScale(parseFloat(e.target.value))}
+                            value={activeEntry.scale}
+                            onChange={e => useStore.getState().setSceneModelScale(activeEntry.id, parseFloat(e.target.value))}
                             className="w-full accent-blue-500"
                         />
                     </div>
@@ -362,23 +974,32 @@ const SceneTree: React.FC = () => {
                     </div>
                 )}
 
-                {importError && (
+                {(importError || sceneRefusal) && (
                     <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-[10px] text-red-700 flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
                         <AlertCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
-                        <div className="flex-1">{importError}</div>
+                        <div className="flex-1">{importError ?? sceneRefusal}</div>
                         <button
-                            onClick={() => setImportError(null)}
+                            onClick={() => { setImportError(null); setSceneRefusal(null); }}
                             className="text-red-400 hover:text-red-600"
                         >
                             <X size={12} />
                         </button>
                     </div>
                 )}
+
+                {isHost && <ModelEditorsControl />}
             </div>
 
             {/* Tree View */}
             <div className="overflow-y-auto max-h-[35vh] py-1 custom-scrollbar">
-                <TreeNode node={currentTree} depth={0} />
+                {scene.models.length > 0 ? (
+                    scene.models.map(model => (
+                        <SceneModelRow key={model.id} model={model} onCompare={setCompareLine} />
+                    ))
+                ) : (
+                    <TreeNode node={currentTree} depth={0} />
+                )}
+                {compareLine && <ComparePicker line={compareLine} onClose={() => setCompareLine(null)} />}
             </div>
         </div>
     );

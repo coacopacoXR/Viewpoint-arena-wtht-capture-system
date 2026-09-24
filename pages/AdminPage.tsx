@@ -10,12 +10,13 @@
 // Sections:
 //   - People (accounts/sso only) — manage accounts
 //   - Reviews — every review, toggle listed, delete
+//   - AI — which provider does transcription, cards and summary
 //   - Labels — label field settings
 //   - Access — read-only explanation + "Lock this browser"
 //   - Activity — audit log
 //
-// Rooms, Models and AI are not built yet (batches BE, BF). The sidebar leaves
-// space for them but does not render placeholder items that do nothing.
+// Rooms and Models are not built yet (batch BE). The sidebar leaves space for
+// them but does not render placeholder items that do nothing.
 //
 // First-admin claim: when no admin account exists yet, a signed-in person
 // sees "No one administers this install yet. Make me the administrator" —
@@ -33,10 +34,11 @@ import {
 import { listAuditEvents, type AuditEvent, type AuditListResult } from '../lib/auditRepo';
 import AdminUnlockPage from './AdminUnlockPage.tsx';
 import LabelFieldsSettings from '../components/UI/LabelFieldsSettings';
+import AiSettingsSection from '../components/UI/AiSettingsSection';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
 import { supabase } from '../lib/supabase';
 
-type Section = 'people' | 'reviews' | 'labels' | 'access' | 'activity';
+type Section = 'people' | 'reviews' | 'ai' | 'labels' | 'access' | 'activity';
 
 // ─── Gate logic ──────────────────────────────────────────────────────────────
 
@@ -249,6 +251,7 @@ const AdminContent: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode })
   const sections: { id: Section; label: string }[] = [
     ...(mode !== 'none' ? [{ id: 'people' as Section, label: 'People' }] : []),
     { id: 'reviews', label: 'Reviews' },
+    { id: 'ai', label: 'AI' },
     { id: 'labels', label: 'Labels' },
     { id: 'access', label: 'Access' },
     { id: 'activity', label: 'Activity' },
@@ -305,6 +308,12 @@ const AdminContent: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode })
         <main className="flex-1 px-8 py-8 max-w-3xl">
           {section === 'people' && mode !== 'none' && <PeopleSection />}
           {section === 'reviews' && <ReviewsSection />}
+          {/* In passphrase mode the admin cookie rides along on a plain
+              same-origin fetch; in accounts/sso mode the token has to be
+              attached, which is what adminFetch does. */}
+          {section === 'ai' && (
+            <AiSettingsSection request={mode === 'none' ? undefined : adminFetch} />
+          )}
           {section === 'labels' && (
             <LabelFieldsSection onOpen={() => setLabelSettingsOpen(true)} />
           )}

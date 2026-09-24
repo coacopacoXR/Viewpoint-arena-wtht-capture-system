@@ -140,10 +140,9 @@ describe('deploy/nginx/app.conf — /api/models', () => {
     // The stock nginx entrypoint substitutes every ${...} in the template, and
     // NGINX_ENVSUBST_FILTER is ^CAPTURE_. Anything else here would arrive at
     // nginx as a literal, which nginx reads as an unknown variable and refuses
-    // to start on.
-    expect([...new Set(APP_CONF.match(/\$\{[^}]*\}/g) ?? [])]).toEqual([
-      '${CAPTURE_SHARED_SECRET}',
-    ]);
+    // to start on. The list is now empty: app.conf's one placeholder
+    // (${CAPTURE_SHARED_SECRET}) went with the capture routes that used it.
+    expect([...new Set(APP_CONF.match(/\$\{[^}]*\}/g) ?? [])]).toEqual([]);
   });
 });
 

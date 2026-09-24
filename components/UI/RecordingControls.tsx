@@ -1,8 +1,10 @@
 // RecordingControls — start / stop / elapsed / outcome, pure presentation.
 //
-// Reads from RecordingContext (mounted once in RoomPage) and renders nothing
-// when the viewer is not the host or the deployment is not on capture.provider
-// 'local'. Rendered in two places:
+// Reads from RecordingContext (mounted once in RoomPage) and renders nothing when
+// the viewer is not the host or the deployment asked for mock capture. It does not
+// check which AI is configured — RecordingContext.canRecord is the whole of that
+// decision, and since plan 14 batch BF it is a server-side one. Rendered in two
+// places:
 //   * at the top of the LIVE TRANSCRIPT tab (ConversationPanel);
 //   * in the Manager Workspace (ManagerPanel), where the host may already be
 //     when they want to record.
@@ -50,7 +52,7 @@ const RecordingControls: React.FC<RecordingControlsProps> = ({ theme = 'light' }
             <h2 className="text-[10px] font-bold uppercase tracking-widest text-gray-500 shrink-0">
               Post-meeting summary
             </h2>
-            <span className="text-[9px] font-mono text-gray-300 shrink-0">local capture</span>
+            <span className="text-[9px] font-mono text-gray-300 shrink-0">audio capture</span>
             <div className="flex-1 min-w-0" />
           </>
         )}

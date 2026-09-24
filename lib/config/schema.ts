@@ -119,6 +119,16 @@ const dbSchema = z.discriminatedUnion('provider', [
     // often unreachable from inside the api container (`localhost` there is
     // the container itself). Not a secret, and never sent to the browser.
     probeUrl: z.string().url('db.probeUrl must be a URL').optional(),
+    // Optional: the PostgREST root the SERVER reads and writes through, as
+    // distinct from the one it merely probes (e.g. 'http://rest:3000/' in the
+    // bundled Docker stack). Used by lib/ai/settingsStore.ts, which talks to
+    // app_settings with a service-role token; absent means db.probeUrl, and
+    // absent too means `<public URL>/rest/v1/`. A separate field rather than
+    // reusing probeUrl because the two answers can legitimately differ: a
+    // deployment may probe a health endpoint through one path and be told to
+    // send privileged writes through another (a read replica, a private
+    // gateway). Not a secret, and never sent to the browser.
+    serverUrl: z.string().url('db.serverUrl must be a URL').optional(),
   }),
 ]);
 

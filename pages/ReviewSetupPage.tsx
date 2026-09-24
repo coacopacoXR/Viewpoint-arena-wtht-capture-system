@@ -18,9 +18,9 @@ import {
 } from '../lib/reviewSetupStore';
 import { useStore } from '../store';
 import type { ModelType, Requirement } from '../types';
-import { parseModelFile } from '../utils/modelLoader';
-import { MODEL_FILE_ACCEPT, modelFileMime } from '../utils/modelFormats';
-import { fetchModelFile, uploadModelFile } from '../lib/modelsClient';
+import { MODEL_FILE_ACCEPT } from '../utils/modelFormats';
+import { uploadModelFile } from '../lib/modelsClient';
+import { showCurationModel } from '../lib/scene/showCurationModel';
 import { migrateCurationAsset } from '../lib/migrateCurationAsset';
 import { loadCuration, saveCuration, subscribeCuration, trackCurationPresence, listUsedLabelValues, type CurationPresence, type SyncStatus } from '../lib/curationsRepo';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
@@ -70,7 +70,6 @@ const ReviewSetupPage: React.FC = () => {
   const setImportedFile = useReviewSetupStore((s) => s.setImportedFile);
 
   const setActiveModelType = useStore((s) => s.setActiveModelType);
-  const setImportedModel = useStore((s) => s.setImportedModel);
   const setIsPlaying = useStore((s) => s.togglePlay);
   const isPlaying = useStore((s) => s.isPlaying);
 
@@ -226,31 +225,13 @@ const ReviewSetupPage: React.FC = () => {
 
   useEffect(() => {
     if (!modelType) return;
-    if (modelType !== 'imported') {
-      setActiveModelType(modelType);
-      return;
-    }
-    if (modelHash && importedFileName) {
-      // Stored by hash: fetched from /api/models and parsed. The response is
-      // content-addressed and immutable, so re-opening a review that this
-      // browser has already loaded costs a cache hit rather than a download.
-      fetchModelFile(modelHash, importedFileName)
-        .then((file) => parseModelFile(file))
-        .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
-        .catch((err) => console.error('[ReviewSetup] could not load the curated model:', err));
-      return;
-    }
-    if (importedFileBase64 && importedFileName) {
-      // LEGACY, and only until the migration effect below runs: a draft this
-      // browser persisted before models were stored by hash. It still renders,
-      // so a curator mid-review is not interrupted by the move.
-      const bytes = Uint8Array.from(atob(importedFileBase64), (c) => c.charCodeAt(0));
-      const file = new File([bytes], importedFileName, { type: modelFileMime(importedFileName) });
-      parseModelFile(file)
-        .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
-        .catch((err) => console.error('[ReviewSetup] failed to parse imported model:', err));
-    }
-  }, [modelType, modelHash, importedFileBase64, importedFileName, setActiveModelType, setImportedModel]);
+    // One function, shared with lib/activeReviewStore: an imported model becomes
+    // a one-model scene (and the loader in World fetches and parses it), a
+    // preset becomes the active model type. Doing it in both places is how a pin
+    // placed here would end up naming a mesh the room cannot find.
+    if (showCurationModel({ modelType, modelHash, importedFileName, importedFileBase64 }, 'ReviewSetup')) return;
+    setActiveModelType(modelType);
+  }, [modelType, modelHash, importedFileBase64, importedFileName, setActiveModelType]);
 
   // ─── Move a legacy inline model into storage ───────────────────────────────
   // A draft this browser persisted before models were stored by hash still

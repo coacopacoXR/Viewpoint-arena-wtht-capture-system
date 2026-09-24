@@ -8,8 +8,16 @@ import { useActiveReviewStore } from './activeReviewStore';
 import type { ReviewDraft } from './reviewSetupStore';
 import { useStore } from '../store';
 import { ViewMode } from '../types';
-import { parseModelFile } from '../utils/modelLoader';
-import { clearModelFileCache, fetchModelFile } from './modelsClient';
+import { clearModelFileCache } from './modelsClient';
+import {
+  describeSceneRefusal,
+  emptyScene,
+  type ModelEditors,
+  type SceneRefusalReason,
+  type SceneStatePayload,
+  type SceneUpdate,
+} from './scene/roomScene';
+import { asSceneStatePayload, sceneFromLegacyReference } from './scene/sceneWire';
 import { usePointingTimelineStore } from './pointingTimelineStore';
 import type { PointingSegment } from './pointingTimelineStore';
 import { supabase } from './supabase';
@@ -32,6 +40,10 @@ type RoomMessage =
   | { type: 'PRIVACY_MODE'; payload: { enabled: boolean } }
   | { type: 'LEADER_TAKEOVER'; payload: { userId: string } }
   | { type: 'MODEL_CHANGE'; payload: ModelReference }
+  | { type: 'SCENE_STATE'; payload: SceneStatePayload }
+  | { type: 'SCENE_UPDATE'; payload: SceneUpdate }
+  | { type: 'SCENE_REFUSED'; payload: { reason: SceneRefusalReason } }
+  | { type: 'SET_MODEL_EDITORS'; payload: { modelEditors: ModelEditors } }
   | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
@@ -176,18 +188,6 @@ export function useJoinPolicy(): 'open' | 'ask' {
 // cleared when the hook unmounts (room change).
 const seenTranscriptIds = new Set<string>();
 
-// Which MODEL_CHANGE this client is currently working on.
-//
-// Loading a shared model became asynchronous when it stopped arriving inline:
-// the payload is a hash and the bytes come from /api/models/<hash>. Two
-// references that arrive close together — the room server's replay to a new
-// connection and a live change a moment later, or two people importing in quick
-// succession — can therefore finish out of order, and the slower one would win
-// and put the wrong model on screen. Every handler stamps itself with the
-// counter as it starts and only applies its result if nothing newer has started
-// since.
-let modelChangeSeq = 0;
-
 const PARTYKIT_HOST: string =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PARTYKIT_HOST) || 'localhost:1999';
 
@@ -269,7 +269,8 @@ export interface UsePartyPresenceReturn {
   broadcastLaserMove: (position: [number, number, number] | null, targetId?: string | null, targetMeshName?: string | null, targetPartName?: string | null) => void;
   broadcastPrivacyMode: (enabled: boolean) => void;
   broadcastLeaderTakeover: (userId: string) => void;
-  broadcastModelChange: (reference: ModelReference) => void;
+  broadcastSceneUpdate: (update: SceneUpdate) => boolean;
+  broadcastSetModelEditors: (modelEditors: ModelEditors) => boolean;
   broadcastReviewConfig: (config: ReviewDraft) => boolean;
   broadcastMeetingEnd: () => void;
   broadcastTakeoverSync: (enabled: boolean, approvedUserIds: string[]) => void;
@@ -372,11 +373,14 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     notifyJoinRequestsSubscribers();
 
     // The previous room's models are of no use here and can be hundreds of
-    // megabytes, so they go rather than waiting to be evicted. Bumping the
-    // sequence at the same time stops a download that was still in flight for
-    // the old room from landing on the new one's scene.
+    // megabytes, so they go rather than waiting to be evicted. The scene goes
+    // with them: a download still in flight for the old room checks the scene
+    // before it stores anything (lib/scene/useSceneModelLoader), so emptying the
+    // list is what stops the old room's model landing in the new one. The new
+    // room's own SCENE_STATE, replayed once this connection is admitted, is what
+    // puts its models back up.
     clearModelFileCache();
-    modelChangeSeq += 1;
+    useStore.getState().setRoomScene(emptyScene());
 
     // Knock. PRESENCE is how a connection tells the server who it is, and the
     // server's knock gate answers it (admitted, or parked in the host's
@@ -539,33 +543,43 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         if (newLeaderId === userRef.current.userId) {
           setPresenterRequestStatus(null);
         }
+      } else if (msg.type === 'SCENE_STATE') {
+        // The whole scene, from the server that owns it.
+        //
+        // Replaced wholesale rather than merged, and sent to the client that
+        // asked for the change as well as everybody else: with several people
+        // able to add, hide and move models, a client that merged its own
+        // prediction into what arrived would sooner or later keep a model the
+        // room had removed. Whatever this says is the scene, is.
+        //
+        // Nothing is downloaded here. The list holds hashes, and
+        // lib/scene/useSceneModelLoader turns the ones this browser is missing
+        // into geometry — which is what lets a late joiner arrive at the same
+        // picture without this handler ever waiting on a 200 MB file.
+        const state = asSceneStatePayload(msg.payload);
+        if (!state) return;
+        const { setRoomScene, setModelEditors, setSceneRefusal } = useStore.getState();
+        setModelEditors(state.modelEditors);
+        setRoomScene({ models: state.models, builtIn: state.builtIn });
+        // A change that landed supersedes whatever was refused a moment ago: the
+        // reason to keep showing it would be that the room is still saying no,
+        // and it just said yes.
+        setSceneRefusal(null);
+      } else if (msg.type === 'SCENE_REFUSED') {
+        // Told to this connection only, because it is the only one that tried.
+        // Surfaced in the model tree rather than logged: the alternative is a
+        // person clicking an eye that does nothing and concluding the app is
+        // broken, when what actually happened is that the host has not let them
+        // change what the room is looking at.
+        const reason = msg.payload.reason;
+        useStore.getState().setSceneRefusal(describeSceneRefusal(reason));
       } else if (msg.type === 'MODEL_CHANGE') {
-        // A reference, not a file. The built-ins ship with the app and need
-        // nothing fetched; an imported model is downloaded by its hash from
-        // /api/models, which the browser keeps for a year because the response
-        // is content-addressed and immutable — so switching back to a revision
-        // the room has already seen costs a cache lookup, not another 200 MB.
-        const reference = msg.payload;
-        const started = ++modelChangeSeq;
-        const { setActiveModelType, setImportedModel } = useStore.getState();
-        if (reference.modelType === 'synth' || reference.modelType === 'bicycle') {
-          setActiveModelType(reference.modelType);
-        } else if (reference.modelType === 'imported' && reference.hash && reference.fileName) {
-          const { hash, fileName } = reference;
-          void (async () => {
-            try {
-              const file = await fetchModelFile(hash, fileName);
-              // Checked at every await: a newer reference may have arrived
-              // while this one was downloading, or while it was being parsed.
-              if (started !== modelChangeSeq) return;
-              const result = await parseModelFile(file);
-              if (started !== modelChangeSeq) return;
-              setImportedModel(result.root, result.sceneTree, result.fileName, result.baseScale, result.basePosition);
-            } catch (err) {
-              console.error('[MODEL_CHANGE] could not load the shared model:', err);
-            }
-          })();
-        }
+        // A room server that has not been updated still relays the one model it
+        // was told about. Read as what that message always meant — a scene
+        // holding exactly that model — so a mixed deployment shows the same
+        // geometry on both sides instead of a blank canvas on the new client.
+        const scene = sceneFromLegacyReference(msg.payload);
+        if (scene) useStore.getState().setRoomScene(scene);
       } else if (msg.type === 'REVIEW_CONFIG') {
         // Store the curated review config — setConfig syncs the main store's
         // model type and comments automatically. The host sets its own draft
@@ -812,19 +826,38 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
   }
 
   /**
-   * Tell the room what is on screen, by reference.
+   * Ask the room to make ONE change to what is on screen.
    *
-   * The payload is a hash, a name and a length — never the file. That is what
-   * lets a 200 MB assembly be shared at all: it goes to the store once over
-   * HTTP and every client, including one who joins an hour later, fetches it by
-   * its content address. The server refuses and logs a payload that still
-   * carries bytes, so an un-updated client cannot put that size back on the
-   * socket.
+   * An operation, not a list. Sending "here is my scene" would be the natural
+   * thing to write and is the bug it avoids: two people who each did that would
+   * have the second silently undo the first, because neither had seen the
+   * other's change. The server applies the operation to its own copy and relays
+   * the result as SCENE_STATE — to this client too, which is how the caller
+   * learns what the scene actually became.
+   *
+   * Answers false when there is no open socket, so a caller working outside a
+   * room (the review setup page) can apply the change locally and know that is
+   * all there is to do.
    */
-  function broadcastModelChange(reference: ModelReference) {
+  function broadcastSceneUpdate(update: SceneUpdate): boolean {
     const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({ type: 'MODEL_CHANGE', payload: reference } as RoomMessage));
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify({ type: 'SCENE_UPDATE', payload: update } as RoomMessage));
+    return true;
+  }
+
+  /**
+   * Host-only: choose who may change the models in this room.
+   *
+   * The server checks that the sender is the host before it changes anything, so
+   * this is a request rather than a command — hiding the control from everybody
+   * else is what makes it obvious, and refusing them is what makes it true.
+   */
+  function broadcastSetModelEditors(modelEditors: ModelEditors): boolean {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify({ type: 'SET_MODEL_EDITORS', payload: { modelEditors } } as RoomMessage));
+    return true;
   }
 
   function broadcastMeetingEnd() {
@@ -934,7 +967,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     broadcastLaserMove,
     broadcastPrivacyMode,
     broadcastLeaderTakeover,
-    broadcastModelChange,
+    broadcastSceneUpdate,
+    broadcastSetModelEditors,
     broadcastReviewConfig,
     broadcastMeetingEnd,
     broadcastTakeoverSync,

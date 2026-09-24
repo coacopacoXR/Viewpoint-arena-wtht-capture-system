@@ -973,11 +973,31 @@ describe('room.server — admissions survive a restart', () => {
 //     during a meeting does not leave everybody looking at the default model;
 //   * a payload that still carries bytes is DROPPED, so a client that has not
 //     been updated cannot put that size back on the socket.
+//
+// Batch BB turned the single reference into a SCENE — a list of models — so what
+// is persisted and replayed now is that list, as SCENE_STATE. These tests are
+// BA's, restated against the shape that carries them: the property each one was
+// written for is unchanged.
 
-describe('room.server — MODEL_CHANGE by reference', () => {
+describe('room.server — the model on screen, by reference', () => {
   const MODEL_KEY = 'current-model';
+  const SCENE_KEY = 'room-scene';
   const HASH = 'a1'.repeat(32);
   const REFERENCE = { modelType: 'imported', hash: HASH, fileName: 'bracket.step', size: 2048 };
+  /** The scene that reference means, which is what the server holds and relays. */
+  const SCENE = {
+    models: [{
+      id: `model-${HASH}`,
+      hash: HASH,
+      fileName: 'bracket.step',
+      line: 'bracket',
+      revision: 'A',
+      visible: true,
+      offset: [0, 0, 0],
+    }],
+    builtIn: null,
+  };
+  const PAYLOAD = { ...SCENE, modelEditors: 'host' };
 
   function admittedHost(server: ReturnType<typeof createServer>) {
     const conn = fakeConn('c-host');
@@ -994,6 +1014,11 @@ describe('room.server — MODEL_CHANGE by reference', () => {
     );
   }
 
+  /** The SCENE_STATE messages a connection or the room was sent, parsed. */
+  function sceneStates(messages: Array<{ type: string; payload: unknown }>) {
+    return messages.filter((m) => m.type === 'SCENE_STATE');
+  }
+
   it('stores the reference, persists it, and relays it to the others', async () => {
     const storage = fakeStorage();
     const server = createServer(storage);
@@ -1002,11 +1027,11 @@ describe('room.server — MODEL_CHANGE by reference', () => {
 
     await sendModel(server, hostConn, REFERENCE);
 
-    expect(server.currentModel).toEqual(REFERENCE);
-    expect(storage._data.get(MODEL_KEY)).toEqual(REFERENCE);
+    expect(server.scene).toEqual(SCENE);
+    expect(storage._data.get(SCENE_KEY)).toEqual(PAYLOAD);
     expect(server.room.broadcast).toHaveBeenCalled();
     const relayed = JSON.parse(server.room.broadcast.mock.calls[0]?.[0] as string);
-    expect(relayed).toEqual({ type: 'MODEL_CHANGE', payload: REFERENCE });
+    expect(relayed).toEqual({ type: 'SCENE_STATE', payload: PAYLOAD });
   });
 
   it('relays only the fields it knows, so an unknown one cannot ride along', async () => {
@@ -1020,10 +1045,10 @@ describe('room.server — MODEL_CHANGE by reference', () => {
     // What is stored and what is relayed is built field by field, not copied
     // from the payload: this object goes into room state, into persisted
     // storage, and out to every other connection.
-    expect(server.currentModel).toEqual(REFERENCE);
-    expect(storage._data.get(MODEL_KEY)).toEqual(REFERENCE);
+    expect(server.scene).toEqual(SCENE);
+    expect(storage._data.get(SCENE_KEY)).toEqual(PAYLOAD);
     const relayed = JSON.parse(server.room.broadcast.mock.calls[0]?.[0] as string);
-    expect(relayed.payload).toEqual(REFERENCE);
+    expect(relayed.payload).toEqual(PAYLOAD);
   });
 
   it('stores a built-in preset with no hash, which has nothing to fetch', async () => {
@@ -1034,13 +1059,8 @@ describe('room.server — MODEL_CHANGE by reference', () => {
 
     await sendModel(server, hostConn, { modelType: 'bicycle' });
 
-    expect(server.currentModel).toEqual({
-      modelType: 'bicycle',
-      hash: undefined,
-      fileName: undefined,
-      size: undefined,
-    });
-    expect(storage._data.get(MODEL_KEY)).toBeTruthy();
+    expect(server.scene).toEqual({ models: [], builtIn: 'bicycle' });
+    expect(storage._data.get(SCENE_KEY)).toBeTruthy();
   });
 
   it('replays the model to a new connection after a restart', async () => {
@@ -1049,20 +1069,17 @@ describe('room.server — MODEL_CHANGE by reference', () => {
     const before = createServer(storage);
     await before.onStart();
     await sendModel(before, admittedHost(before), REFERENCE);
-    expect(storage._data.get(MODEL_KEY)).toEqual(REFERENCE);
+    expect(storage._data.get(SCENE_KEY)).toEqual(PAYLOAD);
 
     // A new server instance over the SAME storage is the restart.
     const after = createServer(storage);
     await after.onStart();
-    expect(after.currentModel).toEqual(REFERENCE);
+    expect(after.scene).toEqual(SCENE);
 
     const conn = fakeConn('c-late');
     admitUser(after, conn, 'late-1', 'Carol');
-    const modelMessages = conn.send.mock.calls
-      .map((c) => JSON.parse(c[0] as string))
-      .filter((m) => m.type === 'MODEL_CHANGE');
-    expect(modelMessages).toHaveLength(1);
-    expect(modelMessages[0].payload).toEqual(REFERENCE);
+    expect(sceneStates(sent(conn))).toHaveLength(1);
+    expect(sceneStates(sent(conn))[0].payload).toEqual(PAYLOAD);
   });
 
   it('drops a payload that still carries the file, and says so once', async () => {
@@ -1078,9 +1095,9 @@ describe('room.server — MODEL_CHANGE by reference', () => {
     await sendModel(server, hostConn, { modelType: 'imported', fileName: 'b.glb', fileBase64: 'Zm9v' });
     await sendModel(server, hostConn, { modelType: 'imported', fileName: 'b.glb', fileBase64: 'YmFy' });
 
-    expect(server.currentModel).toBeNull();
+    expect(server.scene).toEqual({ models: [], builtIn: null });
     expect(server.room.broadcast).not.toHaveBeenCalled();
-    expect(storage._data.has(MODEL_KEY)).toBe(false);
+    expect(storage._data.has(SCENE_KEY)).toBe(false);
     const drops = log.mock.calls.filter((c) => String(c[0]).includes('dropped a MODEL_CHANGE'));
     expect(drops).toHaveLength(1);
     expect(String(drops[0]?.[0])).toMatch(/fileBase64/);
@@ -1096,7 +1113,7 @@ describe('room.server — MODEL_CHANGE by reference', () => {
 
     await sendModel(server, hostConn, { modelType: 'imported', fileName: 'b.glb' });
 
-    expect(server.currentModel).toBeNull();
+    expect(server.scene).toEqual({ models: [], builtIn: null });
     expect(server.room.broadcast).not.toHaveBeenCalled();
     log.mockRestore();
   });
@@ -1110,7 +1127,7 @@ describe('room.server — MODEL_CHANGE by reference', () => {
 
     await sendModel(server, hostConn, { modelType: 'rev-c', hash: HASH });
 
-    expect(server.currentModel).toBeNull();
+    expect(server.scene).toEqual({ models: [], builtIn: null });
     expect(server.room.broadcast).not.toHaveBeenCalled();
     log.mockRestore();
   });
@@ -1124,14 +1141,14 @@ describe('room.server — MODEL_CHANGE by reference', () => {
     });
     const server = createServer(storage);
     await server.onStart();
-    expect(server.currentModel).toBeNull();
+    expect(server.scene).toEqual({ models: [], builtIn: null });
   });
 
   it('restores a persisted preset even though it has no hash', async () => {
     const storage = fakeStorage({ [MODEL_KEY]: { modelType: 'synth' } });
     const server = createServer(storage);
     await server.onStart();
-    expect(server.currentModel?.modelType).toBe('synth');
+    expect(server.scene).toEqual({ models: [], builtIn: 'synth' });
   });
 
   it('ignores a persisted record that is not an object at all', async () => {
@@ -1139,7 +1156,7 @@ describe('room.server — MODEL_CHANGE by reference', () => {
       const storage = fakeStorage({ [MODEL_KEY]: junk });
       const server = createServer(storage);
       await server.onStart();
-      expect(server.currentModel, JSON.stringify(junk)).toBeNull();
+      expect(server.scene, JSON.stringify(junk)).toEqual({ models: [], builtIn: null });
     }
   });
 
@@ -1156,7 +1173,7 @@ describe('room.server — MODEL_CHANGE by reference', () => {
 
     const hostConn = admittedHost(server);
     await sendModel(server, hostConn, REFERENCE);
-    expect(server.currentModel).toEqual(REFERENCE);
+    expect(server.scene).toEqual(SCENE);
     expect(server.room.broadcast).toHaveBeenCalled();
   });
 
@@ -1176,8 +1193,469 @@ describe('room.server — MODEL_CHANGE by reference', () => {
     await sendModel(server, guestConn, REFERENCE);
 
     expect(server.room.broadcast).not.toHaveBeenCalled();
-    expect(server.currentModel).toBeNull();
-    expect(storage._data.has(MODEL_KEY)).toBe(false);
+    expect(server.scene).toEqual({ models: [], builtIn: null });
+    expect(storage._data.has(SCENE_KEY)).toBe(false);
+  });
+});
+
+// ─── The scene: several models, and who may change them ─────────────────────
+//
+// docs/plan/14-rooms-models-admin-ai.md batch BB. One reference became a list,
+// and the list is the SERVER's. Three properties are worth a red test, because
+// each one is a way a meeting goes wrong:
+//
+//   * a client sends an OPERATION and gets back the whole scene, so two people
+//     changing it at once cannot overwrite each other with a stale list;
+//   * the scene survives a restart of this container, models and all;
+//   * "who may change models" is enforced HERE. Hiding the import button is a
+//     courtesy; a socket that accepts anything is not a permission.
+
+describe('room.server — scene operations', () => {
+  const SCENE_KEY = 'room-scene';
+  const HASH_A = 'a1'.repeat(32);
+  const HASH_B = 'b2'.repeat(32);
+
+  function model(id: string, hash: string, overrides: Record<string, unknown> = {}) {
+    return {
+      id,
+      hash,
+      fileName: `${id}.glb`,
+      line: id,
+      revision: 'A',
+      visible: true,
+      offset: [0, 0, 0],
+      ...overrides,
+    };
+  }
+
+  function host(server: ReturnType<typeof createServer>) {
+    const conn = fakeConn('c-host');
+    admitUser(server, conn, 'host-1', 'Alice');
+    conn.send.mockClear();
+    server.room.broadcast.mockClear();
+    return conn;
+  }
+
+  function member(server: ReturnType<typeof createServer>, hostConn: FakeConnection, userId = 'member-1', name = 'Bob') {
+    const conn = fakeConn(`c-${userId}`);
+    admitViaHost(server, hostConn, conn, userId, name);
+    conn.send.mockClear();
+    server.room.broadcast.mockClear();
+    return conn;
+  }
+
+  function send(server: ReturnType<typeof createServer>, conn: FakeConnection, payload: unknown) {
+    return server.onMessage(
+      JSON.stringify({ type: 'SCENE_UPDATE', payload }),
+      conn as unknown as Party.Connection,
+    );
+  }
+
+  /** Every SCENE_STATE the room relayed, newest last. */
+  function relayedScenes(server: ReturnType<typeof createServer>) {
+    return broadcast(server)
+      .filter((m) => m.type === 'SCENE_STATE')
+      .map((m) => m.payload);
+  }
+
+  async function started() {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    return { storage, server };
+  }
+
+  it('applies each operation to its own copy and relays one SCENE_STATE per change', async () => {
+    const { storage, server } = await started();
+    const hostConn = host(server);
+
+    await send(server, hostConn, { op: 'add', model: model('bracket', HASH_A) });
+    await send(server, hostConn, { op: 'add', model: model('mating-part', HASH_B, { line: 'bracket', revision: 'B' }) });
+    await send(server, hostConn, { op: 'setVisible', id: 'bracket', visible: false });
+    await send(server, hostConn, { op: 'setOffset', id: 'mating-part', offset: [2.4, 0, 0] });
+    await send(server, hostConn, { op: 'remove', id: 'bracket' });
+
+    const scenes = relayedScenes(server);
+    expect(scenes).toHaveLength(5);
+    // Each relay is the WHOLE scene as it then stood, not a delta: a client that
+    // missed one is still correct after the next.
+    expect(scenes[0]).toMatchObject({ models: [{ id: 'bracket' }] });
+    expect(scenes[1]).toMatchObject({ models: [{ id: 'bracket' }, { id: 'mating-part' }] });
+    expect(scenes[2]).toMatchObject({ models: [{ id: 'bracket', visible: false }, { id: 'mating-part' }] });
+    expect(scenes[3]).toMatchObject({ models: [{ id: 'bracket' }, { id: 'mating-part', offset: [2.4, 0, 0] }] });
+    expect(scenes[4]).toMatchObject({ models: [{ id: 'mating-part' }] });
+
+    expect(server.scene.models).toEqual([model('mating-part', HASH_B, { line: 'bracket', revision: 'B', offset: [2.4, 0, 0] })]);
+    expect(storage._data.get(SCENE_KEY)).toMatchObject({ models: [{ id: 'mating-part' }] });
+  });
+
+  it('relays to the sender too, because the server holds the only copy', async () => {
+    const { server } = await started();
+    const hostConn = host(server);
+    server.room.broadcast.mockClear();
+
+    await send(server, hostConn, { op: 'add', model: model('bracket', HASH_A) });
+
+    // `relay` excludes nobody here. A client that predicted its own change gets
+    // it confirmed; one that was refused, or that guessed wrong, gets corrected.
+    expect(server.room.broadcast).toHaveBeenCalledTimes(1);
+    const excluded = server.room.broadcast.mock.calls[0][1] as string[] | undefined;
+    expect(excluded ?? []).not.toContain(hostConn.id);
+  });
+
+  it('keeps two people’s changes when they arrive one after the other', async () => {
+    const { server } = await started();
+    const hostConn = host(server);
+    await send(server, hostConn, { op: 'add', model: model('bracket', HASH_A) });
+    // The host lets everybody in on the models, so the second person is a real
+    // editor rather than somebody about to be refused.
+    await server.onMessage(
+      JSON.stringify({ type: 'SET_MODEL_EDITORS', payload: { modelEditors: 'everyone' } }),
+      hostConn as unknown as Party.Connection,
+    );
+    const memberConn = member(server, hostConn);
+
+    // Neither has seen the other's change: the host adds a second model, the
+    // member hides the first. Sending whole lists would have lost one of them.
+    await send(server, hostConn, { op: 'add', model: model('mating-part', HASH_B) });
+    await send(server, memberConn, { op: 'setVisible', id: 'bracket', visible: false });
+
+    expect(server.scene.models).toEqual([
+      model('bracket', HASH_A, { visible: false }),
+      model('mating-part', HASH_B),
+    ]);
+  });
+
+  it('relays nothing for an operation that changes nothing', async () => {
+    const { server } = await started();
+    const hostConn = host(server);
+    await send(server, hostConn, { op: 'add', model: model('bracket', HASH_A) });
+    server.room.broadcast.mockClear();
+
+    // Same id again, a flag that already has that value, and a model that is not
+    // there. Nothing to persist, nothing to say.
+    await send(server, hostConn, { op: 'add', model: model('bracket', HASH_A) });
+    await send(server, hostConn, { op: 'setVisible', id: 'bracket', visible: true });
+    await send(server, hostConn, { op: 'remove', id: 'nope' });
+    await send(server, hostConn, { op: 'setOffset', id: 'nope', offset: [1, 0, 0] });
+
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+  });
+
+  it('refuses an operation it cannot read, and says so to the sender only', async () => {
+    const { server } = await started();
+    const hostConn = host(server);
+    server.room.broadcast.mockClear();
+
+    await send(server, hostConn, { op: 'add', model: { id: 'x', fileName: 'x.glb' } }); // no hash
+    await send(server, hostConn, { op: 'explode', id: 'x' });
+    await send(server, hostConn, { op: 'setOffset', id: 'x', offset: [1, 2] });
+
+    expect(server.scene).toEqual({ models: [], builtIn: null });
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    const refusals = sent(hostConn).filter((m) => m.type === 'SCENE_REFUSED');
+    expect(refusals).toHaveLength(3);
+    expect(refusals[0].payload).toEqual({ reason: 'unreadable-update' });
+  });
+
+  it('drops a field it has never heard of rather than storing it', async () => {
+    const { storage, server } = await started();
+    const hostConn = host(server);
+
+    await send(server, hostConn, {
+      op: 'add',
+      model: { ...model('bracket', HASH_A), admin: true, fileBase64: 'Zm9v' },
+    });
+
+    // `fileBase64` is BA's refusal surviving into the list shape: a payload that
+    // carries bytes comes from a client that has not been updated, and storing
+    // it would put 50 MB back into room state and into every replay.
+    expect(server.scene.models).toEqual([]);
+    expect(storage._data.has(SCENE_KEY)).toBe(false);
+  });
+
+  it('refuses to grow the scene past the cap', async () => {
+    const { server } = await started();
+    const hostConn = host(server);
+    for (let i = 0; i < 24; i += 1) {
+      await send(server, hostConn, { op: 'add', model: model(`m${i}`, `${i}`.padStart(64, '0')) });
+    }
+    expect(server.scene.models).toHaveLength(24);
+    hostConn.send.mockClear();
+
+    await send(server, hostConn, { op: 'add', model: model('one-too-many', HASH_B) });
+
+    expect(server.scene.models).toHaveLength(24);
+    expect(sent(hostConn).filter((m) => m.type === 'SCENE_REFUSED')[0].payload).toEqual({ reason: 'scene-full' });
+  });
+
+  it('keeps the scene, and who may change it, across a restart', async () => {
+    const storage = fakeStorage();
+    const before = createServer(storage);
+    await before.onStart();
+    const hostConn = host(before);
+    await send(before, hostConn, { op: 'add', model: model('bracket', HASH_A) });
+    await send(before, hostConn, { op: 'add', model: model('bracket-b', HASH_B, { line: 'bracket', revision: 'B' }) });
+    await send(before, hostConn, { op: 'setVisible', id: 'bracket', visible: false });
+    await before.onMessage(
+      JSON.stringify({ type: 'SET_MODEL_EDITORS', payload: { modelEditors: 'everyone' } }),
+      hostConn as unknown as Party.Connection,
+    );
+
+    // An upgrade recreates the container mid-meeting. Same storage, new server.
+    const after = createServer(storage);
+    await after.onStart();
+    expect(after.scene.models).toHaveLength(2);
+    expect(after.scene.models[0].visible).toBe(false);
+    expect(after.modelEditors).toBe('everyone');
+
+    const lateConn = fakeConn('c-late');
+    admitUser(after, lateConn, 'late-1', 'Carol');
+    const states = sent(lateConn).filter((m) => m.type === 'SCENE_STATE');
+    expect(states).toHaveLength(1);
+    expect(states[0].payload).toMatchObject({
+      models: [{ id: 'bracket', visible: false }, { id: 'bracket-b', revision: 'B' }],
+      modelEditors: 'everyone',
+    });
+  });
+
+  it('restores the single model a batch-BA server persisted', async () => {
+    // A room that upgrades mid-review: BA wrote one reference under
+    // 'current-model', BB reads a list under 'room-scene'. Without this
+    // translation everybody reconnects to an empty room.
+    const storage = fakeStorage({
+      'current-model': { modelType: 'imported', hash: HASH_A, fileName: 'bracket.step', size: 2048 },
+    });
+    const server = createServer(storage);
+    await server.onStart();
+
+    expect(server.scene.models).toHaveLength(1);
+    expect(server.scene.models[0]).toMatchObject({
+      id: `model-${HASH_A}`,
+      hash: HASH_A,
+      fileName: 'bracket.step',
+      line: 'bracket',
+      revision: 'A',
+      visible: true,
+    });
+    expect(server.modelEditors).toBe('host');
+  });
+
+  it('defaults to host-only, which is the safe direction', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    expect(server.modelEditors).toBe('host');
+
+    // And a persisted scene with no setting in it — written by a build that had
+    // the list but not the permission — comes back host-only rather than open.
+    const older = createServer(fakeStorage({ [SCENE_KEY]: { models: [], builtIn: null } }));
+    await older.onStart();
+    expect(older.modelEditors).toBe('host');
+  });
+});
+
+describe('room.server — who may change models', () => {
+  const HASH_A = 'a1'.repeat(32);
+  const ADD = { op: 'add', model: { id: 'bracket', hash: HASH_A, fileName: 'bracket.step', line: 'bracket', revision: 'A', visible: true, offset: [0, 0, 0] } };
+
+  function host(server: ReturnType<typeof createServer>) {
+    const conn = fakeConn('c-host');
+    admitUser(server, conn, 'host-1', 'Alice');
+    conn.send.mockClear();
+    server.room.broadcast.mockClear();
+    return conn;
+  }
+
+  function member(server: ReturnType<typeof createServer>, hostConn: FakeConnection, userId = 'member-1') {
+    const conn = fakeConn(`c-${userId}`);
+    admitViaHost(server, hostConn, conn, userId, 'Bob');
+    conn.send.mockClear();
+    server.room.broadcast.mockClear();
+    return conn;
+  }
+
+  function send(server: ReturnType<typeof createServer>, conn: FakeConnection, payload: unknown) {
+    return server.onMessage(
+      JSON.stringify({ type: 'SCENE_UPDATE', payload }),
+      conn as unknown as Party.Connection,
+    );
+  }
+
+  async function setEditors(server: ReturnType<typeof createServer>, conn: FakeConnection, modelEditors: unknown) {
+    return server.onMessage(
+      JSON.stringify({ type: 'SET_MODEL_EDITORS', payload: { modelEditors } }),
+      conn as unknown as Party.Connection,
+    );
+  }
+
+  it('refuses a non-editor, tells them why, and relays nothing', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+    const memberConn = member(server, hostConn);
+
+    await send(server, memberConn, ADD);
+
+    // The scene is untouched, so there is no SCENE_STATE to send and no reason
+    // for anybody else's screen to change. The person who tried is the only one
+    // who hears anything, and what they hear is a reason.
+    expect(server.scene).toEqual({ models: [], builtIn: null });
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    expect(storage._data.has('room-scene')).toBe(false);
+    expect(sent(memberConn).filter((m) => m.type === 'SCENE_REFUSED')[0].payload).toEqual({ reason: 'host-only' });
+    expect(sent(hostConn).filter((m) => m.type === 'SCENE_REFUSED')).toHaveLength(0);
+  });
+
+  it('lets the host change the scene whatever the setting says', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+
+    await send(server, hostConn, ADD);
+
+    expect(server.scene.models).toHaveLength(1);
+    expect(broadcast(server).filter((m) => m.type === 'SCENE_STATE')).toHaveLength(1);
+  });
+
+  it('lets everybody in once the host says everyone', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+    const memberConn = member(server, hostConn);
+    await setEditors(server, hostConn, 'everyone');
+
+    await send(server, memberConn, ADD);
+
+    expect(server.scene.models).toHaveLength(1);
+    expect(sent(memberConn).filter((m) => m.type === 'SCENE_REFUSED')).toHaveLength(0);
+  });
+
+  it('admits a named person and refuses everybody else', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+    const namedConn = member(server, hostConn, 'named-1');
+    const otherConn = member(server, hostConn, 'other-1');
+    await setEditors(server, hostConn, ['named-1']);
+
+    await send(server, namedConn, ADD);
+    await send(server, otherConn, { op: 'setVisible', id: 'bracket', visible: false });
+
+    expect(server.scene.models).toHaveLength(1);
+    expect(server.scene.models[0].visible).toBe(true);
+    expect(sent(otherConn).filter((m) => m.type === 'SCENE_REFUSED')[0].payload).toEqual({ reason: 'not-an-editor' });
+  });
+
+  it('refuses a MODEL_CHANGE from a non-editor too, so an old client is not a way round it', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+    const memberConn = member(server, hostConn);
+
+    await server.onMessage(
+      JSON.stringify({ type: 'MODEL_CHANGE', payload: { modelType: 'imported', hash: HASH_A, fileName: 'bracket.step' } }),
+      memberConn as unknown as Party.Connection,
+    );
+
+    expect(server.scene).toEqual({ models: [], builtIn: null });
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    expect(sent(memberConn).filter((m) => m.type === 'SCENE_REFUSED')[0].payload).toEqual({ reason: 'host-only' });
+  });
+
+  it('translates a MODEL_CHANGE from the host into a one-model scene', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+
+    await server.onMessage(
+      JSON.stringify({
+        type: 'MODEL_CHANGE',
+        payload: { modelType: 'imported', hash: HASH_A, fileName: 'bracket.step', size: 2048 },
+      }),
+      hostConn as unknown as Party.Connection,
+    );
+
+    // "The scene is this one model" — which is what the message always meant
+    // back when the scene could only hold one.
+    expect(server.scene.models).toHaveLength(1);
+    expect(server.scene.models[0]).toMatchObject({ hash: HASH_A, line: 'bracket', revision: 'A' });
+    const states = broadcast(server).filter((m) => m.type === 'SCENE_STATE');
+    expect(states).toHaveLength(1);
+    // And the room is told in the new shape: this server no longer sends
+    // MODEL_CHANGE at all, so a client only has one thing to listen for.
+    expect(broadcast(server).filter((m) => m.type === 'MODEL_CHANGE')).toHaveLength(0);
+  });
+
+  it('takes the editor setting from the host and nobody else', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+    const memberConn = member(server, hostConn);
+
+    await setEditors(server, memberConn, 'everyone');
+    expect(server.modelEditors).toBe('host');
+    expect(sent(memberConn).filter((m) => m.type === 'SCENE_REFUSED')[0].payload).toEqual({ reason: 'host-only-setting' });
+
+    await setEditors(server, hostConn, 'everyone');
+    expect(server.modelEditors).toBe('everyone');
+    // Relayed as part of the scene, so everybody's import button changes at once.
+    const states = broadcast(server).filter((m) => m.type === 'SCENE_STATE');
+    expect(states[states.length - 1].payload).toMatchObject({ modelEditors: 'everyone' });
+    expect(storage._data.get('room-scene')).toMatchObject({ modelEditors: 'everyone' });
+  });
+
+  it('rebuilds a named list rather than storing what it was sent', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+
+    await setEditors(server, hostConn, ['a', 'a', '', 42, { userId: 'b' }, 'b']);
+
+    expect(server.modelEditors).toEqual(['a', 'b']);
+  });
+
+  it('refuses a setting it cannot read', async () => {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    const hostConn = host(server);
+
+    await setEditors(server, hostConn, 'anyone');
+    await setEditors(server, hostConn, 7);
+
+    expect(server.modelEditors).toBe('host');
+    expect(sent(hostConn).filter((m) => m.type === 'SCENE_REFUSED')).toHaveLength(2);
+  });
+
+  it('still refuses a scene change from a connection that has not been admitted', async () => {
+    // The knock gate runs first and drops the message outright: somebody who is
+    // not in the room is not told why they may not change its models, because
+    // they are not told anything.
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    // A host has to be in the room, or the knock gate would admit the guest by
+    // rule 2 (nobody is in the room) and this would be testing the wrong thing.
+    host(server);
+    const guestConn = fakeConn('c-guest');
+    server.onConnect(guestConn as unknown as Party.Connection);
+    sendPresence(server, guestConn, 'guest-1', 'Bob');
+    server.room.broadcast.mockClear();
+
+    await send(server, guestConn, ADD);
+
+    expect(server.scene).toEqual({ models: [], builtIn: null });
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    expect(sent(guestConn).filter((m) => m.type === 'SCENE_REFUSED')).toHaveLength(0);
   });
 });
 

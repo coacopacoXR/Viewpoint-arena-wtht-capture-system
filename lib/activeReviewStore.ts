@@ -3,9 +3,7 @@ import type { ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore
 import type { SpatialComment, Requirement } from '../types';
 import type { TeamMember } from './people';
 import { useStore } from '../store';
-import { parseModelFile } from '../utils/modelLoader';
-import { modelFileMime } from '../utils/modelFormats';
-import { fetchModelFile } from './modelsClient';
+import { showCurationModel } from './scene/showCurationModel';
 
 // Build a live SpatialComment from a curated pin at commit time. The comment
 // is authored by whoever presses the button (not the curator), attached to the
@@ -116,49 +114,18 @@ function syncMainRequirements(config: ReviewDraft | null) {
 // `activeModelType` from the main store, so loading a curation that
 // specifies e.g. 'bicycle' has to push that onto the main store too —
 // otherwise the room loads with whatever default (`headphones`) was
-// already there. Imported files require parsing + setImportedModel;
-// preset types just need the active type set. Fire-and-forget for the
-// async parse — failures are logged but don't block setConfig.
+// already there. An imported file becomes a one-model scene; see
+// lib/scene/showCurationModel, which the review setup page also calls so
+// that both paths build the same scene.
 function syncMainModel(config: ReviewDraft | null) {
   if (!config) return;
-  const { setActiveModelType, setImportedModel, setModelTransform } = useStore.getState();
+  const { setActiveModelType, setModelTransform } = useStore.getState();
   const a = config.asset;
   // Push the curator's transform onto the main store (used by World's group
   // wrapper). Identity if none was set.
   setModelTransform(a?.transform ?? { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 });
   if (!a?.modelType) return;
-  if (a.modelType === 'imported') {
-    if (a.modelHash && a.importedFileName) {
-      // Stored by hash: downloaded from /api/models and parsed. The response is
-      // immutable and content-addressed, so a participant who has this revision
-      // already gets it from the browser cache rather than the network.
-      const fileName = a.importedFileName;
-      fetchModelFile(a.modelHash, fileName)
-        .then((file) => parseModelFile(file))
-        .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
-        .catch((err) => console.error('[activeReviewStore] could not load the curated model:', err));
-      return;
-    }
-    if (a.importedFileBase64 && a.importedFileName) {
-      // LEGACY: a draft that has not been migrated yet (lib/migrateCurationAsset
-      // runs on the load path, and a failed upload leaves the bytes in place so
-      // the review still opens with its model). Same parse, no download.
-      const file = new File(
-        [Uint8Array.from(atob(a.importedFileBase64), (c) => c.charCodeAt(0))],
-        a.importedFileName,
-        { type: modelFileMime(a.importedFileName) },
-      );
-      parseModelFile(file)
-        .then((r) => setImportedModel(r.root, r.sceneTree, r.fileName, r.baseScale, r.basePosition))
-        .catch((err) => console.error('[activeReviewStore] failed to parse imported model:', err));
-      return;
-    }
-    // Neither a hash nor bytes: a curation recorded as 'imported' whose file is
-    // not in this payload. Leave whatever model was already there so the scene
-    // isn't empty, and warn so the issue is visible.
-    console.warn('[activeReviewStore] curation uses an imported model but this payload has neither its hash nor its file — keeping the current model');
-    return;
-  }
+  if (showCurationModel(a, 'activeReviewStore')) return;
   setActiveModelType(a.modelType);
 }
 

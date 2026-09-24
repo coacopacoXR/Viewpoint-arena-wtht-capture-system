@@ -29,6 +29,23 @@ export default defineConfig({
     // credential below is server-side only and must never use VITE_.
     urlEnv: 'VITE_SUPABASE_URL',
     anonKeyEnv: 'VITE_SUPABASE_ANON_KEY',
+    // Two optional SERVER-SIDE addresses, neither of which reaches a browser:
+    //
+    //   probeUrl   the PostgREST root /api/health probes. Needed because the
+    //              public URL is often unreachable from inside the api container
+    //              (`localhost` there is the container itself). install.sh writes
+    //              `probeUrl: 'http://rest:3000/'` for a bundled database.
+    //   serverUrl  the PostgREST root the server reads and writes PRIVILEGED data
+    //              through — today, app_settings, which holds the AI credentials
+    //              an administrator saves and which Row Level Security hides from
+    //              the anon key (docs/plan/14-rooms-models-admin-ai.md batch BF).
+    //              Absent means probeUrl, and absent too means
+    //              `<public URL>/rest/v1/`. A separate field because the two
+    //              answers can legitimately differ: a deployment may probe one
+    //              path and be told to send privileged writes through another.
+    //
+    //     probeUrl: 'http://rest:3000/',
+    //     serverUrl: 'http://rest:3000/',
   },
   // How people sign in — docs/plan/13-identity.md. The block is OPTIONAL and
   // 'none' is the default, so a config with no identity block at all means

@@ -19,6 +19,12 @@ recording.webm ──▶ POST /capture ──▶ faster-whisper (batch) ──�
                      { "cards": InsightCard[] } ◀── defensive parser ◀── Ollama (one pass)
 ```
 
+`/capture` is the whole chain in one request. Each stage is also addressable on
+its own — `/transcribe` (audio → transcript), `/extract` (transcript → cards)
+and `/summarize` (transcript and/or cards → markdown minutes) — so the app's
+server-side AI router can place one job here and another with a different
+provider.
+
 There is **no streaming, no WebSocket and no live partial transcript** here.
 That is T4.7, deliberately sequenced after the offline path is solid.
 
@@ -194,6 +200,56 @@ Ollama installed, and so an operator can see what the model was actually asked
 about. The transcript is returned to the same client that uploaded the audio, so
 it reveals nothing new — and it is never logged.
 
+### `POST /extract`
+
+The LLM half of `/capture`, on its own: `application/json`, no audio and no
+Whisper. `200` returns **exactly** the `{"cards": […]}` envelope `/capture`
+returns, and every failure carries the same codes, so a caller cannot tell which
+route produced a card.
+
+```json
+{
+  "transcript": [
+    { "speakerId": "speaker-1", "text": "The weld will crack.", "startMs": 0, "endMs": 4200 }
+  ],
+  "context": { "agendaIdx": 3, "slideTitle": "Rear triangle weld", "hoveredPartName": "Bracket" },
+  "componentTree": [{ "id": "left_cup", "name": "Left Cup", "path": "HP / Left Cup" }],
+  "pointingSegments": [],
+  "transcriptHint": []
+}
+```
+
+Only `transcript` is required (and it may not be empty). `context` is the same
+`SlideContext` `/capture` takes as form fields; the last three are the grounded
+fields, sent **already parsed** rather than as JSON strings, and subject to the
+same caps and the same rule that a malformed one is ignored rather than refused.
+
+### `POST /summarize`
+
+The meeting's minutes, as markdown. Either input alone is enough — cards-only is
+what a caller has when the transcript was not kept, transcript-only is what a
+caller has when extraction went to a different provider — but both empty is a
+`400 empty_summary_input`.
+
+```json
+{ "transcript": [ … ], "cards": [ … ], "title": "Rear triangle weld" }
+```
+
+```json
+{ "summary": "## What was reviewed\n…" }
+```
+
+`summary` is returned verbatim and is **not** parsed or validated: the answer is
+prose a person reads. That is why this call is the one place the service asks the
+model for free text instead of constraining it to the card schema. The prompt is
+a copy of [`lib/ai/summaryPrompt.ts`](../lib/ai/summaryPrompt.ts).
+
+Both routes exist because the app's server-side AI router picks a provider per
+**job**: transcription, extraction and summarisation can each be placed with a
+different provider, and a route that only accepts a recording cannot be one
+provider among several. See
+[`docs/plan/14-rooms-models-admin-ai.md`](../docs/plan/14-rooms-models-admin-ai.md).
+
 ### Errors
 
 Every non-2xx body is `{"error": "<code>"}` plus at most a `reason` enum, a
@@ -205,11 +261,13 @@ message is transcript-free by construction.
 
 | Status | `error` | Meaning |
 | --- | --- | --- |
-| 400 | `invalid_request` | A form field failed validation. `fields` names them; values are not echoed. |
+| 400 | `invalid_request` | A form field or a JSON body failed validation. `fields` names the offending paths (`transcript.0.startMs`, `cards.0.details.priority`); values are not echoed. |
 | 400 | `empty_upload` | The upload was 0 bytes. |
+| 400 | `empty_transcript` | `/extract` was sent no transcript chunks. Same code as the 422 below, different status: nothing ran, the caller sent nothing. |
+| 400 | `empty_summary_input` | `/summarize` was sent neither a transcript nor any cards. |
 | 400 | `not_found` / `method_not_allowed` | Wrong path or verb. |
 | 413 | `upload_too_large` | Over `CAPTURE_MAX_UPLOAD_BYTES`. Rejected while streaming, before any inference. |
-| 413 | `transcript_too_large` | The transcript exceeds the prompt budget (same limits as `api/capture/extract.ts`). |
+| 413 | `transcript_too_large` | The transcript exceeds the prompt budget (same limits as `api/capture/extract.ts`). Enforced on `/capture`, `/extract` and `/summarize` alike: the ceiling is about the model's context window, not about audio. |
 | 422 | `empty_transcript` | Whisper ran and found no speech. |
 | 422 | `capture_output_truncated` | The model hit its output-token limit before finishing the JSON. |
 | 422 | `capture_parse_error` | The model's reply was not usable InsightCard JSON. `reason` is one of `markdown_fenced`, `prose`, `truncated_json`, `malformed_json`, `wrong_envelope`, `extra_fields`, `invalid_card` — the same enum the TypeScript parser produces. |
@@ -303,7 +361,7 @@ pip install -r requirements-dev.txt   # NOT requirements-whisper.txt
 python -m pytest
 ```
 
-419 tests, under two seconds, with **no GPU, no downloaded model, no Ollama and
+535 tests, a few seconds, with **no GPU, no downloaded model, no Ollama and
 no network**. That is enforced rather than intended:
 
 - `requirements-dev.txt` does not install faster-whisper, so a top-level
@@ -328,7 +386,8 @@ What is covered:
 | `tests/test_transcribe.py` | segment → `TranscriptChunk` conversion, millisecond rounding, clamping, empty-segment dropping, merging bounds, prompt-budget enforcement, lazy model loading and caching, decoder/load failure translation, and the ML-free import guarantee. |
 | `tests/test_ollama.py` | the request payload, `done_reason: "length"`, missing/invalid `message.content`, model-not-pulled vs. not-Ollama 404s, error statuses, non-JSON 200s, connect/timeout failures, bounded and newline-flattened log excerpts. |
 | `tests/test_endpoints.py` | `/health`, `/capture`, `/transcribe`; the exact response envelope; client-side re-validation of our own response; the upload limit (both the declared-size fast path and the streaming counter) and that it stops before inference; request validation; every failure status and code; temp-file deletion; filename traversal; and "no transcript text in any response or log line". |
-| `tests/test_typescript_parity.py` | reads the TypeScript sources and fails on drift: the extraction prompt is byte-identical to `extractionPrompt.ts`, the key allowlists match `parseInsightCards.ts` **and** `types.ts`, the enums match both declarations, the parse-failure vocabulary matches, the transcript/context shapes match, and the shared limits and error codes match. |
+| `tests/test_extract_summarize.py` | `/extract` and `/summarize`: both envelopes, the extraction call staying schema-constrained while the summary call is not, grounded-field filtering on a JSON body, `componentReference` filtering, the refusal codes, shared-secret and CORS coverage, and the same "no transcript text in any response or log line" guarantee. |
+| `tests/test_typescript_parity.py` | reads the TypeScript sources and fails on drift: the extraction prompt is byte-identical to `extractionPrompt.ts` and the minutes prompt to `lib/ai/summaryPrompt.ts`, the summary user-prompt layout and card-extras order match that builder, the key allowlists match `parseInsightCards.ts` **and** `types.ts`, the enums match both declarations, the parse-failure vocabulary matches, the transcript/context shapes match, and the shared limits and error codes match. |
 | `tests/test_serve.py` | `python -m capture_service` binds the configured host/port, and an invalid environment stops the service with the variable named instead of a traceback. |
 
 CI runs this in its own `capture-service` job in
@@ -342,13 +401,13 @@ Node jobs.
 ```
 capture-service/
 ├── capture_service/
-│   ├── main.py          FastAPI app: /health, /capture, /transcribe, error handlers
+│   ├── main.py          FastAPI app: /health, /capture, /transcribe, /extract, /summarize, error handlers
 │   ├── config.py        every environment variable, validated
 │   ├── errors.py        the failure taxonomy (codes, statuses, transcript-free messages)
 │   ├── schemas.py       the wire shapes shared with TypeScript
 │   ├── transcribe.py    Transcriber protocol + the lazy faster-whisper backend
 │   ├── ollama.py        LlmClient protocol + the Ollama HTTP client
-│   ├── prompt.py        the extraction prompt (a copy of extractionPrompt.ts)
+│   ├── prompt.py        the extraction and minutes prompts (copies of the TypeScript ones)
 │   ├── parse_cards.py   the defensive parser (a port of parseInsightCards.ts)
 │   └── __main__.py      `python -m capture_service`
 ├── tests/               pytest suite + the fakes in conftest.py
@@ -360,10 +419,11 @@ capture-service/
 ```
 
 Two files are **copies** of TypeScript originals — `prompt.py` (from
-`extractionPrompt.ts`) and `parse_cards.py` (from `parseInsightCards.ts`) —
-because the two runtimes share no module format. The TypeScript file is the
-authority in both cases; `tests/test_typescript_parity.py` fails the build until
-the copy is brought back in line.
+`extractionPrompt.ts` and `lib/ai/summaryPrompt.ts`) and `parse_cards.py` (from
+`parseInsightCards.ts`) — because the two runtimes share no module format. The
+TypeScript file is the authority in every case;
+`tests/test_typescript_parity.py` fails the build until the copy is brought back
+in line.
 
 ---
 

@@ -2,6 +2,8 @@ import { createContext, useContext } from 'react';
 import type { UsePartyPresenceReturn } from './usePartyPresence';
 
 const noop = () => {};
+/** A broadcast that could not be sent, because there is no room to send it to. */
+const notSent = () => false;
 
 export const PresenceContext = createContext<UsePartyPresenceReturn>({
   localUserId: '',
@@ -18,7 +20,8 @@ export const PresenceContext = createContext<UsePartyPresenceReturn>({
   broadcastLaserMove: noop,
   broadcastPrivacyMode: noop,
   broadcastLeaderTakeover: noop,
-  broadcastModelChange: noop,
+  broadcastSceneUpdate: notSent,
+  broadcastSetModelEditors: notSent,
   broadcastReviewConfig: () => false,
   broadcastMeetingEnd: noop,
   broadcastTakeoverSync: noop,

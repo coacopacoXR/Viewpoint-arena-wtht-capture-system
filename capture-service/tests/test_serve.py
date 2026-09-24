@@ -24,6 +24,8 @@ def test_the_module_exposes_an_app_for_uvicorn() -> None:
         "/health",
         "/capture",
         "/transcribe",
+        "/extract",
+        "/summarize",
     }
 
 

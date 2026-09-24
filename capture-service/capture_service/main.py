@@ -3,12 +3,22 @@
     GET  /health      configuration + readiness summary, safe to poll
     POST /capture     a complete meeting recording → { "cards": [...] }
     POST /transcribe  a complete meeting recording → { "transcript": [...] }
+    POST /extract     an existing transcript       → { "cards": [...] }
+    POST /summarize   a transcript and/or cards    → { "summary": "<markdown>" }
 
 No WebSocket and no streaming. The live transcript (T4.7, first slice) is
 built from this same batch surface: while recording, the browser cuts a
 standalone ~8 s clip and POSTs it to /transcribe (via the app's
 /api/capture/transcribe proxy); cards still come from one /capture of the
 whole recording at stop.
+
+/extract and /summarize are the TEXT halves of the same pipeline, split out
+because the app's server-side AI router (docs/plan/14-rooms-models-admin-ai.md)
+picks a provider per JOB: a deployment may transcribe with this service and
+extract with Anthropic, or extract here and summarise in the cloud. A route
+that only accepts audio cannot be one provider among several, so each stage
+gets an endpoint that takes the previous stage's output as JSON. /capture is
+still the whole chain in one request, and it is what the browser calls.
 
 Two design rules this file exists to keep:
 
@@ -22,7 +32,9 @@ Two design rules this file exists to keep:
     the `code` (and at most a reason enum, a card index or a byte limit); the
     detail an operator needs is in the message, which errors.py guarantees is
     transcript-free. The uploaded filename is never echoed either — it is
-    client-controlled text.
+    client-controlled text. This applies with equal force to /extract and
+    /summarize, which take a transcript in the REQUEST BODY rather than
+    deriving one from audio.
 
 Routes are plain `def`, not `async def`: Whisper transcription blocks a worker
 for the length of the recording, and FastAPI runs sync routes in a threadpool so
@@ -52,19 +64,36 @@ from starlette.responses import JSONResponse
 from . import __version__
 from .auth import AUTH_HEADER, AUTHORIZATION_HEADER, require_shared_secret
 from .config import Settings, load_settings
-from .errors import CaptureServiceError, EmptyTranscript, EmptyUpload, UploadTooLarge
+from .errors import (
+    CaptureServiceError,
+    EmptySummaryInput,
+    EmptyTranscript,
+    EmptyTranscriptRequest,
+    EmptyUpload,
+    UploadTooLarge,
+)
 from .ollama import LlmClient, OllamaClient
 from .parse_cards import parse_insight_cards
-from .prompt import EXTRACTION_SYSTEM_PROMPT, build_extraction_user_prompt
+from .prompt import (
+    EXTRACTION_SYSTEM_PROMPT,
+    SUMMARY_SYSTEM_PROMPT,
+    build_extraction_user_prompt,
+    build_summary_user_prompt,
+)
 from .schemas import (
     DEFAULT_SLIDE_TITLE,
     CaptureResponse,
     ErrorBody,
+    ExtractRequest,
     HealthResponse,
+    InsightCard,
     LimitsHealth,
     LlmHealth,
     SlideContext,
+    SummaryRequest,
+    SummaryResponse,
     TranscribeResponse,
+    TranscriptChunk,
     WhisperHealth,
 )
 from .transcribe import (
@@ -192,11 +221,13 @@ def capture(
         raise EmptyTranscript()
     enforce_transcript_budget(transcript)
 
-    context = SlideContext(
-        agenda_idx=agenda_idx,
-        slide_title=(slide_title or "").strip() or DEFAULT_SLIDE_TITLE,
-        hovered_part_name=_blank_to_none(hovered_part_name),
-        laser_target_part_name=_blank_to_none(laser_target_part_name),
+    context = _normalise_context(
+        SlideContext(
+            agenda_idx=agenda_idx,
+            slide_title=slide_title,
+            hovered_part_name=hovered_part_name,
+            laser_target_part_name=laser_target_part_name,
+        )
     )
 
     # Grounded-capture inputs: parsed defensively so a bad payload degrades to
@@ -205,35 +236,15 @@ def capture(
     components = _parse_component_tree(component_tree)
     pointing_segments = _parse_pointing_segments(pointing_segments_raw)
     transcript_hint = _parse_transcript_hint(transcript_hint_raw)
-    component_ids = {c["id"] for c in components} if components else None
+    _log_grounded_counts("capture", components, pointing_segments, transcript_hint)
 
-    # Counts only — never content. Without this there is no way to tell a
-    # grounded capture from an ungrounded one after the fact, and the
-    # difference decides whether componentReference can be trusted.
-    logger.info(
-        "capture: grounded with %d component(s), %d pointing segment(s), %d hint line(s)",
-        len(components or []),
-        len(pointing_segments or []),
-        len(transcript_hint or []),
-    )
-
-    raw_reply = llm.complete(
-        EXTRACTION_SYSTEM_PROMPT,
-        build_extraction_user_prompt(
-            transcript,
-            context,
-            components=components,
-            pointing_segments=pointing_segments,
-            transcript_hint=transcript_hint,
-        ),
-    )
-
-    # Same default-agent rule as the TypeScript providers: a card that does not
-    # name a speaker is attributed to the first one in the window.
-    cards = parse_insight_cards(
-        raw_reply,
-        default_agent_id=transcript[0].speaker_id or None,
-        component_ids=component_ids,
+    cards = _extract_cards(
+        llm,
+        transcript,
+        context,
+        components=components,
+        pointing_segments=pointing_segments,
+        transcript_hint=transcript_hint,
     )
     logger.info(
         "capture: %d chunk(s) transcribed, %d card(s) extracted",
@@ -278,36 +289,164 @@ def transcribe(
     return TranscribeResponse(transcript=transcript)
 
 
+@router.post(
+    "/extract",
+    response_model=CaptureResponse,
+    response_model_exclude_none=True,
+    responses=ERROR_RESPONSES,
+    tags=["capture"],
+)
+def extract(request: Request, body: ExtractRequest) -> CaptureResponse:
+    """Extract InsightCards from a transcript this service did not produce.
+
+    The LLM half of /capture, addressable on its own: no audio, no Whisper, no
+    temp file. The AI router (docs/plan/14-rooms-models-admin-ai.md) calls this
+    when transcription came from somewhere else — a cloud provider, or a
+    /transcribe call made minutes earlier — and still wants this service's
+    extraction, which is the one whose prompt and parser the app already
+    validates against.
+
+    Everything downstream of the transcript is shared with /capture: same
+    SlideContext normalisation, same defensive handling of the three grounded
+    fields, same prompt, same parser, same `{"cards": [...]}` envelope. A card
+    this route returns is indistinguishable from one /capture returned, which
+    is the point of splitting the pipeline rather than writing a second one.
+    """
+    llm: LlmClient = request.app.state.llm
+    transcript = body.transcript
+
+    # Not EmptyTranscript: that one means Whisper ran and the recording had no
+    # speech in it, and it says so. Here the client sent the empty array
+    # itself, which is a 400 with a different fix.
+    if not transcript:
+        raise EmptyTranscriptRequest()
+    # The same budget /capture enforces on what Whisper produced. A caller that
+    # transcribed elsewhere can hand this route a meeting of any length, and
+    # the ceiling exists to keep one request inside the model's context window
+    # rather than to police a file size.
+    enforce_transcript_budget(transcript)
+
+    context = _normalise_context(body.context)
+
+    # Already parsed by pydantic, so only the shape filter applies — the same
+    # one /capture runs after json.loads. A malformed value degrades to "not
+    # sent" rather than failing an extraction that would otherwise work.
+    components = _filter_component_tree(body.component_tree)
+    pointing_segments = _filter_pointing_segments(body.pointing_segments)
+    transcript_hint = _filter_transcript_hint(body.transcript_hint)
+    _log_grounded_counts("extract", components, pointing_segments, transcript_hint)
+
+    cards = _extract_cards(
+        llm,
+        transcript,
+        context,
+        components=components,
+        pointing_segments=pointing_segments,
+        transcript_hint=transcript_hint,
+    )
+    logger.info(
+        "extract: %d chunk(s) in, %d card(s) extracted", len(transcript), len(cards)
+    )
+    return CaptureResponse(cards=cards)
+
+
+@router.post(
+    "/summarize",
+    response_model=SummaryResponse,
+    responses=ERROR_RESPONSES,
+    tags=["capture"],
+)
+def summarize(request: Request, body: SummaryRequest) -> SummaryResponse:
+    """Write a meeting's minutes as markdown.
+
+    The third AI job the router can place here. Unlike every other route this
+    service has, the answer is prose a person reads, not structured data: the
+    reply is returned verbatim in `{"summary": "..."}` and nothing parses it.
+    That is why the LLM call passes `schema=None` — Ollama's structured-output
+    mode would otherwise be asked for InsightCard JSON while the prompt asks
+    for markdown, and the model would answer one of the two.
+
+    Either input alone is enough. Cards-only is what a caller has when the
+    transcript was not kept; transcript-only is what a caller has when the
+    extraction was routed to a different provider. Both empty is the only
+    refusal, and it is a client bug.
+    """
+    llm: LlmClient = request.app.state.llm
+
+    if not body.transcript and not body.cards:
+        raise EmptySummaryInput()
+    # The budget is about the model's context window, not about audio, so a
+    # transcript that arrived as JSON is measured just like one Whisper made.
+    enforce_transcript_budget(body.transcript)
+
+    summary = llm.complete(
+        SUMMARY_SYSTEM_PROMPT,
+        build_summary_user_prompt(body.transcript, body.cards, body.title),
+        schema=None,
+    )
+    # Counts and a length, never content: the summary quotes the meeting, and
+    # this service's rule is that neither a response's failure path nor the log
+    # carries what was said. The length is what an operator needs to tell a
+    # truncated answer from a model that had nothing to say.
+    logger.info(
+        "summarize: %d chunk(s), %d card(s) in, %d character(s) of minutes",
+        len(body.transcript),
+        len(body.cards),
+        len(summary),
+    )
+    return SummaryResponse(summary=summary)
+
+
 # ─── Grounded-capture input parsing ─────────────────────────────────────────
 #
-# The three new form fields arrive as JSON strings. Each parser is defensive:
-# bad JSON, wrong shape or oversized input returns None (logged), and the
-# capture proceeds as if the field was not sent. A malformed hint must never
-# turn a good recording into a 500.
+# The three grounded fields are advisory context, and the rule for them is that
+# a bad value DEGRADES rather than fails: bad JSON, wrong shape or an oversized
+# array becomes None (logged), and the extraction proceeds as if the field was
+# not sent. A malformed hint must never turn a good meeting into a 500, and it
+# must not turn it into a 400 either — the caller cannot fix what it did not
+# mean to send, and the insight in the transcript is still worth having.
+#
+# /capture receives them as JSON strings in a multipart form; /extract receives
+# them already parsed in a JSON body. Both end up in the same _filter_*
+# function, so the shape rules and the caps exist once.
 
 _MAX_COMPONENTS = 200
 _MAX_POINTING_SEGMENTS = 500
 _MAX_TRANSCRIPT_HINT_LINES = 400
 
 
-def _parse_component_tree(raw: str | None) -> list[dict[str, str]] | None:
-    """Parse the componentTree form field.
+def _decode_json_array(raw: str | None, field: str) -> list[object] | None:
+    """json.loads a form field that is supposed to hold an array.
 
-    Expected shape: [{ "id": str, "name": str, "path": str }, ...].
-    Returns None on any problem; the capture proceeds without a component list.
+    The multipart half of the defensive rule: a string that is not JSON, or is
+    JSON but not an array, is logged and dropped. /extract skips this step
+    because pydantic already handed it a parsed value.
     """
     if not raw:
         return None
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
-        logger.warning("capture-service: componentTree was not valid JSON; ignoring")
+        logger.warning("capture-service: %s was not valid JSON; ignoring", field)
         return None
     if not isinstance(parsed, list):
-        logger.warning("capture-service: componentTree was not an array; ignoring")
+        logger.warning("capture-service: %s was not an array; ignoring", field)
+        return None
+    return parsed
+
+
+def _filter_component_tree(value: object) -> list[dict[str, str]] | None:
+    """Keep the well-formed entries of a componentTree array, up to the cap.
+
+    Expected shape: [{ "id": str, "name": str, "path": str }, ...].
+    Returns None for anything unusable, so the caller proceeds without a
+    component list — which also means without componentReference filtering,
+    the pre-section-D behaviour.
+    """
+    if not isinstance(value, list):
         return None
     result: list[dict[str, str]] = []
-    for entry in parsed[:_MAX_COMPONENTS]:
+    for entry in value[:_MAX_COMPONENTS]:
         if not isinstance(entry, dict):
             continue
         cid = entry.get("id")
@@ -318,23 +457,20 @@ def _parse_component_tree(raw: str | None) -> list[dict[str, str]] | None:
     return result or None
 
 
-def _parse_pointing_segments(raw: str | None) -> list[dict[str, object]] | None:
-    """Parse the pointingSegments form field.
+def _parse_component_tree(raw: str | None) -> list[dict[str, str]] | None:
+    """The componentTree FORM field: decode the JSON string, then filter it."""
+    return _filter_component_tree(_decode_json_array(raw, "componentTree"))
+
+
+def _filter_pointing_segments(value: object) -> list[dict[str, object]] | None:
+    """Keep the well-formed entries of a pointingSegments array, up to the cap.
 
     Expected shape: [{ "userId", "userName", "partId", "partName", "fromMs", "toMs" }, ...].
     """
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("capture-service: pointingSegments was not valid JSON; ignoring")
-        return None
-    if not isinstance(parsed, list):
-        logger.warning("capture-service: pointingSegments was not an array; ignoring")
+    if not isinstance(value, list):
         return None
     result: list[dict[str, object]] = []
-    for entry in parsed[:_MAX_POINTING_SEGMENTS]:
+    for entry in value[:_MAX_POINTING_SEGMENTS]:
         if not isinstance(entry, dict):
             continue
         if (
@@ -349,26 +485,23 @@ def _parse_pointing_segments(raw: str | None) -> list[dict[str, object]] | None:
     return result or None
 
 
-def _parse_transcript_hint(raw: str | None) -> list[dict[str, object]] | None:
-    """Parse the transcriptHint form field.
+def _parse_pointing_segments(raw: str | None) -> list[dict[str, object]] | None:
+    """The pointingSegments FORM field: decode the JSON string, then filter it."""
+    return _filter_pointing_segments(_decode_json_array(raw, "pointingSegments"))
+
+
+def _filter_transcript_hint(value: object) -> list[dict[str, object]] | None:
+    """Keep the well-formed entries of a transcriptHint array, up to the cap.
 
     Expected shape: [{ "speaker": str, "text": str, "offsetMs": number }, ...].
     The transcript hint is extra context for attribution, NOT a replacement for
-    Whisper's transcript. A client could lie about it, so nothing security-
-    relevant may depend on it.
+    the transcript being extracted from. A client could lie about it, so nothing
+    security-relevant may depend on it.
     """
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("capture-service: transcriptHint was not valid JSON; ignoring")
-        return None
-    if not isinstance(parsed, list):
-        logger.warning("capture-service: transcriptHint was not an array; ignoring")
+    if not isinstance(value, list):
         return None
     result: list[dict[str, object]] = []
-    for entry in parsed[:_MAX_TRANSCRIPT_HINT_LINES]:
+    for entry in value[:_MAX_TRANSCRIPT_HINT_LINES]:
         if not isinstance(entry, dict):
             continue
         if (
@@ -378,6 +511,96 @@ def _parse_transcript_hint(raw: str | None) -> list[dict[str, object]] | None:
         ):
             result.append(entry)
     return result or None
+
+
+def _parse_transcript_hint(raw: str | None) -> list[dict[str, object]] | None:
+    """The transcriptHint FORM field: decode the JSON string, then filter it."""
+    return _filter_transcript_hint(_decode_json_array(raw, "transcriptHint"))
+
+
+def _log_grounded_counts(
+    job: str,
+    components: list[dict[str, str]] | None,
+    pointing_segments: list[dict[str, object]] | None,
+    transcript_hint: list[dict[str, object]] | None,
+) -> None:
+    """Counts only — never content.
+
+    Without this there is no way to tell a grounded request from an ungrounded
+    one after the fact, and the difference decides whether a card's
+    componentReference can be trusted: an ungrounded extraction had no
+    component list to filter against, so that field is whatever the model said.
+    """
+    logger.info(
+        "%s: grounded with %d component(s), %d pointing segment(s), %d hint line(s)",
+        job,
+        len(components or []),
+        len(pointing_segments or []),
+        len(transcript_hint or []),
+    )
+
+
+# ─── The extraction call, shared by /capture and /extract ───────────────────
+
+
+def _normalise_context(context: SlideContext | None) -> SlideContext:
+    """Apply the blank-value rules to a client-supplied SlideContext.
+
+    A blank title becomes DEFAULT_SLIDE_TITLE and a blank part name becomes
+    absent, so the prompt never says "Agenda item 0: " or "A speaker was
+    hovering over: ". One rule for both routes: /capture's multipart form and
+    /extract's JSON body carry the same context and must render identically,
+    or the same meeting summarises differently depending on which one the
+    router chose.
+    """
+    if context is None:
+        return SlideContext()
+    return SlideContext(
+        agenda_idx=context.agenda_idx,
+        slide_title=(context.slide_title or "").strip() or DEFAULT_SLIDE_TITLE,
+        hovered_part_name=_blank_to_none(context.hovered_part_name),
+        laser_target_part_name=_blank_to_none(context.laser_target_part_name),
+    )
+
+
+def _extract_cards(
+    llm: LlmClient,
+    transcript: list[TranscriptChunk],
+    context: SlideContext,
+    *,
+    components: list[dict[str, str]] | None,
+    pointing_segments: list[dict[str, object]] | None,
+    transcript_hint: list[dict[str, object]] | None,
+) -> list[InsightCard]:
+    """One constrained LLM pass over an existing transcript, then the parser.
+
+    The whole reason /extract can promise the same cards /capture produces:
+    both call this. `transcript` must be non-empty — both callers check first,
+    and the default-agent rule below reads element 0.
+
+    @raises CaptureServiceError from the client (upstream problems) or from
+            parse_insight_cards (unusable model output). Never anything else.
+    """
+    component_ids = {c["id"] for c in components} if components else None
+
+    raw_reply = llm.complete(
+        EXTRACTION_SYSTEM_PROMPT,
+        build_extraction_user_prompt(
+            transcript,
+            context,
+            components=components,
+            pointing_segments=pointing_segments,
+            transcript_hint=transcript_hint,
+        ),
+    )
+
+    # Same default-agent rule as the TypeScript providers: a card that does not
+    # name a speaker is attributed to the first one in the window.
+    return parse_insight_cards(
+        raw_reply,
+        default_agent_id=transcript[0].speaker_id or None,
+        component_ids=component_ids,
+    )
 
 
 # ─── Upload handling ────────────────────────────────────────────────────────
