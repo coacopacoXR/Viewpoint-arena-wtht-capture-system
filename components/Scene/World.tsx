@@ -13,6 +13,7 @@ import Bicycle from './Bicycle';
 import Headphones from './Headphones';
 import ImportedModel from './ImportedModel';
 import Agent from './Agent';
+import ThumbnailCapture from './ThumbnailCapture';
 import { useStore } from '../../store';
 import { useSceneModelLoader } from '../../lib/scene/useSceneModelLoader';
 
@@ -128,6 +129,11 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
       {!hideAgents && agents.map((agent) => (
         <Agent key={agent.id} initialState={agent} allAgents={agents} />
       ))}
+
+      {/* Renders nothing. Mounted here because World is the one component every canvas
+          in this app draws, and taking the lobby's picture of a room needs the renderer
+          this canvas owns. See components/Scene/ThumbnailCapture.tsx. */}
+      <ThumbnailCapture />
     </>
   );
 };

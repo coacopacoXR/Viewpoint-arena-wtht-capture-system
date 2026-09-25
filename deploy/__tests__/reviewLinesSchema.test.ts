@@ -133,8 +133,18 @@ describe('docs/supabase-schema.sql — review_lines row level security', () => {
 // ─── The two functions the api calls ────────────────────────────────────────
 
 describe('docs/supabase-schema.sql — adopting and dropping a variant', () => {
-  const ADOPT = SQL.slice(SQL.indexOf('create or replace function adopt_review_line'));
-  const DROP = SQL.slice(SQL.indexOf('create or replace function drop_review_line'));
+  // BOUNDED slices, to the next statement rather than to the end of the file: batch BN
+  // added `delete_review` below these two, and it legitimately deletes review_lines —
+  // so an open-ended slice made "never deletes the variant" match a different
+  // function's work and say something untrue about this one.
+  const ADOPT = SQL.slice(
+    SQL.indexOf('create or replace function adopt_review_line'),
+    SQL.indexOf('create or replace function drop_review_line'),
+  );
+  const DROP = SQL.slice(
+    SQL.indexOf('create or replace function drop_review_line'),
+    SQL.indexOf('revoke all on function public.adopt_review_line'),
+  );
 
   it('creates both with `or replace`, so a re-run cannot fail', () => {
     expect(SQL).toContain('create or replace function adopt_review_line');

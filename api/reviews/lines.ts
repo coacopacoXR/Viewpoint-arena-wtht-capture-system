@@ -44,8 +44,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { loadConfig } from '../../lib/config/loadConfig.ts';
 import { identityOf } from '../../lib/config/schema.ts';
-import { verifyAccessToken } from '../../lib/auth/verifyJwt.ts';
-import { can, asMemberRole, resolveRole, type ReviewMember, type Role } from '../../lib/reviews/roles.ts';
+import { can } from '../../lib/reviews/roles.ts';
 import {
   MAIN_LINE_NAME,
   droppedCardReason,
@@ -62,6 +61,20 @@ import {
   type AdoptableRevision,
 } from '../../lib/reviews/adopt.ts';
 import { postgrestFetch } from '../_lib/postgrest.ts';
+import {
+  bodyRecord,
+  bodyString,
+  callerFor,
+  enc,
+  json,
+  rpc,
+  storeFailure,
+  type Caller,
+  type RpcAnswer,
+} from './_lib/reviewCaller.ts';
+
+/** What this endpoint's own database failures are logged as. */
+const TAG = 'reviews/lines';
 
 /** What a line is called, read back. adopted_revision_ids is not here: see readAdoptedScenes. */
 const LINE_COLUMNS =
@@ -81,37 +94,13 @@ interface SessionRow {
   revisionIds: string[];
 }
 
-interface RpcAnswer {
-  ok?: unknown;
-  error?: unknown;
-  status?: unknown;
-  moved?: unknown;
-  closed?: unknown;
-  mainLineId?: unknown;
-  variantId?: unknown;
-  letter?: unknown;
-}
-
 // ─── Reads ──────────────────────────────────────────────────────────────────
-
-function enc(value: string): string {
-  return encodeURIComponent(value);
-}
-
-/** Throws 'store_unavailable' when the database cannot be reached at all. */
-async function json(res: Response | null, what: string): Promise<unknown> {
-  if (!res) throw new Error('store_unavailable');
-  if (!res.ok) {
-    console.error(`[reviews/lines] ${what} failed: ${res.status}`);
-    throw new Error('upstream_error');
-  }
-  return res.json();
-}
 
 async function readLines(reviewId: string): Promise<ReviewLine[]> {
   const rows = (await json(
     await postgrestFetch(`review_lines?review_id=eq.${enc(reviewId)}&select=${LINE_COLUMNS}`),
     'the line read',
+    TAG,
   )) as Array<Record<string, unknown>>;
   const lines: ReviewLine[] = [];
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -141,6 +130,7 @@ async function readSession(id: string): Promise<SessionRow | null> {
   const rows = (await json(
     await postgrestFetch(`tracker_sessions?id=eq.${enc(id)}&select=${SESSION_COLUMNS}&limit=1`),
     'the session read',
+    TAG,
   )) as Array<Record<string, unknown>>;
   return toSessionRow(Array.isArray(rows) ? rows[0] : undefined);
 }
@@ -152,6 +142,7 @@ async function readLastSession(lineId: string): Promise<SessionRow | null> {
       `tracker_sessions?line_id=eq.${enc(lineId)}&select=${SESSION_COLUMNS}&order=ended_at.desc&limit=1`,
     ),
     'the last session read',
+    TAG,
   )) as Array<Record<string, unknown>>;
   return toSessionRow(Array.isArray(rows) ? rows[0] : undefined);
 }
@@ -160,6 +151,7 @@ async function readRevisions(reviewId: string): Promise<AdoptableRevision[]> {
   const rows = (await json(
     await postgrestFetch(`model_revisions?review_id=eq.${enc(reviewId)}&select=id,line,revision&order=created_at.asc`),
     'the revision read',
+    TAG,
   )) as Array<Record<string, unknown>>;
   const revisions: AdoptableRevision[] = [];
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -189,6 +181,7 @@ async function mainLineScene(reviewId: string, main: ReviewLine): Promise<string
       `review_lines?review_id=eq.${enc(reviewId)}&status=eq.adopted&select=closed_at,adopted_revision_ids`,
     ),
     'the adoption read',
+    TAG,
   )) as Array<{ closed_at?: unknown; adopted_revision_ids?: unknown }>;
 
   let newestAt = '';
@@ -248,113 +241,6 @@ async function ensureMainLine(reviewId: string, lines: readonly ReviewLine[], ac
   // rather than reporting a failure this review does not have.
   const reread = await readLines(reviewId);
   return reread.find((line) => line.kind === 'main') ?? null;
-}
-
-// ─── Request plumbing ───────────────────────────────────────────────────────
-
-function bearerToken(req: VercelRequest): string | null {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) return null;
-  const token = header.slice('Bearer '.length).trim();
-  return token === '' ? null : token;
-}
-
-function bodyRecord(req: VercelRequest): Record<string, unknown> {
-  const body = req.body;
-  return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
-}
-
-function bodyString(body: Record<string, unknown>, key: string): string | null {
-  const raw = body[key];
-  if (typeof raw !== 'string') return null;
-  // One line, because it is printed on a card and inside a filter: a reason with
-  // newlines in it would break the row it is shown in and is never what somebody
-  // meant by "a one-line reason".
-  const trimmed = raw.replace(/\s+/g, ' ').trim();
-  return trimmed === '' ? null : trimmed;
-}
-
-interface Caller {
-  accountId: string | null;
-  name: string;
-  role: Role;
-}
-
-/**
- * Who is asking, and what this review says about them.
- *
- * With accounts, from the verified token and the roster as the database holds it.
- * Without them, from the caller's own claim to be running the meeting — see the
- * note at the top of this file about what there is to check that against.
- */
-async function callerFor(
-  req: VercelRequest,
-  body: Record<string, unknown>,
-  reviewId: string,
-  accountsOn: boolean,
-): Promise<Caller | null> {
-  if (!accountsOn) {
-    const isMeetingHost = body['isMeetingHost'] === true;
-    return {
-      accountId: null,
-      name: bodyString(body, 'actorName') ?? '',
-      role: resolveRole({
-        identityMode: 'none',
-        accountId: null,
-        isGuest: false,
-        members: [],
-        ownerId: null,
-        isAdmin: false,
-        isMeetingHost,
-      }),
-    };
-  }
-
-  const secret = process.env.JWT_SECRET ?? '';
-  if (!secret) throw new Error('config_unavailable');
-  const token = bearerToken(req);
-  if (!token) return null;
-  const verified = await verifyAccessToken(token, secret);
-  if (!verified) return null;
-
-  const id = enc(reviewId);
-  const [curationRes, membersRes] = await Promise.all([
-    postgrestFetch(`review_curations?id=eq.${id}&select=owner_id`),
-    postgrestFetch(`review_members?review_id=eq.${id}&select=user_id,role`),
-  ]);
-  if (!curationRes || !membersRes) throw new Error('store_unavailable');
-  if (!curationRes.ok || !membersRes.ok) {
-    console.error(`[reviews/lines] roster read failed: ${curationRes.status} / ${membersRes.status}`);
-    throw new Error('upstream_error');
-  }
-  const curations = (await curationRes.json()) as Array<{ owner_id?: unknown }>;
-  const rawOwner = curations[0]?.owner_id;
-  const ownerId = typeof rawOwner === 'string' && rawOwner !== '' ? rawOwner : null;
-  const rows = (await membersRes.json()) as Array<Record<string, unknown>>;
-  const members: ReviewMember[] = [];
-  for (const row of Array.isArray(rows) ? rows : []) {
-    const userId = row['user_id'];
-    if (typeof userId !== 'string' || userId === '') continue;
-    const role = asMemberRole(row['role']);
-    if (!role) continue;
-    members.push({ userId, role });
-  }
-
-  return {
-    accountId: verified.sub,
-    name: bodyString(body, 'actorName') ?? '',
-    // `isMeetingHost` is false: it only changes a role on a deployment with no
-    // accounts, and this is one with them.
-    role: resolveRole({
-      identityMode: 'accounts',
-      accountId: verified.sub,
-      isGuest: false,
-      members,
-      ownerId,
-      isAdmin: verified.role === 'admin',
-      isMeetingHost: false,
-    }),
-  };
 }
 
 // ─── The three actions ──────────────────────────────────────────────────────
@@ -458,12 +344,6 @@ function rpcRefusal(answer: RpcAnswer): { status: number; error: string } | null
   return { status: 502, error: 'That change did not land. Try again.' };
 }
 
-async function rpc(path: string, body: Record<string, unknown>): Promise<RpcAnswer> {
-  const res = await postgrestFetch(path, { method: 'POST', body: JSON.stringify(body) });
-  const answer = (await json(res, path)) as RpcAnswer;
-  return answer ?? {};
-}
-
 /**
  * "Adopt into main line."
  *
@@ -542,7 +422,7 @@ async function adopt(
   const answer = await rpc('rpc/adopt_review_line', {
     p_variant: variant.id,
     p_revision_ids: chosen,
-  });
+  }, TAG);
   const refusal = rpcRefusal(answer);
   if (refusal) {
     if (refusal.status >= 500) console.error(`[reviews/lines] adopt refused: ${String(answer.error)}`);
@@ -608,7 +488,7 @@ async function drop(
     p_variant: variant.id,
     p_closed_reason: closedReason,
     p_actor_name: caller.name,
-  });
+  }, TAG);
   const refusal = rpcRefusal(answer);
   if (refusal) {
     if (refusal.status >= 500) console.error(`[reviews/lines] drop refused: ${String(answer.error)}`);
@@ -657,7 +537,7 @@ export async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const caller = await callerFor(req, body, reviewId, accountsOn);
+    const caller = await callerFor(req, body, reviewId, accountsOn, TAG);
     if (!caller) {
       res.status(401).json({ error: 'unauthorized' });
       return;
@@ -679,16 +559,12 @@ export async function handler(req: VercelRequest, res: VercelResponse) {
       await drop(res, reviewId, body, caller);
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'unknown';
-    if (message === 'config_unavailable') {
-      console.error('[reviews/lines] JWT_SECRET is not set but identity mode requires it');
-      res.status(500).json({ error: 'config_unavailable' });
-    } else if (message === 'store_unavailable') {
-      res.status(503).json({ error: 'The database could not be reached. Try again.' });
-    } else if (message === 'upstream_error') {
-      res.status(502).json({ error: 'upstream_error' });
+    const failure = storeFailure(err);
+    if (failure) {
+      if (failure.status >= 500) console.error(`[${TAG}] ${failure.body['error']}`);
+      res.status(failure.status).json(failure.body);
     } else {
-      console.error('[reviews/lines] unhandled:', err);
+      console.error(`[${TAG}] unhandled:`, err);
       res.status(500).json({ error: 'internal_error' });
     }
   }

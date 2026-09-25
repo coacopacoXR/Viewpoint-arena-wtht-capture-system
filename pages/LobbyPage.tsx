@@ -1,42 +1,89 @@
-import React, { useState, useEffect, useMemo } from 'react';
+// The lobby: every design review on this install, as cards you can look inside.
+//
+// docs/plan/15-sessions-and-variants.md batch BO, built from the sketch the user
+// approved in docs/plan/sketches/lobby.html. The page this replaces was a dark
+// two-column screen — 420px of feature list and tracker statistics beside a name form —
+// and the user's note on it was that it "sucks" and that what they wanted was to be able
+// to see, from outside, what a design review looks like inside. So the marketing column
+// is gone, the form is a chip in the top bar, and the page is a grid of reviews with a
+// preview of the selected one beside it.
+//
+// WHAT IS DELIBERATELY UNCHANGED
+//
+// * THE NAME RULE. Nobody enters a room nameless. With no account behind this browser
+//   the name field is drawn INLINE above the actions until it has something in it — not
+//   hidden in the chip's menu, because a box you have to go looking for is a box nobody
+//   fills in. With an account, the name is the account's and is not editable.
+// * THE IDENTITY GATE AND mode 'none'. The gate is in App.tsx and still wraps this page;
+//   `identityRequired(publicIdentityOf(config))` still decides whether "Mine" and
+//   "Shared with me" mean anything, and on the default install with no accounts they do
+//   not — the chips are still offered, they simply answer with what the install has.
+// * THE INVITED-PREVIEW FLOW. Arriving with a room id in the router state preselects
+//   that review and makes Join the primary button, including for a link-only review the
+//   grid would not otherwise offer to a stranger.
+// * A GUEST SEES ONLY WHAT THEY WERE INVITED TO. The grid is the review their link
+//   named and nothing else; the old lobby hid its lists from a guest for exactly that
+//   reason, and a card is a way in just as a list row was.
+//
+// "NEW SESSION" IS GONE. Batch BN made it write a design review row the same way "New
+// design review" does, and left the two differing only in whether the room opens with
+// Edit on — see components/lobby/LobbyActions.tsx. One button remains, and it opens the
+// room with Edit on, because the person who just created a review is the one about to
+// put a model in it.
+
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { supabase, TrackerSession } from '../lib/supabase';
-import { useIdentity, AVATAR_COLORS, UserIdentity } from '../lib/identity';
+import { supabase } from '../lib/supabase';
+import { useIdentity, AVATAR_COLORS, type UserIdentity } from '../lib/identity';
 import { signOutOfAccount } from '../lib/auth/useAuth';
 import { identityRequired, publicIdentityOf } from '../lib/auth/authRules';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
-import { listRecentCurations, listArchivedIds, deleteCuration, getCurationSummary, createReview, type CurationSummary } from '../lib/curationsRepo';
+import { getCurationSummary, createReview, type CurationSummary } from '../lib/curationsRepo';
 import { useReviewSetupStore, createReviewDraft } from '../lib/reviewSetupStore';
-import { listMyReviews, describeLastVisit, type MyReview } from '../lib/reviewParticipantsRepo';
-import { Camera, MapPin, Layers, Play, Pencil, Trash2 } from 'lucide-react';
+import { roomPath } from '../lib/reviews/lines';
+import LobbyTopBar from '../components/lobby/LobbyTopBar';
+import LobbyActions from '../components/lobby/LobbyActions';
+import ReviewCard from '../components/lobby/ReviewCard';
+import ReviewPreview from '../components/lobby/ReviewPreview';
+import { parseJoinTarget } from '../lib/lobby/joinTarget';
+import {
+  filterReviews,
+  useLobbyData,
+  type LobbyFilter,
+  type LobbyReview,
+} from '../lib/lobby/useLobbyData';
 
-const ROLES = ['Engineer', 'Designer', 'Systems Architect', 'Reviewer', 'Observer'];
-
-function fmtShort(iso: string) {
-  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-}
-
-interface SessionStats {
-  sessions: TrackerSession[];
-  totalItems: number;
-  openRisks: number;
-  pendingActions: number;
-}
-
-async function fetchStats(): Promise<SessionStats> {
-  const [{ data: sessions }, { data: items }] = await Promise.all([
-    supabase.from('tracker_sessions').select('*').order('ended_at', { ascending: false }).limit(4),
-    supabase.from('tracker_items').select('type,status'),
-  ]);
+/**
+ * A review reached by a link the grid does not hold, as a card the grid can draw.
+ *
+ * The grid reads the sixty newest reviews; a link-only one older than that is still a
+ * review somebody was invited to, and the invited-preview flow has to work for it. The
+ * summary query answers no meetings and no lines, so the card says "no sessions yet" —
+ * which is either true or unknowable from here, and the preview panel reads the detail.
+ */
+function fromSummary(summary: CurationSummary): LobbyReview {
   return {
-    sessions: (sessions ?? []) as TrackerSession[],
-    totalItems: items?.length ?? 0,
-    openRisks: items?.filter(i => i.type === 'RISK' && i.status !== 'Approved' && i.status !== 'Rejected').length ?? 0,
-    pendingActions: items?.filter(i => i.type === 'ACTION' && i.status !== 'Approved' && i.status !== 'Rejected').length ?? 0,
+    id: summary.id,
+    title: summary.title,
+    description: summary.description,
+    thumbnail: summary.thumbnail ?? null,
+    modelName: null,
+    updatedAt: summary.updated_at,
+    createdAt: summary.created_at,
+    archived: false,
+    listed: summary.listed,
+    memberRole: null,
+    mine: false,
+    visited: false,
+    lastVisitedAt: null,
+    sessions: [],
+    lines: [],
+    openCards: { RISK: 0, ACTION: 0, RATIONALE: 0 },
+    revision: null,
   };
 }
 
-// ─── Lobby Page ───────────────────────────────────────────────────────────────
+const EMPTY_HINT = 'text-[11px] text-gray-500';
 
 const LobbyPage: React.FC = () => {
   const navigate = useNavigate();
@@ -44,557 +91,334 @@ const LobbyPage: React.FC = () => {
   const joinRoomId: string | undefined = (location.state as { joinRoomId?: string } | null)?.joinRoomId;
 
   const [identity, setIdentity] = useIdentity();
-  // An accountId in vp_user means the name came from a signed-in account: this
-  // form does not edit it, it only shows who is signed in. A guest has no
-  // account, and may enter the room they were invited to and nothing else.
+  // An accountId in vp_user means the name came from a signed-in account: this page does
+  // not edit it, it only shows who is signed in. A guest has no account, and may enter
+  // the room they were invited to and nothing else.
   const accountId = identity?.accountId ?? null;
   const isGuest = identity?.guest === true;
   const accountName = accountId ? identity?.name ?? '' : null;
-  // The deployment's identity block, not this browser's. Whether "Your reviews"
-  // exists at all is a property of the install: the list is what signing in
-  // buys you (docs/plan/13-identity.md), and on the default 'none' there is no
-  // account for a row to be keyed on.
+
+  // The deployment's identity block, not this browser's. Whether "Mine" can mean
+  // anything at all is a property of the install: on the default 'none' there is no
+  // account for a review to belong to.
   const { config } = useConnectorConfig();
   const deployment = useMemo(() => publicIdentityOf(config), [config]);
-  const showMyReviews = identityRequired(deployment) && !!accountId && !isGuest;
+  const accountsOn = identityRequired(deployment);
+  const signedIn = accountsOn && !!accountId && !isGuest;
+
   const [name, setName] = useState(accountName ?? (joinRoomId ? '' : (identity?.name ?? '')));
   const [color, setColor] = useState(identity?.color ?? AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)]);
   const [role, setRole] = useState(identity?.role ?? '');
   const [joinCode, setJoinCode] = useState(joinRoomId ?? '');
   const [error, setError] = useState('');
-  const [stats, setStats] = useState<SessionStats | null>(null);
-  const [loadingStats, setLoadingStats] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [curations, setCurations] = useState<CurationSummary[]>([]);
-  // null until the rows have been read: they are fetched only for a signed-in
-  // person on a deployment with accounts, so "still loading" and "you have been
-  // in nothing yet" are different states and render differently.
-  const [myReviews, setMyReviews] = useState<MyReview[] | null>(null);
-  const [invitedPreview, setInvitedPreview] = useState<CurationSummary | null | undefined>(
-    joinRoomId ? undefined : null,
-  );
+  const [creating, setCreating] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(joinRoomId ?? null);
 
-  useEffect(() => {
-    fetchStats().then(s => { setStats(s); setLoadingStats(false); });
-  }, []);
+  const lobby = useLobbyData({ accountId: signedIn ? accountId : null, isGuest });
 
+  // An admin of this install. The token this browser already holds is the authority, the
+  // way lib/reviews/useReviewRole reads it — no extra request, and nothing here decides
+  // anything: api/reviews/delete.ts checks the caller's own token against the roster and
+  // hides a button is not the enforcement.
+  const [installAdmin, setInstallAdmin] = useState(false);
   useEffect(() => {
-    // Reviews an admin has put away are filtered out by the query itself, so
-    // the rows this returns are exactly the rows the section renders.
-    listRecentCurations(8).then(setCurations);
-  }, []);
-
-  // The reviews this account took part in. Not fetched at all unless the list
-  // is going to be shown, so a guest and a deployment on identity.mode 'none'
-  // make no request and see nothing — the table is keyed on auth.uid(), and
-  // Row Level Security answers an anon caller with no rows anyway.
-  useEffect(() => {
-    if (!showMyReviews) { setMyReviews(null); return; }
+    if (!accountsOn) { setInstallAdmin(false); return; }
     let cancelled = false;
-    // This list follows the person, not the link: it comes out of
-    // review_participants, which has no `archived` column to filter on, so the
-    // flag is asked for separately — one query for the whole list — and the
-    // archived ones are dropped here.
-    listMyReviews().then(async rows => {
-      const archived = await listArchivedIds(rows.map(r => r.reviewId));
-      if (!cancelled) setMyReviews(rows.filter(r => !archived.has(r.reviewId)));
+    supabase.auth
+      .getSession()
+      .then(({ data }) => { if (!cancelled) setInstallAdmin(data.session?.user.app_metadata?.role === 'admin'); })
+      .catch(() => { if (!cancelled) setInstallAdmin(false); });
+    return () => { cancelled = true; };
+  }, [accountsOn]);
+
+  // The review an invitation named, when the grid does not already hold it.
+  const [invitedOnly, setInvitedOnly] = useState<LobbyReview | null>(null);
+  useEffect(() => {
+    if (!joinRoomId) { setInvitedOnly(null); return; }
+    let cancelled = false;
+    void getCurationSummary(joinRoomId).then((summary) => {
+      if (cancelled || !summary) return;
+      setInvitedOnly(fromSummary(summary));
     });
     return () => { cancelled = true; };
-  }, [showMyReviews]);
-
-  // If the user arrived via a room URL, fetch the curation summary so we can
-  // show a preview card — they know exactly what they're walking into.
-  useEffect(() => {
-    if (!joinRoomId) { setInvitedPreview(null); return; }
-    getCurationSummary(joinRoomId).then(setInvitedPreview);
   }, [joinRoomId]);
 
-  function resumeCuration(id: string, mode: 'setup' | 'room') {
-    const ident = name.trim() ? buildIdentity() : identity;
-    if (ident) setIdentity(ident);
-    // Both spellings open the room. 'setup' means "open it ready to edit", which
-    // since batch BH is a query parameter on the room's own address rather than a
-    // separate curation page: the tabs that used to live there are the room's side
-    // panel with Edit on.
-    enterRoom(id, mode === 'setup');
-  }
+  /** Every review this page knows about, grid or not. */
+  const all = useMemo(
+    () => (invitedOnly && !lobby.reviews.some((review) => review.id === invitedOnly.id)
+      ? [...lobby.reviews, invitedOnly]
+      : lobby.reviews),
+    [lobby.reviews, invitedOnly],
+  );
 
-  async function handleDeleteCuration(id: string) {
-    if (!confirm('Delete this design review? It will be gone for everyone with the link.')) return;
-    const ok = await deleteCuration(id);
-    if (ok) setCurations((cs) => cs.filter((c) => c.id !== id));
-  }
+  // A guest gets the review their link named and nothing else.
+  const cards = useMemo(() => {
+    if (isGuest) return all.filter((review) => review.id === joinRoomId);
+    const shown = lobby.visible;
+    // An invitation to a review the chips do not show — a link-only one, an archived one,
+    // or one the grid's cap left out — still has to be previewable, because "you have
+    // been invited to THIS" is the one thing the invited-preview flow must not lose. It
+    // goes first so the panel opens on it rather than on whatever the grid starts with.
+    if (joinRoomId && !shown.some((review) => review.id === joinRoomId)) {
+      const invited = all.find((review) => review.id === joinRoomId);
+      return invited ? [invited, ...shown] : shown;
+    }
+    return shown;
+  }, [isGuest, lobby.visible, all, joinRoomId]);
+
+  const counts = useMemo(
+    () => ({
+      mine: filterReviews(all, 'mine').length,
+      shared: filterReviews(all, 'shared').length,
+      all: filterReviews(all, 'all').length,
+      archived: filterReviews(all, 'archived').length,
+    }) as Record<LobbyFilter, number>,
+    [all],
+  );
+
+  // The selection follows the grid: a review that is no longer shown stops being
+  // selected, and an empty panel on a page full of cards is a page that looks broken.
+  const selected = useMemo(() => {
+    const inCards = cards.find((review) => review.id === selectedId) ?? null;
+    if (inCards) return inCards;
+    return cards[0] ?? all.find((review) => review.id === selectedId) ?? null;
+  }, [cards, selectedId, all]);
+
+  useEffect(() => {
+    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
+  }, [selected, selectedId]);
+
+  // ─── Identity ───────────────────────────────────────────────────────────────
 
   function buildIdentity(): UserIdentity {
     const next: UserIdentity = { name: name.trim(), color, role: role || undefined };
-    // Carry the session's own fields through: this form edits colour and role,
-    // it does not decide who anyone is. Dropping accountId here would sign the
-    // person out of their own lobby the moment they picked a new colour.
+    // Carry the session's own fields through: this form edits colour and role, it does
+    // not decide who anyone is. Dropping accountId here would sign the person out of
+    // their own lobby the moment they picked a new colour.
     if (accountId) next.accountId = accountId;
     if (isGuest) next.guest = true;
     return next;
   }
 
-  function enterRoom(roomId: string, edit = false) {
-    const id = buildIdentity();
-    setIdentity(id);
-    sessionStorage.setItem('vp_enteredRoom', roomId);
-    navigate(edit ? `/room/${roomId}?edit=1` : `/room/${roomId}`, { state: { fromLobby: true } });
-  }
-
-  function handleNewSession() {
-    if (!name.trim()) { setError('Enter your name first.'); return; }
-    enterRoom(crypto.randomUUID());
-  }
-
-  /**
-   * "New design review" — the button that used to say "Curate a design review".
-   *
-   * The review is CREATED here rather than on arrival, because a room with no
-   * review_curations row has nothing to edit: RoomPage seeds itself from
-   * loadCuration and an absent row leaves the side panel empty. Writing the row
-   * first also means the link in the address bar is the review's permanent one
-   * from the first moment it exists.
-   *
-   * The room opens whether or not the write landed. An install with no database
-   * configured — the default self-hosted one, which leaves VITE_SUPABASE_URL
-   * unset — cannot write a row and never could; refusing to open the room there
-   * would have taken the batch's headline button away from exactly the install
-   * that has no other way to start a review. So the draft is handed to
-   * lib/reviewSetupStore as well, which is where RoomPage looks FIRST, and the
-   * room's own save-on-edit upserts the row later if a database ever answers.
-   */
-  const [creatingReview, setCreatingReview] = useState(false);
-
-  async function handleNewDesignReview() {
-    if (!name.trim()) { setError('Enter your name first.'); return; }
-    if (creatingReview) return;
-    setCreatingReview(true);
-    setError('');
-    const reviewId = crypto.randomUUID();
-    const created = await createReview(reviewId);
-    setCreatingReview(false);
-    useReviewSetupStore.getState().hydrateDraft(created ?? createReviewDraft(reviewId));
-    enterRoom(reviewId, true);
-  }
-
-  function handleJoin() {
-    if (!name.trim()) { setError('Enter your name first.'); return; }
-    const code = joinCode.trim();
-    if (!code) { setError('Enter a room code.'); return; }
-    enterRoom(code);
-  }
+  /** True when this browser has no account behind its name, so the name is typed here. */
+  const nameEditable = !accountId;
+  const needsName = nameEditable && name.trim() === '';
 
   async function handleSignOut() {
     setError('');
     const failure = await signOutOfAccount();
     if (failure) { setError(failure); return; }
-    // Nothing to navigate to: the IdentityGate hears the same SIGNED_OUT and
-    // swaps this page for the sign-in page.
+    // Nothing to navigate to: the IdentityGate hears the same SIGNED_OUT and swaps this
+    // page for the sign-in page.
   }
 
-  const isReturning = !!identity?.name && !joinRoomId;
+  // ─── Entering a room ────────────────────────────────────────────────────────
+
+  /**
+   * Open a room, as the review's own permanent address.
+   *
+   * `roomPath` rather than a string built here, so a variant's `?line=` is spelled the
+   * one way lib/reviews/lines spells it and the room resolves itself to the line the
+   * link named instead of to its main line.
+   */
+  function enterRoom(roomId: string, options: { edit?: boolean; lineId?: string | null } = {}) {
+    setIdentity(buildIdentity());
+    sessionStorage.setItem('vp_enteredRoom', roomId);
+    const path = roomPath(roomId, options.lineId ?? null);
+    navigate(options.edit ? `${path}?edit=1` : path, { state: { fromLobby: true } });
+  }
+
+  /**
+   * "+ New design review".
+   *
+   * The review is CREATED here rather than on arrival, because a room with no
+   * review_curations row has nothing to edit: RoomPage seeds itself from loadCuration
+   * and an absent row leaves the side panel empty. Writing the row first also means the
+   * link in the address bar is the review's permanent one from the first moment it
+   * exists, and that the creator owns it and may import into it.
+   *
+   * The room opens whether or not the write landed. An install with no database
+   * configured — the default self-hosted one, which leaves VITE_SUPABASE_URL unset —
+   * cannot write a row and never could; refusing to open the room there would take this
+   * page's headline button away from exactly the install that has no other way to start
+   * a review. So the draft is handed to lib/reviewSetupStore as well, which is where
+   * RoomPage looks FIRST, and the room's own save-on-edit upserts the row later if a
+   * database ever answers.
+   */
+  async function handleNewDesignReview() {
+    if (!name.trim()) { setError('Enter your name first.'); return; }
+    if (creating) return;
+    setCreating(true);
+    setError('');
+    const reviewId = crypto.randomUUID();
+    const created = await createReview(reviewId);
+    setCreating(false);
+    useReviewSetupStore.getState().hydrateDraft(created ?? createReviewDraft(reviewId));
+    enterRoom(reviewId, { edit: true });
+  }
+
+  /**
+   * "Join" — a bare id, a path, or a whole pasted link including its variant.
+   *
+   * Nothing is created here: the review either exists already or the person who started
+   * it created it, and minting a room out of a mistyped link is how a lobby fills up with
+   * reviews nobody will ever open again.
+   */
+  function handleJoin() {
+    if (!name.trim()) { setError('Enter your name first.'); return; }
+    const target = parseJoinTarget(joinCode);
+    if (!target) { setError('Enter a room code or link.'); return; }
+    setError('');
+    enterRoom(target.roomId, { lineId: target.lineId });
+  }
+
+  // ─── Deletes ────────────────────────────────────────────────────────────────
+  //
+  // Both go through api/reviews/delete.ts, which removes the whole review — meetings,
+  // cards, lines, roster, stored revisions — in one transaction. The old lobby deleted
+  // the curation row at Supabase and left the rest behind.
+  //
+  // Who is offered them follows lib/reviews/roles.ts `deleteReview`: the owner and this
+  // install's admins, and NOT its editors. On a deployment with no accounts there is
+  // nobody to ask — no signed-in callers, no roster, no owner column anybody can fill —
+  // so the endpoint takes the caller's own claim the way api/reviews/lines.ts takes the
+  // meeting host's, and what guards the install is its front-door password. Every review
+  // is deletable there, which is what the old lobby's trash icon on every saved curation
+  // already allowed; the difference is that now the whole review goes.
+  const mayDelete = (review: LobbyReview): boolean => !accountsOn || review.mine || installAdmin;
 
   return (
-    <div className="min-h-screen bg-[#0A0A0A] flex font-sans" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <div
+      className="min-h-screen bg-[#f3f4f6] font-sans text-gray-900"
+      style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
+    >
+      <div className="max-w-[1180px] mx-auto px-4 pb-12">
+        <LobbyTopBar
+          name={name}
+          color={color}
+          role={role}
+          canSignOut={!!accountId}
+          nameEditable={nameEditable}
+          onName={(next) => { setName(next); setError(''); }}
+          onColor={setColor}
+          onRole={setRole}
+          onSignOut={() => void handleSignOut()}
+        />
 
-      {/* ── Left Panel: Branding + Live Stats ── */}
-      <div className="hidden lg:flex flex-col justify-between w-[420px] flex-shrink-0 border-r border-white/5 px-10 py-12">
-        {/* Logo */}
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
-              <span className="text-black font-black text-sm">VA</span>
-            </div>
-            <span className="font-mono text-white text-sm font-bold tracking-widest uppercase">Viewpoint Arena</span>
+        {/* The one field nobody may skip, drawn where it cannot be missed. */}
+        {needsName && (
+          <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 mb-3 max-w-md">
+            <label htmlFor="lobby-name" className="block font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+              Your name
+            </label>
+            <input
+              id="lobby-name"
+              type="text"
+              value={name}
+              onChange={(event) => { setName(event.target.value); setError(''); }}
+              onKeyDown={(event) => { if (event.key === 'Enter') void handleNewDesignReview(); }}
+              placeholder="e.g. Alex Chen"
+              maxLength={40}
+              autoFocus
+              data-testid="lobby-name-field"
+              className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-black placeholder:text-gray-300"
+            />
+            <p className="text-[11px] text-gray-400 mt-1.5">
+              {joinRoomId
+                ? 'You have been invited to a design review. Identify yourself to continue.'
+                : 'Needed before you can start or join a design review.'}
+            </p>
           </div>
-          <p className="text-gray-600 text-sm mt-4 leading-relaxed">
-            AI-powered collaborative design review. Real-time 3D sessions with automated risk, action, and rationale capture.
+        )}
+
+        <LobbyActions
+          filter={lobby.filter}
+          onFilter={lobby.setFilter}
+          counts={counts}
+          joinValue={joinCode}
+          onJoinValue={(next) => { setJoinCode(next); setError(''); }}
+          onJoin={handleJoin}
+          onNewReview={() => void handleNewDesignReview()}
+          creating={creating}
+          mayStart={!isGuest}
+          showFilters={!isGuest}
+        />
+
+        {error && (
+          <p className="mt-2.5 text-xs font-mono text-red-600" role="status">{error}</p>
+        )}
+        {isGuest && (
+          <p className="mt-2.5 text-[11px] font-mono text-gray-500 leading-relaxed">
+            You are here as a guest, so the only design review you can open is the one you were invited to.
           </p>
+        )}
 
-          {/* Feature list */}
-          <div className="mt-8 space-y-3">
-            {[
-              { icon: '🧊', label: '3D spatial annotations' },
-              { icon: '🤖', label: 'Multi-agent AI analysis' },
-              { icon: '🔴', label: 'Live risk matrix & tracking' },
-              { icon: '💬', label: 'Teams & SharePoint sync' },
-              { icon: '⚙️', label: 'Teamcenter PLM push' },
-            ].map(f => (
-              <div key={f.label} className="flex items-center gap-3">
-                <span className="text-base">{f.icon}</span>
-                <span className="text-gray-500 text-sm">{f.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Live tracker stats */}
-        <div>
-          <p className="font-mono text-[9px] font-bold text-gray-700 uppercase tracking-widest mb-4">Live Tracker</p>
-          {loadingStats ? (
-            <div className="space-y-2">
-              {[1, 2, 3].map(i => <div key={i} className="h-12 bg-white/5 rounded-xl animate-pulse" />)}
-            </div>
-          ) : stats ? (
-            <>
-              <div className="grid grid-cols-3 gap-2 mb-4">
-                {[
-                  { label: 'Items', value: stats.totalItems, color: 'text-white' },
-                  { label: 'Open Risks', value: stats.openRisks, color: stats.openRisks > 0 ? 'text-red-400' : 'text-white' },
-                  { label: 'Pending', value: stats.pendingActions, color: stats.pendingActions > 0 ? 'text-blue-400' : 'text-white' },
-                ].map(s => (
-                  <div key={s.label} className="bg-white/5 rounded-xl p-3 text-center">
-                    <p className={`text-xl font-bold tabular-nums ${s.color}`}>{s.value}</p>
-                    <p className="text-[10px] font-mono text-gray-600 mt-0.5">{s.label}</p>
-                  </div>
+        <div className="grid gap-[18px] mt-[18px] items-start grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px]">
+          {/* The grid */}
+          <section aria-label="Design reviews">
+            {lobby.loading ? (
+              <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(250px,1fr))]">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="h-56 rounded-lg border border-gray-200 bg-white animate-pulse" />
                 ))}
               </div>
-              <div className="space-y-1.5">
-                {stats.sessions.map(s => (
-                  <button key={s.id} onClick={() => navigate('/tracker')}
-                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-left group">
-                    <span className="text-xs text-gray-400 truncate flex-1 group-hover:text-gray-200 transition-colors">{s.title}</span>
-                    <span className="font-mono text-[10px] text-gray-700 ml-2 flex-shrink-0">{fmtShort(s.ended_at)}</span>
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => navigate('/tracker')}
-                className="mt-3 w-full text-xs font-mono text-gray-600 hover:text-gray-300 transition-colors text-center">
-                Open Tracker →
-              </button>
-            </>
-          ) : (
-            <p className="text-xs text-gray-700 font-mono">No sessions yet.</p>
-          )}
-        </div>
-      </div>
-
-      {/* ── Right Panel: Identity + Actions ── */}
-      <div className="flex-1 flex items-center justify-center px-6 py-12">
-        <div className="w-full max-w-sm space-y-8">
-
-          {/* Welcome message */}
-          <div>
-            {isReturning ? (
-              <>
-                <p className="text-gray-600 text-xs font-mono uppercase tracking-widest mb-1">Welcome back</p>
-                <h1 className="text-white text-3xl font-bold">{identity?.name}</h1>
-                {identity?.role && <p className="text-gray-500 text-sm mt-1">{identity.role}</p>}
-              </>
-            ) : joinRoomId ? (
-              <>
-                <p className="text-gray-600 text-xs font-mono uppercase tracking-widest mb-1">You've been invited</p>
-                <h1 className="text-white text-2xl font-bold">
-                  {invitedPreview ? invitedPreview.title : 'Join a session'}
-                </h1>
-                {invitedPreview === undefined && (
-                  <p className="text-gray-600 text-sm mt-1">Loading preview…</p>
-                )}
-                {invitedPreview === null && (
-                  <p className="text-gray-600 text-sm mt-1">Identify yourself to continue.</p>
-                )}
-                {invitedPreview && (
-                  <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3">
-                    {invitedPreview.description && (
-                      <p className="text-[12px] text-gray-300 leading-snug line-clamp-2 mb-2">{invitedPreview.description}</p>
-                    )}
-                    <div className="flex items-center gap-3 text-[11px] font-mono">
-                      <span className="inline-flex items-center gap-1 text-emerald-300"><Layers size={10} />{invitedPreview.slide_count} slides</span>
-                      <span className="inline-flex items-center gap-1 text-gray-400"><Camera size={10} />{invitedPreview.viewpoint_count} viewpoints</span>
-                      <span className="inline-flex items-center gap-1 text-gray-400"><MapPin size={10} />{invitedPreview.pin_count} pins</span>
-                    </div>
-                    <p className="text-[10px] text-gray-500 mt-2">
-                      Last updated {fmtShort(invitedPreview.updated_at)} · ID {invitedPreview.id.slice(0, 8)}
-                    </p>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <h1 className="text-white text-3xl font-bold">Enter the Arena</h1>
-                <p className="text-gray-600 text-sm mt-2">Identify yourself to start or join a session.</p>
-              </>
-            )}
-          </div>
-
-          {/* Identity form */}
-          <div className="space-y-4">
-            {/* Name — typed here, or read from the signed-in account. Colour and
-                role stay either way: they describe how you look in the room,
-                which no identity provider knows. */}
-            {accountId ? (
-              <div className="flex items-center gap-2 text-xs min-w-0">
-                <span className="text-[10px] font-mono font-bold text-gray-600 uppercase tracking-widest shrink-0">Signed in as</span>
-                <span className="text-white font-bold truncate">{name}</span>
-                <span className="text-gray-700 shrink-0">·</span>
-                <button onClick={handleSignOut}
-                  className="text-[10px] font-mono text-gray-500 hover:text-gray-300 uppercase tracking-widest transition-colors shrink-0">
-                  Sign out
-                </button>
-              </div>
-            ) : (
-              <div>
-                <label className="block text-[10px] font-mono font-bold text-gray-600 uppercase tracking-widest mb-2">Your name</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => { setName(e.target.value); setError(''); }}
-                  onKeyDown={e => e.key === 'Enter' && handleNewSession()}
-                  placeholder="e.g. Alex Chen"
-                  maxLength={40}
-                  autoFocus
-                  className="w-full bg-white/5 border border-white/10 text-white rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 placeholder:text-gray-700 transition-colors"
-                />
-              </div>
-            )}
-
-            {/* Color */}
-            <div>
-              <label className="block text-[10px] font-mono font-bold text-gray-600 uppercase tracking-widest mb-2">Avatar colour</label>
-              <div className="flex gap-2">
-                {AVATAR_COLORS.map(c => (
-                  <button key={c} onClick={() => setColor(c)}
-                    className="w-7 h-7 rounded-full border-2 transition-all hover:scale-110"
-                    style={{ backgroundColor: c, borderColor: color === c ? '#fff' : 'transparent' }} />
-                ))}
-              </div>
-            </div>
-
-            {/* Role (collapsible) */}
-            <div>
-              <button onClick={() => setShowAdvanced(v => !v)}
-                className="text-[10px] font-mono text-gray-600 hover:text-gray-400 uppercase tracking-widest transition-colors">
-                {showAdvanced ? '▾' : '▸'} Role (optional)
-              </button>
-              {showAdvanced && (
-                <div className="mt-2 grid grid-cols-2 gap-1.5">
-                  {ROLES.map(r => (
-                    <button key={r} onClick={() => setRole(role === r ? '' : r)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors text-left ${role === r ? 'bg-white text-gray-900 border-white' : 'bg-transparent text-gray-500 border-white/10 hover:border-white/30 hover:text-gray-300'}`}>
-                      {r}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Actions. A guest keeps the join row and loses the rest: starting a
-              session and curating a review both need an account, and the
-              IdentityGate sends a guest who tries /tracker or /admin to the
-              sign-in page anyway. */}
-          <div className="space-y-3">
-            {!isGuest && (
-              <>
-                <button onClick={handleNewSession}
-                  className={`w-full text-sm font-bold py-3 rounded-xl transition-colors ${joinCode.trim() ? 'bg-white/10 hover:bg-white/20 text-gray-400 border border-white/10' : 'bg-white hover:bg-gray-100 text-gray-900'}`}>
-                  {isReturning ? 'New session' : 'Start new session'}
-                </button>
-
-                <button onClick={handleNewDesignReview} disabled={creatingReview}
-                  className="w-full text-sm font-bold py-3 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/20 transition-colors disabled:opacity-50">
-                  {creatingReview ? 'Creating…' : 'New design review →'}
-                </button>
-              </>
-            )}
-
-            {isGuest && (
-              <p className="text-gray-600 text-[11px] font-mono leading-relaxed">
-                You are here as a guest, so the only session you can open is the
-                one you were invited to.
-              </p>
-            )}
-
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={joinCode}
-                onChange={e => { setJoinCode(e.target.value); setError(''); }}
-                onKeyDown={e => e.key === 'Enter' && handleJoin()}
-                placeholder="Room code to join…"
-                className="flex-1 bg-white/5 border border-white/10 text-white rounded-xl px-4 py-3 text-sm outline-none focus:border-white/30 placeholder:text-gray-700 transition-colors"
-              />
-              <button onClick={handleJoin}
-                className={`text-sm px-5 py-3 rounded-xl transition-colors font-bold ${joinCode.trim() ? 'bg-white hover:bg-gray-100 text-gray-900' : 'bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white border border-white/10'}`}>
-                Join
-              </button>
-            </div>
-
-            {error && <p className="text-red-400 text-xs font-mono">{error}</p>}
-          </div>
-
-          {/* Saved curations, and the tracker link. Neither is a guest's: the
-              list would open rooms they were not invited to, and /tracker needs
-              an account. */}
-          {!isGuest && (
-          <>
-          {/* Reviews this account took part in, above the saved ones: this list
-              follows the PERSON rather than the link, so a curated review they
-              joined from somebody else's URL is here and nowhere else. Only
-              rendered when the deployment has accounts and this browser is
-              signed in — see showMyReviews. */}
-          {showMyReviews && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-white/5" />
-                <span className="text-[10px] font-mono uppercase tracking-widest text-gray-600">
-                  Your design reviews{myReviews && myReviews.length > 0 ? ` · ${myReviews.length}` : ''}
-                </span>
-                <div className="flex-1 h-px bg-white/5" />
-              </div>
-              {myReviews === null ? (
-                <div className="space-y-1.5">
-                  {[1, 2].map(i => <div key={i} className="h-12 bg-white/5 rounded-xl animate-pulse" />)}
-                </div>
-              ) : myReviews.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-white/10 px-4 py-5 text-center">
-                  <p className="text-[11px] text-gray-500">Design reviews you take part in will appear here.</p>
-                </div>
-              ) : (
-              <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1 custom-scrollbar">
-                {myReviews.map((r) => (
-                  <div
-                    key={r.reviewId}
-                    className="group rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-emerald-500/30 transition-colors"
-                  >
-                    <button
-                      onClick={() => enterRoom(r.reviewId)}
-                      className="w-full text-left px-3 py-2"
-                      title="Open the room"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        {/* An ad-hoc session has no curation and therefore no
-                            title; its room id is the only name it ever had. */}
-                        <span className="text-xs font-bold text-white truncate">
-                          {r.title ?? `Session ${r.reviewId.slice(0, 8)}`}
-                        </span>
-                        <span className="text-[9px] font-mono text-gray-600 shrink-0">
-                          {describeLastVisit(r.lastJoinedAt)}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-gray-500">
-                        <span>{r.role === 'host' ? 'Hosted' : 'Joined'}</span>
-                        {r.title !== null && (
-                          <span className="ml-auto text-gray-700 font-mono truncate">{r.reviewId.slice(0, 8)}</span>
-                        )}
-                      </div>
-                    </button>
-                    {/* The same two actions a saved review has, minus the
-                        delete: taking part in a review is not owning it, and
-                        somebody else's curation is not this person's to
-                        destroy from a list of meetings they attended. */}
-                    {r.title !== null && (
-                    <div className="px-3 pb-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => enterRoom(r.reviewId)}
-                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-200 text-[10px] font-bold uppercase tracking-wider transition-colors"
-                      >
-                        <Play size={10} /> Open Room
-                      </button>
-                      <button
-                        onClick={() => resumeCuration(r.reviewId, 'setup')}
-                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/15 text-gray-300 text-[10px] font-bold uppercase tracking-wider transition-colors"
-                        title="Resume editing"
-                      >
-                        <Pencil size={10} /> Edit
-                      </button>
-                    </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-              )}
-            </div>
-          )}
-
-          <div className="space-y-2">
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-white/5" />
-                <span className="text-[10px] font-mono uppercase tracking-widest text-gray-600">
-                  Saved design reviews{curations.length > 0 ? ` · ${curations.length}` : ''}
-                </span>
-                <div className="flex-1 h-px bg-white/5" />
-              </div>
-              {curations.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-white/10 px-4 py-5 text-center">
-                  <p className="text-[11px] text-gray-500">No saved design reviews yet.</p>
-                  <p className="text-[10px] text-gray-600 mt-1">
-                    Click <span className="text-emerald-400">New design review</span> to start one — it'll save automatically and appear here for anyone you share the link with.
+            ) : cards.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-gray-300 bg-white px-5 py-10 text-center">
+                <p className={EMPTY_HINT}>
+                  {lobby.filter === 'archived'
+                    ? 'No design reviews have been put away.'
+                    : lobby.filter === 'mine'
+                      ? 'Design reviews you own will appear here.'
+                      : lobby.filter === 'shared'
+                        ? 'Design reviews somebody else added you to will appear here.'
+                        : isGuest
+                          ? 'The design review you were invited to will appear here.'
+                          : 'No design reviews yet.'}
+                </p>
+                {!isGuest && lobby.filter === 'all' && (
+                  <p className="text-[10px] text-gray-400 mt-1.5">
+                    Press <span className="font-semibold text-gray-600">New design review</span> to start one — it saves
+                    as you go and appears here for anyone you share the link with.
                   </p>
-                </div>
-              ) : (
-              <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1 custom-scrollbar">
-                {curations.map((c) => (
-                  <div
-                    key={c.id}
-                    className="group rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-emerald-500/30 transition-colors"
-                  >
-                    <button
-                      onClick={() => resumeCuration(c.id, 'room')}
-                      className="w-full text-left px-3 py-2"
-                      title="Open the room"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-white truncate">{c.title || 'Untitled design review'}</span>
-                        <span className="text-[9px] font-mono text-gray-600 shrink-0">{fmtShort(c.updated_at)}</span>
-                      </div>
-                      <div className="flex items-center gap-3 mt-1 text-[10px] font-mono text-gray-500">
-                        <span className="inline-flex items-center gap-1"><Layers size={9} />{c.slide_count}</span>
-                        <span className="inline-flex items-center gap-1"><Camera size={9} />{c.viewpoint_count}</span>
-                        <span className="inline-flex items-center gap-1"><MapPin size={9} />{c.pin_count}</span>
-                        <span className="ml-auto text-gray-700 font-mono truncate">{c.id.slice(0, 8)}</span>
-                      </div>
-                    </button>
-                    <div className="px-3 pb-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => resumeCuration(c.id, 'room')}
-                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-200 text-[10px] font-bold uppercase tracking-wider transition-colors"
-                      >
-                        <Play size={10} /> Open Room
-                      </button>
-                      <button
-                        onClick={() => resumeCuration(c.id, 'setup')}
-                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded bg-white/5 hover:bg-white/15 text-gray-300 text-[10px] font-bold uppercase tracking-wider transition-colors"
-                        title="Resume editing"
-                      >
-                        <Pencil size={10} /> Edit
-                      </button>
-                      <button
-                        onClick={() => handleDeleteCuration(c.id)}
-                        className="px-2 py-1 rounded bg-white/5 hover:bg-red-500/20 hover:text-red-300 text-gray-500 transition-colors"
-                        title="Delete curation"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="grid gap-3.5 [grid-template-columns:repeat(auto-fill,minmax(250px,1fr))]">
+                {cards.map((review) => (
+                  <ReviewCard
+                    key={review.id}
+                    review={review}
+                    selected={selected?.id === review.id}
+                    onSelect={() => setSelectedId(review.id)}
+                  />
                 ))}
               </div>
-              )}
-            </div>
+            )}
+          </section>
 
-          {/* Divider + Tracker link */}
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-white/5" />
-            <button onClick={() => navigate('/tracker')}
-              className="text-xs font-mono text-gray-600 hover:text-gray-400 transition-colors whitespace-nowrap">
-              Open Tracker ↗
-            </button>
-            <div className="flex-1 h-px bg-white/5" />
-          </div>
-          </>
-          )}
-
-          {/* Mobile stats (shown on small screens) */}
-          <div className="flex lg:hidden justify-center gap-6 text-center">
-            {loadingStats ? null : stats ? (
-              <>
-                <div><p className="text-white text-xl font-bold">{stats.totalItems}</p><p className="text-gray-600 text-[10px] font-mono">Items</p></div>
-                <div><p className="text-red-400 text-xl font-bold">{stats.openRisks}</p><p className="text-gray-600 text-[10px] font-mono">Risks</p></div>
-                <div><p className="text-blue-400 text-xl font-bold">{stats.pendingActions}</p><p className="text-gray-600 text-[10px] font-mono">Actions</p></div>
-              </>
-            ) : null}
+          {/* The preview of the selected review. Sticky beside the grid, and below it on
+              a screen too narrow to hold both — the sketch's own breakpoint. */}
+          <div className="lg:sticky lg:top-3 min-w-0">
+            {selected ? (
+              <ReviewPreview
+                key={selected.id}
+                review={selected}
+                invited={!!joinRoomId && selected.id === joinRoomId}
+                mayDelete={mayDelete(selected)}
+                isMeetingHost={!accountsOn}
+                onOpen={() => enterRoom(selected.id)}
+                onDeleted={() => {
+                  lobby.forget(selected.id);
+                  setSelectedId(null);
+                  lobby.refresh();
+                }}
+                onChanged={lobby.refresh}
+              />
+            ) : (
+              <div className="rounded-lg border border-dashed border-gray-300 bg-white px-5 py-10 text-center">
+                <p className={EMPTY_HINT}>Select a design review to see inside it.</p>
+              </div>
+            )}
           </div>
         </div>
       </div>

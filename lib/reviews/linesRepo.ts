@@ -217,7 +217,7 @@ export interface LineSession {
   summary: string | null;
 }
 
-function toLineSession(row: Record<string, unknown>): LineSession | null {
+export function toLineSession(row: Record<string, unknown>): LineSession | null {
   const id = typeof row['id'] === 'string' ? row['id'] : '';
   if (!id) return null;
   const rawSeq = row['seq'];
@@ -731,3 +731,95 @@ export async function listReviewCardRefs(
     return [];
   }
 }
+
+// ─── The same reads, for a LIST of reviews at once ───────────────────────────
+//
+// docs/plan/15-sessions-and-variants.md batch BO. The lobby draws a card per design
+// review and every card carries a miniature of that review's session map, so it needs
+// the meetings and the lines of everything on screen. One query per card is a
+// waterfall of forty requests behind a page that is supposed to be a list, so both
+// reads are batched on `review_id in (…)` and grouped here instead.
+//
+// They answer an empty record rather than throwing, for the reason every read above
+// does: an install whose database has no review_lines yet gets cards with no variants
+// on them, which is the truth about it, and not an empty lobby.
+
+/** How many rows one batched read will pull. Bounded so a big install cannot OOM a list. */
+const BATCH_SESSION_LIMIT = 600;
+const BATCH_LINE_LIMIT = 300;
+
+function groupByReview<T>(
+  rows: readonly Record<string, unknown>[],
+  read: (row: Record<string, unknown>) => T | null,
+): Record<string, T[]> {
+  const grouped: Record<string, T[]> = {};
+  for (const row of rows) {
+    const reviewId = typeof row['review_id'] === 'string' ? row['review_id'] : '';
+    if (reviewId === '') continue;
+    const value = read(row);
+    if (!value) continue;
+    (grouped[reviewId] ??= []).push(value);
+  }
+  return grouped;
+}
+
+/**
+ * The meetings of several design reviews, oldest first within each, keyed by review.
+ *
+ * The same rows and the same ordering `listReviewSessions` answers for one review,
+ * read in one request. A review with no meetings is simply absent from the record,
+ * which the caller reads as "no sessions yet".
+ */
+export async function listSessionsForReviews(
+  reviewIds: readonly string[],
+): Promise<Record<string, LineSession[]>> {
+  if (reviewIds.length === 0) return {};
+  try {
+    const { data, error } = await supabase
+      .from('tracker_sessions')
+      .select('*')
+      .in('review_id', [...reviewIds])
+      .order('ended_at', { ascending: true })
+      .limit(BATCH_SESSION_LIMIT);
+    if (error || !data) return {};
+    const rows = data as Array<Record<string, unknown>>;
+    const grouped = groupByReview(rows, toLineSession);
+    for (const list of Object.values(grouped)) {
+      list.sort((a, b) => a.endedAt.localeCompare(b.endedAt) || a.id.localeCompare(b.id));
+    }
+    return grouped;
+  } catch (err) {
+    console.error('[linesRepo] listSessionsForReviews threw:', err);
+    return {};
+  }
+}
+
+/**
+ * The lines of several design reviews, main line first within each, keyed by review.
+ *
+ * Read straight from the table and NOT through `listLines`, because that one caches
+ * per review for a room that will ask again and again; a list page asks once for
+ * forty reviews and a cache nobody will hit is only forty entries to leak.
+ */
+export async function listLinesForReviews(
+  reviewIds: readonly string[],
+): Promise<Record<string, ReviewLine[]>> {
+  if (reviewIds.length === 0) return {};
+  try {
+    const { data, error } = await supabase
+      .from('review_lines')
+      .select(LINE_COLUMNS)
+      .in('review_id', [...reviewIds])
+      .limit(BATCH_LINE_LIMIT);
+    if (error || !data) return {};
+    const grouped = groupByReview(data as Array<Record<string, unknown>>, (row) => toReviewLine(row));
+    for (const [reviewId, list] of Object.entries(grouped)) {
+      grouped[reviewId] = orderedLines(list);
+    }
+    return grouped;
+  } catch (err) {
+    console.error('[linesRepo] listLinesForReviews threw:', err);
+    return {};
+  }
+}
+

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useStore } from '../../store';
 import { useShallow } from 'zustand/react/shallow';
 import { usePresence } from '../../lib/PresenceContext';
@@ -7,6 +8,7 @@ import { useWebRTCContext } from '../../lib/WebRTCContext';
 import ViewpointCanvas from '../Scene/ViewpointCanvas';
 import BoardroomCountdown from './BoardroomCountdown';
 import HumanParticipantTile from './Boardroom/HumanParticipantTile';
+import LobbyLink from './room/LobbyLink';
 import { mobileLaserRef } from '../../lib/mobileLaserRef';
 import { InsightCard, SpatialComment, LiveChatMessage, ChatTag } from '../../types';
 import { MonitorPlay, Radio, Mic, MicOff, Video, VideoOff, Power, Crosshair, Send, Volume2, VolumeX } from 'lucide-react';
@@ -328,12 +330,19 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
         style={{ borderColor: '#1f1f1f', background: '#0a0a0a', paddingTop: 'max(8px, env(safe-area-inset-top))' }}
       >
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: '#fff' }}>
-            <span style={{ color: '#000', fontWeight: 900, fontSize: 9 }}>VA</span>
-          </div>
-          <span className="text-white text-xs font-bold tracking-widest uppercase" style={{ fontFamily: 'monospace' }}>
-            Viewpoint Arena
-          </span>
+          {/* The way back to the lobby: the logo is the link and the word beside it
+              says so — the same control the desktop room's header has, in the dark
+              tone this bar needs. Leaving this way LEAVES the meeting rather than
+              ending it; see components/UI/room/LobbyLink.tsx. */}
+          <Link to="/" title="Back to the lobby" className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: '#fff' }}>
+              <span style={{ color: '#000', fontWeight: 900, fontSize: 9 }}>VA</span>
+            </div>
+            <span className="text-white text-xs font-bold tracking-widest uppercase" style={{ fontFamily: 'monospace' }}>
+              Viewpoint Arena
+            </span>
+          </Link>
+          <LobbyLink tone="dark" />
         </div>
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={{ background: '#1a1a1a', color: '#6b7280', border: '1px solid #2a2a2a' }}>

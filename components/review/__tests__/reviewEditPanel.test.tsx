@@ -17,17 +17,24 @@
 //     that could resolve to one, so the tab could only ever fail.
 //   • A People tab that was selected before accounts were known about falls back
 //     to Agenda rather than leaving an empty panel where six tabs were.
-//   • Losing the review mid-edit is worth one sentence rather than six empty tabs.
+//   • A room with no review to edit is not a dead end (batch BN): the panel creates
+//     the row, says what it is doing while it does, and only says what failed — with
+//     a way to try again — if the write did not land.
+//   • "Delete design review" is offered to the people the room says may, asks inline
+//     and names the review, and leaves for the lobby when it lands.
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { useActiveReviewStore } from '../../../lib/activeReviewStore';
 import { createReviewDraft } from '../../../lib/reviewSetupStore';
 import type { ReviewDraft } from '../../../lib/reviewSetupStore';
 
-const { configHolder } = vi.hoisted(() => ({
+const { configHolder, curationsMock, deleteMock } = vi.hoisted(() => ({
   configHolder: { current: null as Record<string, unknown> | null },
+  curationsMock: { load: vi.fn(), create: vi.fn() },
+  deleteMock: { review: vi.fn() },
 }));
 
 // Only the identity mode is faked. useConnectorConfig's real one fetches
@@ -52,6 +59,22 @@ vi.mock('../../../lib/config/ConfigContext', () => ({
 
 // The one tab that reads the members endpoint. Everything else renders for real.
 vi.mock('../PeopleTab', () => ({ default: () => <div data-testid="people-tab" /> }));
+
+// The row the panel reads and the one it writes when a room has none. Spread over the
+// real module rather than replacing it, because lib/activeReviewStore and the tabs
+// reach other exports of it.
+vi.mock('../../../lib/curationsRepo', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../lib/curationsRepo')>()),
+  loadCuration: (id: string) => curationsMock.load(id) as Promise<ReviewDraft | null>,
+  createReview: (id: string) => curationsMock.create(id) as Promise<ReviewDraft | null>,
+}));
+
+// The endpoint's browser side. Faked rather than served: what matters here is which
+// review the panel asked to have deleted, and that it leaves when the answer is yes.
+vi.mock('../../../lib/reviews/deleteClient', () => ({
+  deleteReview: (reviewId: string) => deleteMock.review(reviewId),
+  deleteSession: vi.fn(),
+}));
 
 const ReviewEditPanel = (await import('../ReviewEditPanel')).default;
 
@@ -99,6 +122,9 @@ function selectedTabs(): string[] {
 beforeEach(() => {
   configHolder.current = ACCOUNTS;
   useActiveReviewStore.setState({ config: seededDraft() });
+  curationsMock.load.mockReset().mockResolvedValue(null);
+  curationsMock.create.mockReset().mockResolvedValue(null);
+  deleteMock.review.mockReset().mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -175,12 +201,147 @@ describe('the review edit panel', () => {
     expect(screen.queryByTestId('people-tab')).toBeNull();
   });
 
-  it('says so in one sentence when the room has no review to edit', () => {
+  // ─── A room with no review to edit (batch BN) ────────────────────────────────
+  // The bug this replaces: a room opened from the lobby's "New session" had no
+  // review_curations row, an admin or the meeting host still got Edit, and the panel
+  // said "This room has no design review to edit yet" with nothing to press — so views
+  // and pins could not be saved.
+
+  it('creates the review a room did not have, and shows the tabs once it exists', async () => {
+    useActiveReviewStore.setState({ config: null });
+    curationsMock.create.mockResolvedValue(seededDraft());
+    render(<ReviewEditPanel reviewId="rev-1" />);
+
+    // While the row is being written: what is happening, not a dead end.
+    expect(screen.getByText('Setting up this design review…')).toBeInTheDocument();
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+
+    await vi.waitFor(() => {
+      expect(screen.queryAllByRole('tab').length).toBeGreaterThan(0);
+    });
+    expect(curationsMock.create).toHaveBeenCalledWith('rev-1');
+    // Seeded into the store, which is what makes "Save this view" have somewhere to
+    // go and what RoomPage's subscriber then persists.
+    expect(useActiveReviewStore.getState().config?.reviewId).toBe('rev-1');
+    expect(screen.queryByText('This room has no design review to edit yet.')).toBeNull();
+  });
+
+  it('takes the row that is already there instead of writing an empty one over it', async () => {
+    // RoomPage's own read may still be in flight when Edit is granted, and createReview
+    // upserts: writing a fresh draft over a row that exists would empty a review
+    // somebody else has already saved into.
+    const existing = seededDraft();
+    useActiveReviewStore.setState({ config: null });
+    curationsMock.load.mockResolvedValue(existing);
+    render(<ReviewEditPanel reviewId="rev-1" />);
+
+    await vi.waitFor(() => {
+      expect(screen.queryAllByRole('tab').length).toBeGreaterThan(0);
+    });
+    expect(curationsMock.create).not.toHaveBeenCalled();
+    expect(useActiveReviewStore.getState().config).toBe(existing);
+  });
+
+  it('says plainly what failed, and tries again when asked', async () => {
     useActiveReviewStore.setState({ config: null });
     render(<ReviewEditPanel reviewId="rev-1" />);
 
-    expect(screen.getByText('This room has no design review to edit yet.')).toBeInTheDocument();
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(
+        'Could not create the design review for this room. Check the connection and try again.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryAllByRole('tab')).toHaveLength(0);
-    expect(screen.queryByRole('tablist', { name: 'Review sections' })).toBeNull();
+
+    curationsMock.create.mockResolvedValue(seededDraft());
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await vi.waitFor(() => {
+      expect(screen.queryAllByRole('tab').length).toBeGreaterThan(0);
+    });
+    expect(curationsMock.create).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── Deleting the review ──────────────────────────────────────────────────────
+// Rendered inside a router because the panel navigates to the lobby when a delete
+// lands, and `useNavigate` has nothing to read outside one.
+
+/** Where the panel went, which is the only thing a successful delete has to prove. */
+const PathProbe: React.FC = () => <div data-testid="path">{useLocation().pathname}</div>;
+
+function renderInRoom(mayDeleteReview: boolean) {
+  return render(
+    <MemoryRouter initialEntries={['/room/rev-1']}>
+      <Routes>
+        <Route
+          path="/room/:roomId"
+          element={<ReviewEditPanel reviewId="rev-1" mayDeleteReview={mayDeleteReview} />}
+        />
+        <Route path="/" element={<PathProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe('deleting the design review', () => {
+  it('is not offered to somebody the room did not say may', () => {
+    renderInRoom(false);
+
+    expect(screen.queryByRole('button', { name: /Delete design review/ })).toBeNull();
+  });
+
+  it('asks first, naming the review, and deletes nothing until it is answered', () => {
+    renderInRoom(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete design review/ }));
+
+    expect(screen.getByTestId('delete-review')).toBeInTheDocument();
+    expect(screen.getByText(/Landing gear review/)).toBeInTheDocument();
+    expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument();
+    expect(deleteMock.review).not.toHaveBeenCalled();
+  });
+
+  it('goes back to the lobby when the delete lands', async () => {
+    renderInRoom(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete design review/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('path').textContent).toBe('/');
+    });
+    expect(deleteMock.review).toHaveBeenCalledWith('rev-1');
+  });
+
+  it('stays put and says what the endpoint said when it is refused', async () => {
+    deleteMock.review.mockResolvedValue({
+      ok: false,
+      error: 'Only the owner of this design review, or an administrator, can delete it.',
+    });
+    renderInRoom(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete design review/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await vi.waitFor(() => {
+      expect(
+        screen.getByText('Only the owner of this design review, or an administrator, can delete it.'),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('path')).toBeNull();
+  });
+
+  it('cancels without deleting', () => {
+    renderInRoom(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete design review/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(deleteMock.review).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('delete-review')).toBeNull();
   });
 });

@@ -7,7 +7,9 @@ import {
   ChevronDown, ChevronRight, PanelRightClose, PanelRight,
   Home, Headphones
 } from 'lucide-react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+// `Link` is aliased because lucide-react's own `Link` icon is imported above and is
+// what the Linked Viewers HUD renders.
+import { useParams, useNavigate, useSearchParams, Link as RouterLink } from 'react-router-dom';
 import { useStore } from '../../store';
 import { ViewMode } from '../../types';
 import { usePresence } from '../../lib/PresenceContext';
@@ -36,6 +38,7 @@ import TopBar from './room/TopBar';
 import CallBar from './room/CallBar';
 import ManageButton from './room/ManageButton';
 import EmptyScenePrompt from './room/EmptyScenePrompt';
+import LobbyLink from './room/LobbyLink';
 import EditingStrip from '../review/EditingStrip';
 import PlmLaunch from '../review/PlmLaunch';
 import ReviewEditingNotice from '../review/ReviewEditingNotice';
@@ -160,12 +163,21 @@ const Interface: React.FC = () => {
   // keeps the table in roles.ts the only place the answer is written down.
   // The Edit button is hidden rather than disabled for somebody who may not: it is
   // not a tool this meeting has, and the room server would refuse it anyway.
-  const { can, loading: roleLoading, refresh: refreshRole } = useReviewRole({
+  const { can, rolesApply, loading: roleLoading, refresh: refreshRole } = useReviewRole({
     reviewId: roomId,
     sessionHostId,
     localUserId,
   });
   const mayEditReview = can('editReview');
+
+  // Deleting is NARROWER than editing, and deliberately so: `deleteReview` in
+  // lib/reviews/roles.ts is the owner's and this install's administrators', not its
+  // editors' — changing a review's agenda is something an editor does every meeting,
+  // and unmaking the review is not. On a deployment with NO accounts there is no owner
+  // to be and no administrator to read off a token, so the meeting host is the person
+  // api/reviews/delete.ts lets act, which is the same claim api/reviews/lines.ts
+  // already takes. Everybody else sees the tabs and the map and nothing to press.
+  const mayDeleteReview = !roleLoading && (rolesApply ? can('deleteReview') : isHost);
 
   const reviewEditing = useStore((s) => s.reviewEditing);
   // MINE, not "somebody is". The strip, the panel swap and the gizmo are all
@@ -349,10 +361,23 @@ const Interface: React.FC = () => {
 
       {/* Header / Meta / Tree */}
       <div className="flex flex-col items-start pointer-events-none z-[30] absolute top-6 left-6 max-h-[90vh]">
+          {/* The way back to the lobby. The logo is the link — it is what every other
+              screen in this app means by home, and until now it went nowhere — and
+              the word beside it is there because a link nobody knows is a link is not
+              a control anybody finds twice. Leaving this way LEAVES the meeting: it
+              does not end it, does not record it, and does not end it for everybody
+              else. See components/UI/room/LobbyLink.tsx. */}
           <header className="flex flex-col gap-1 mb-2 shrink-0">
             <h1 className="font-bold tracking-tight text-lg text-neutral-900 flex items-center gap-2">
-                <div className={`w-3 h-3 rounded-full transition-colors ${isPlaying ? 'bg-orange-500 animate-pulse' : 'bg-gray-400'}`}></div>
-                VIEWPOINT ARENA
+                <RouterLink
+                  to="/"
+                  title="Back to the lobby"
+                  className="pointer-events-auto flex items-center gap-2 text-neutral-900 hover:opacity-60 transition-opacity"
+                >
+                  <div className={`w-3 h-3 rounded-full transition-colors ${isPlaying ? 'bg-orange-500 animate-pulse' : 'bg-gray-400'}`}></div>
+                  VIEWPOINT ARENA
+                </RouterLink>
+                <LobbyLink />
             </h1>
             <div className="font-mono text-xs text-neutral-500 uppercase tracking-wide">
                 Design Review Sim // {Math.floor(time * 10) / 10}s
@@ -515,6 +540,9 @@ const Interface: React.FC = () => {
               // panel not offering a tool the endpoint would refuse.
               reviewId={roomId ?? null}
               mayEditLines={mayEditReview && !roleLoading}
+              // Deleting a session is narrower than changing a line: `deleteReview`
+              // in lib/reviews/roles.ts, the owner and this install's admins.
+              mayDelete={mayDeleteReview}
               isMeetingHost={isHost}
               onChanged={sessionMap.refresh}
             />
@@ -750,7 +778,11 @@ const Interface: React.FC = () => {
                 <p className="text-[11px] text-gray-500">Loading the editing tools…</p>
               </div>
             }>
-              <ReviewEditPanel reviewId={roomId ?? ''} onRosterChanged={refreshRole} />
+              <ReviewEditPanel
+                reviewId={roomId ?? ''}
+                onRosterChanged={refreshRole}
+                mayDeleteReview={mayDeleteReview}
+              />
             </Suspense>
           </div>
         )}

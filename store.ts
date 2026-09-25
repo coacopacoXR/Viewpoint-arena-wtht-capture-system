@@ -458,6 +458,18 @@ interface AppState {
   showTrails: boolean;
   isPlaying: boolean;
   isMeetingEnded: boolean;
+  /**
+   * Bumped when THIS browser should take a snapshot of the room for the review's lobby
+   * card. A counter rather than a boolean because the interesting event is the change,
+   * and a boolean set twice to true would look like nothing happened the second time.
+   *
+   * Only `endMeeting(true)` bumps it, and NOT `meetingEndedRemotely`: one meeting is
+   * recorded once, by the browser whose person pressed End, and the snapshot belongs
+   * with that record. components/Scene/ThumbnailCapture.tsx is the only reader — it
+   * lives inside the canvas because reading a WebGL drawing buffer needs the renderer,
+   * which only R3F has.
+   */
+  snapshotRequest: number;
   time: number;
 
   // Collaboration State
@@ -859,6 +871,7 @@ export const useStore = create<AppState>((set, get) => ({
   showTrails: false,
   isPlaying: true,
   isMeetingEnded: false,
+  snapshotRequest: 0,
   time: 0,
   agents: INITIAL_AGENTS,
   agentStyle: AgentStyle.BOX,
@@ -1014,7 +1027,14 @@ export const useStore = create<AppState>((set, get) => ({
         });
       });
     }
-    set({ isMeetingEnded: ended, isPlaying: !ended });
+    // The snapshot is asked for here and only here: this is the browser whose person
+    // pressed End, so it is the one still looking at the model the meeting was held on,
+    // and the picture belongs with the record that meeting just wrote.
+    // `meetingEndedRemotely` deliberately does NOT ask — one meeting is recorded once,
+    // and a snapshot from every browser in the room is four writes of the same picture.
+    set(ended
+      ? { isMeetingEnded: ended, isPlaying: !ended, snapshotRequest: get().snapshotRequest + 1 }
+      : { isMeetingEnded: ended, isPlaying: !ended });
   },
   // The same on-screen change endMeeting(true) makes and NOT its write. Cards are
   // broadcast to every browser in the room, so each of them holds the same

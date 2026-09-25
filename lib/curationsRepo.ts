@@ -16,6 +16,7 @@
 import { supabase, supabaseConfigured } from './supabase';
 import { migrateCurationAsset } from './migrateCurationAsset';
 import { ensureReviewOwner } from './reviews/membersRepo';
+import { deleteReview as deleteReviewRequest } from './reviews/deleteClient';
 import { createReviewDraft, NEW_REVIEW_TITLE } from './reviewSetupStore';
 import type { ReviewDraft } from './reviewSetupStore';
 
@@ -29,6 +30,13 @@ export interface CurationSummary {
   listed: boolean;
   updated_at: string;
   created_at: string;
+  /**
+   * A small JPEG data URL of the review's model, captured in the room
+   * (lib/reviews/thumbnail.ts, batch BO). Optional because only the summary read asks
+   * for the column: the list reads that predate it answer undefined, and a database
+   * that has never had it applied answers null rather than failing the whole read.
+   */
+  thumbnail?: string | null;
 }
 
 interface CurationRow {
@@ -194,6 +202,7 @@ interface CurationListRow {
   pins?: unknown[] | null;
   agenda?: unknown[] | null;
   listed?: boolean | null;
+  thumbnail?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -210,6 +219,9 @@ function rowToSummary(r: CurationListRow): CurationSummary {
     listed: r.listed !== false,
     updated_at: r.updated_at,
     created_at: r.created_at,
+    // Null rather than undefined, so a caller can tell "this read asked and there is no
+    // snapshot" from "this read never asked" without knowing which columns it named.
+    thumbnail: r.thumbnail ?? null,
   };
 }
 
@@ -242,7 +254,13 @@ const ADMIN_COLUMNS =
 const ADMIN_COLUMNS_LEGACY =
   'id,title,description,viewpoints,pins,agenda,created_at,updated_at';
 
+// `thumbnail` (batch BO) is asked for by the summary read alone, so it gets a tier of
+// its own between the two above: a database that has `listed` and no `thumbnail` is
+// every install upgraded as far as 2026-09-24, and dropping straight to the legacy list
+// would lose the `listed` filter for a column that only the lobby's preview uses.
 const SUMMARY_COLUMNS =
+  'id,title,description,viewpoints,pins,agenda,requirements,team,listed,thumbnail,created_at,updated_at';
+const SUMMARY_COLUMNS_NO_THUMBNAIL =
   'id,title,description,viewpoints,pins,agenda,requirements,team,listed,created_at,updated_at';
 const SUMMARY_COLUMNS_LEGACY =
   'id,title,description,viewpoints,pins,agenda,requirements,team,created_at,updated_at';
@@ -344,10 +362,26 @@ export async function listArchivedIds(ids: string[]): Promise<Set<string>> {
   return new Set(rows.map((row) => row.id));
 }
 
+/**
+ * Delete a design review — all of it, not just its curation row.
+ *
+ * This used to be a `.delete()` at Supabase, which removed the review_curations row
+ * and left the review's meetings, cards, lines, roster and stored revisions behind:
+ * a tracker full of cards no review could be opened on. docs/supabase-schema.sql no
+ * longer lets the published anon key delete a curation row at all (batch BN), and
+ * the removal is `delete_review(p_review)` — one transaction, called by
+ * api/reviews/delete.ts with the service role, which is also where the caller's role
+ * is checked. lib/reviews/deleteClient.ts is this side of that.
+ *
+ * @returns whether the review is gone. A refusal — an editor rather than the owner
+ *          on a deployment with accounts — answers false and logs the sentence the
+ *          endpoint gave, which is the one worth showing if a caller ever grows a
+ *          place to put it.
+ */
 export async function deleteCuration(id: string): Promise<boolean> {
-  const { error } = await supabase.from('review_curations').delete().eq('id', id);
-  if (error) {
-    console.error('[curationsRepo] deleteCuration failed:', error);
+  const result = await deleteReviewRequest(id);
+  if (!result.ok) {
+    console.error('[curationsRepo] deleteCuration failed:', result.error ?? 'refused');
     return false;
   }
   return true;
@@ -375,13 +409,24 @@ export async function getCurationSummary(id: string): Promise<CurationSummary | 
     .eq('id', id)
     .maybeSingle();
 
-  const { data, error } = first.error?.code === UNDEFINED_COLUMN
+  // No `thumbnail`: keep every filter and every other column this database does have.
+  const second = first.error?.code === UNDEFINED_COLUMN
+    ? await supabase
+        .from('review_curations')
+        .select(SUMMARY_COLUMNS_NO_THUMBNAIL)
+        .eq('id', id)
+        .maybeSingle()
+    : first;
+
+  // No `listed` either: a database from before per-review visibility, in which every
+  // review is listed by definition.
+  const { data, error } = second.error?.code === UNDEFINED_COLUMN
     ? await supabase
         .from('review_curations')
         .select(SUMMARY_COLUMNS_LEGACY)
         .eq('id', id)
         .maybeSingle()
-    : first;
+    : second;
 
   if (error || !data) return null;
   return rowToSummary(data as unknown as CurationListRow);

@@ -28,7 +28,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { X } from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
 import {
   MAIN_LINE_NAME,
   lineLabel,
@@ -39,6 +39,7 @@ import {
   type ReviewLine,
 } from '../../lib/reviews/lines';
 import type { LineSession, SessionCardRef } from '../../lib/reviews/linesRepo';
+import { deleteSession } from '../../lib/reviews/deleteClient';
 import type { ModelRevision } from '../../lib/reviews/revisionsRepo';
 import { revisionLabel, shortDate } from '../../lib/trackerContinuity';
 import { ExploreVariantButton, VariantActions } from './VariantActions';
@@ -349,11 +350,109 @@ export interface SessionMapProps {
    */
   reviewId?: string | null;
   mayEditLines?: boolean;
+  /**
+   * Whether this person may DELETE one of the review's sessions.
+   *
+   * Narrower than `mayEditLines`, and deliberately so: `deleteReview` in
+   * lib/reviews/roles.ts is the owner's and this install's administrators', not its
+   * editors'. Removing a meeting removes the cards raised in it, which is not a change
+   * to the review's agenda that an editor makes every week. Passed down like
+   * `mayEditLines` rather than asked again here, because this map is mounted inside
+   * panels that have already asked; hiding the button is not the enforcement —
+   * api/reviews/delete.ts checks the caller's own token against the roster.
+   */
+  mayDelete?: boolean;
   /** Whether this browser is running the meeting. Read on an install with no accounts. */
   isMeetingHost?: boolean;
   /** Read the lines, sessions and cards again, after an action changed them. */
   onChanged?: () => void;
 }
+
+/** The button style VariantActions uses, so a session's actions all read alike. */
+const BUTTON =
+  'inline-flex items-center gap-1 px-2 py-1 rounded border text-[10px] font-semibold transition-colors disabled:opacity-40';
+
+/**
+ * "Delete session" — one meeting, and the cards raised in it.
+ *
+ * An inline confirm in the same panel that offered it, naming the stop the way the map
+ * names it and saying how many cards go with it, because "Delete" on its own does not
+ * say which of twenty meetings is about to disappear. Deliberately NOT window.confirm:
+ * it cannot be styled to the panel it belongs to, it cannot be tested, and it freezes
+ * the room behind it while it waits.
+ *
+ * What the endpoint may refuse, and the sentence it refuses with, are its own: a
+ * variant that leaves FROM this meeting blocks it, because the map draws that variant
+ * starting at this stop. Session numbers are not reused and not renumbered, so the
+ * meetings after this one keep saying what they always said.
+ */
+const DeleteSessionButton: React.FC<{
+  reviewId: string;
+  session: LineSession;
+  /** "S2" / "A1" — the label the map draws on this stop. */
+  label: string;
+  /** How many cards were raised in it, for the sentence that asks. */
+  cards: number;
+  isMeetingHost?: boolean;
+  onDeleted?: () => void;
+}> = ({ reviewId, session, label, cards, isMeetingHost, onDeleted }) => {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    const result = await deleteSession(reviewId, session.id, { isMeetingHost });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error ?? 'That session could not be deleted.');
+      return;
+    }
+    setConfirming(false);
+    onDeleted?.();
+  };
+
+  if (!confirming) {
+    return (
+      <button
+        onClick={() => { setConfirming(true); setError(null); }}
+        className={`${BUTTON} border-gray-200 text-gray-500 hover:border-red-300 hover:text-red-600 bg-white`}
+        title="Delete this meeting and the cards raised in it"
+      >
+        <Trash2 size={11} />
+        Delete session
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="delete-session">
+      <p className="text-[11px] text-gray-700 leading-snug">
+        Delete {label}
+        {cards > 0 ? ` and its ${cards} ${cards === 1 ? 'card' : 'cards'}` : ''}? This cannot be undone.
+      </p>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <button
+          onClick={() => void run()}
+          disabled={busy}
+          className={`${BUTTON} border-red-600 bg-red-600 text-white hover:bg-red-700`}
+        >
+          {busy ? 'Deleting…' : 'Delete'}
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          disabled={busy}
+          className={`${BUTTON} border-gray-200 text-gray-400 hover:text-black bg-white`}
+        >
+          Cancel
+        </button>
+      </div>
+      {busy && <p className="text-[10px] text-gray-400">Deleting the session and its cards…</p>}
+      {error && <p className="text-[10px] text-red-600 leading-snug" role="status">{error}</p>}
+    </div>
+  );
+};
 
 /**
  * The map, and the panel one of its stops opens.
@@ -372,6 +471,7 @@ const SessionMap: React.FC<SessionMapProps> = ({
   emptyMessage = 'No sessions recorded in this design review yet.',
   reviewId = null,
   mayEditLines = false,
+  mayDelete = false,
   isMeetingHost = false,
   onChanged,
 }) => {
@@ -650,6 +750,29 @@ const SessionMap: React.FC<SessionMapProps> = ({
                 mayEdit={mayEditLines}
                 isMeetingHost={isMeetingHost}
                 onChanged={onChanged}
+              />
+            </div>
+          )}
+
+          {/* Deleting the meeting is offered to fewer people than starting a variant
+              from it — `mayDelete` is the owner and this install's admins, where
+              `mayEditLines` is its editors too — and sits apart from it for that
+              reason, so the two are not read as one row of things you can do. */}
+          {reviewId && mayDelete && (
+            <div className="mt-2">
+              <DeleteSessionButton
+                reviewId={reviewId}
+                session={selected.session}
+                label={selected.label}
+                cards={selected.cards}
+                isMeetingHost={isMeetingHost}
+                onDeleted={() => {
+                  // The stop is gone, so the panel that was open on it has nothing to
+                  // show; closing it is what stops the map redrawing a selected stop
+                  // that is no longer there.
+                  setSelectedId(null);
+                  onChanged?.();
+                }}
               />
             </div>
           )}

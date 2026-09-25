@@ -1,0 +1,224 @@
+<title>Lobby Redesign Sketch</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+:root{
+  --ground:#f3f4f6; --paper:#ffffff; --ink:#0b0c0e; --muted:#6b7280; --faint:#9ca3af; --line:#e5e7eb;
+  --main:#0b0c0e; --varA:#2563eb; --varB:#b45309; --adopt:#059669; --drop:#c4c8cf;
+  --risk:#dc2626; --action:#2563eb; --why:#d97706;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font:14px/1.5 Inter,system-ui,sans-serif;padding-inline:16px;padding-block:0 48px}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+.label{font:700 10px/1 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.wrap{max-width:1180px;margin:0 auto}
+.note{max-width:1180px;margin:16px auto 0;background:#fffbe6;border:1px solid #f1e3a0;border-radius:6px;padding:10px 14px;font-size:13px;color:#5b4a00}
+
+/* top bar */
+.bar{display:flex;align-items:center;gap:12px;padding-block:18px;flex-wrap:wrap}
+.logo{display:flex;align-items:center;gap:10px}
+.logo b{width:30px;height:30px;border-radius:6px;background:var(--ink);color:#fff;display:grid;place-items:center;font:700 12px "JetBrains Mono",monospace}
+.logo span{font:700 13px "JetBrains Mono",monospace;letter-spacing:.12em}
+.spacer{flex:1}
+.pill{display:inline-flex;align-items:center;gap:8px;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:7px 12px;font-size:12px;font-weight:500;color:var(--ink);text-decoration:none}
+.dot{width:10px;height:10px;border-radius:50%;background:#34d399;flex:none}
+
+/* actions */
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;margin-top:6px}
+.primary{background:var(--ink);color:#fff;border:0;border-radius:6px;padding:12px 18px;font-weight:600;font-size:14px}
+.join{display:flex;background:var(--paper);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.join input{border:0;padding:0 12px;font:13px Inter,sans-serif;width:200px;max-width:50vw}
+.join button{border:0;border-left:1px solid var(--line);background:#fafafa;padding:0 14px;font-weight:600}
+.filters{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:var(--paper);border-radius:999px;padding:6px 12px;font-size:12px;color:var(--muted)}
+.chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:18px;margin-top:18px;align-items:start}
+@media (max-width:980px){.layout{grid-template-columns:1fr}}
+
+/* review grid */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:8px;overflow:hidden;display:flex;flex-direction:column}
+.card.sel{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.thumb{aspect-ratio:16/9;max-width:100%;background:linear-gradient(180deg,#f7f8fa,#eceef2);position:relative;border-bottom:1px solid var(--line)}
+.thumb svg{position:absolute;inset:0;width:100%;height:100%}
+.live{position:absolute;top:8px;left:8px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:4px;padding:2px 6px;font:700 9px "JetBrains Mono",monospace;letter-spacing:.1em}
+.body{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.title{font-weight:600;font-size:14px;line-height:1.3}
+.meta{font-size:12px;color:var(--muted)}
+.counts{display:flex;gap:10px;font:700 11px "JetBrains Mono",monospace}
+.counts span{display:inline-flex;align-items:center;gap:4px}
+.sq{width:7px;height:7px;border-radius:2px;display:inline-block}
+.mini{height:34px}
+.mini svg{width:100%;height:100%;overflow:visible}
+
+/* preview panel */
+.preview{background:var(--paper);border:1px solid var(--line);border-radius:8px;position:sticky;top:12px;overflow:hidden}
+.phead{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.phead h2{margin:0;font-size:17px;text-wrap:balance}
+.pthumb{aspect-ratio:16/9;max-width:100%;background:linear-gradient(180deg,#f7f8fa,#e9ecf1);position:relative;border-bottom:1px solid var(--line)}
+.pthumb svg{position:absolute;inset:0;width:100%;height:100%}
+.sec{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.map{overflow-x:auto}
+.map svg{min-width:320px;width:100%;height:auto;display:block}
+.row{display:flex;align-items:center;gap:8px;font-size:12px}
+.row .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.x{border:1px solid var(--line);background:#fff;border-radius:4px;width:22px;height:22px;display:grid;place-items:center;color:var(--faint);font-size:12px}
+.minutes{font-size:12px;color:#374151;background:#fafafa;border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.minutes b{display:block;font-size:12px;margin-top:4px}
+.pact{padding:12px 16px;display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:9px 12px;font-weight:600;font-size:13px}
+.btn.dark{background:var(--ink);color:#fff;border-color:var(--ink)}
+.btn.danger{color:#b91c1c;border-color:#fecaca;margin-left:auto}
+.people{display:flex;gap:-4px}
+.av{width:22px;height:22px;border-radius:50%;border:2px solid #fff;margin-left:-6px;display:grid;place-items:center;font:700 9px Inter;color:#fff}
+.av:first-child{margin-left:0}
+.callout{font-size:11px;color:var(--muted)}
+</style>
+
+<div class="note">Sketch for you to approve. The data is made up. Nothing here is built yet.</div>
+
+<div class="wrap">
+  <header class="bar">
+    <div class="logo"><b>VA</b><span>VIEWPOINT ARENA</span></div>
+    <div class="spacer"></div>
+    <a class="pill" href="#">Tracker</a>
+    <a class="pill" href="#">Admin</a>
+    <span class="pill"><span class="dot"></span>Coaco · Sign out</span>
+  </header>
+
+  <div class="actions">
+    <button class="primary">+ New design review</button>
+    <div class="join"><input id="code" placeholder="Room code or link"><button>Join</button></div>
+    <div class="filters">
+      <span class="chip on">Mine</span><span class="chip">Shared with me</span><span class="chip">All</span><span class="chip">Archived</span>
+    </div>
+  </div>
+
+  <div class="layout">
+    <section class="grid" aria-label="Design reviews">
+
+      <!-- card 1, selected -->
+      <article class="card sel">
+        <div class="thumb">
+          <span class="live">LIVE · 2 IN ROOM</span>
+          <svg viewBox="0 0 320 180" aria-hidden="true">
+            <ellipse cx="160" cy="150" rx="90" ry="10" fill="#dfe3ea"/>
+            <path d="M95 125 L160 60 L225 125 Z" fill="#c9ced8" stroke="#8e96a6" stroke-width="1.5"/>
+            <rect x="120" y="100" width="80" height="30" rx="4" fill="#b5bcc9" stroke="#8e96a6"/>
+            <circle cx="160" cy="92" r="9" fill="#ef4444" opacity=".85"/>
+          </svg>
+        </div>
+        <div class="body">
+          <div class="title">Door hinge, rev C</div>
+          <div class="meta">Rev C · last session 24 Sep · you own it</div>
+          <div class="mini"><svg viewBox="0 0 240 34" aria-hidden="true">
+            <line x1="6" y1="10" x2="234" y2="10" stroke="var(--main)" stroke-width="2"/>
+            <path d="M70 10 C90 10 90 26 110 26 L150 26 C170 26 170 10 190 10" fill="none" stroke="var(--varA)" stroke-width="2"/>
+            <circle cx="14" cy="10" r="4" fill="#fff" stroke="var(--main)" stroke-width="2"/>
+            <circle cx="70" cy="10" r="4" fill="#fff" stroke="var(--main)" stroke-width="2"/>
+            <circle cx="130" cy="26" r="4" fill="#fff" stroke="var(--varA)" stroke-width="2"/>
+            <circle cx="190" cy="10" r="5" fill="var(--adopt)"/>
+            <circle cx="226" cy="10" r="4" fill="var(--main)"/>
+          </svg></div>
+          <div class="counts"><span><i class="sq" style="background:var(--risk)"></i>3</span><span><i class="sq" style="background:var(--action)"></i>5</span><span><i class="sq" style="background:var(--why)"></i>2</span><span style="color:var(--muted);font-weight:500">open</span></div>
+        </div>
+      </article>
+
+      <!-- card 2 -->
+      <article class="card">
+        <div class="thumb">
+          <svg viewBox="0 0 320 180" aria-hidden="true">
+            <ellipse cx="160" cy="152" rx="100" ry="10" fill="#dfe3ea"/>
+            <circle cx="115" cy="118" r="28" fill="none" stroke="#8e96a6" stroke-width="5"/>
+            <circle cx="205" cy="118" r="28" fill="none" stroke="#8e96a6" stroke-width="5"/>
+            <path d="M115 118 L150 80 L205 118 M150 80 L175 80" stroke="#6b7385" stroke-width="5" fill="none" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="body">
+          <div class="title">Commuter bike frame</div>
+          <div class="meta">Rev B · last session 19 Sep · editor</div>
+          <div class="mini"><svg viewBox="0 0 240 34" aria-hidden="true">
+            <line x1="6" y1="10" x2="150" y2="10" stroke="var(--main)" stroke-width="2"/>
+            <path d="M60 10 C80 10 80 26 100 26 L170 26" fill="none" stroke="var(--varB)" stroke-width="2" stroke-dasharray="4 3"/>
+            <circle cx="14" cy="10" r="4" fill="#fff" stroke="var(--main)" stroke-width="2"/>
+            <circle cx="60" cy="10" r="4" fill="#fff" stroke="var(--main)" stroke-width="2"/>
+            <circle cx="142" cy="10" r="4" fill="var(--main)"/>
+            <circle cx="170" cy="26" r="4" fill="var(--drop)"/>
+          </svg></div>
+          <div class="counts"><span><i class="sq" style="background:var(--risk)"></i>1</span><span><i class="sq" style="background:var(--action)"></i>2</span><span><i class="sq" style="background:var(--why)"></i>0</span><span style="color:var(--muted);font-weight:500">open</span></div>
+        </div>
+      </article>
+
+      <!-- card 3 -->
+      <article class="card">
+        <div class="thumb">
+          <svg viewBox="0 0 320 180" aria-hidden="true">
+            <ellipse cx="160" cy="150" rx="80" ry="9" fill="#dfe3ea"/>
+            <path d="M110 70 Q160 30 210 70 L210 90 Q160 60 110 90 Z" fill="#c9ced8" stroke="#8e96a6"/>
+            <rect x="100" y="85" width="24" height="44" rx="10" fill="#b5bcc9" stroke="#8e96a6"/>
+            <rect x="196" y="85" width="24" height="44" rx="10" fill="#b5bcc9" stroke="#8e96a6"/>
+          </svg>
+        </div>
+        <div class="body">
+          <div class="title">Headset cushion</div>
+          <div class="meta">Rev A · no sessions yet · you own it</div>
+          <div class="mini"><svg viewBox="0 0 240 34" aria-hidden="true">
+            <line x1="6" y1="10" x2="40" y2="10" stroke="var(--line)" stroke-width="2" stroke-dasharray="3 3"/>
+            <text x="48" y="14" font-size="10" fill="var(--faint)" font-family="Inter">No sessions yet</text>
+          </svg></div>
+          <div class="counts"><span style="color:var(--muted);font-weight:500">No cards yet</span></div>
+        </div>
+      </article>
+
+    </section>
+
+    <!-- preview of the selected review -->
+    <aside class="preview" aria-label="Preview">
+      <div class="phead">
+        <span class="label">Design review</span>
+        <h2>Door hinge, rev C</h2>
+        <div class="row"><div class="people"><span class="av" style="background:#6366f1">C</span><span class="av" style="background:#f97316">O</span><span class="av" style="background:#10b981">B</span></div><span class="meta">3 people · 4 sessions · 1 variant</span></div>
+      </div>
+      <div class="pthumb">
+        <svg viewBox="0 0 320 180" aria-hidden="true">
+          <ellipse cx="160" cy="150" rx="90" ry="10" fill="#dfe3ea"/>
+          <path d="M95 125 L160 60 L225 125 Z" fill="#c9ced8" stroke="#8e96a6" stroke-width="1.5"/>
+          <rect x="120" y="100" width="80" height="30" rx="4" fill="#b5bcc9" stroke="#8e96a6"/>
+          <circle cx="160" cy="92" r="9" fill="#ef4444" opacity=".85"/>
+          <text x="172" y="88" font-size="9" fill="#7f1d1d" font-family="Inter">Hinge pin</text>
+        </svg>
+      </div>
+
+      <div class="sec">
+        <span class="label">Sessions</span>
+        <div class="map"><svg viewBox="0 0 340 92" role="img" aria-label="Main line S1 to S3, Variant A adopted after S2">
+          <line x1="20" y1="24" x2="320" y2="24" stroke="var(--main)" stroke-width="2.5"/>
+          <path d="M110 24 C135 24 135 66 160 66 L200 66 C225 66 225 24 250 24" fill="none" stroke="var(--varA)" stroke-width="2.5"/>
+          <g font-family="JetBrains Mono" font-size="10" fill="var(--ink)">
+            <circle cx="30" cy="24" r="8" fill="#fff" stroke="var(--main)" stroke-width="2.5"/><text x="23" y="10">S1</text>
+            <circle cx="110" cy="24" r="8" fill="#fff" stroke="var(--main)" stroke-width="2.5"/><text x="103" y="10">S2</text>
+            <circle cx="180" cy="66" r="8" fill="#fff" stroke="var(--varA)" stroke-width="2.5"/><text x="173" y="88">A1</text>
+            <circle cx="250" cy="24" r="9" fill="var(--adopt)"/><text x="232" y="10">adopted</text>
+            <circle cx="310" cy="24" r="8" fill="var(--main)" stroke="var(--main)" stroke-width="2.5"/><text x="303" y="10">S3</text>
+          </g>
+        </svg></div>
+        <div class="row"><span class="mono" style="font-weight:700">S3</span><span class="t">24 Sep · Coaco, Ben · 4 cards</span><button class="x" title="Delete this session">✕</button></div>
+        <div class="row"><span class="mono" style="font-weight:700">A1</span><span class="t">22 Sep · Steel hinge pin · 2 cards</span><button class="x" title="Delete this session">✕</button></div>
+        <div class="row"><span class="mono" style="font-weight:700">S2</span><span class="t">20 Sep · Coaco, Olga, Ben · 3 cards</span><button class="x" title="Delete this session">✕</button></div>
+      </div>
+
+      <div class="sec">
+        <span class="label">Last minutes · S3</span>
+        <div class="minutes"><b>Risks raised</b>Hinge pin wears after 1000 cycles (High)<b>Actions</b>☐ Cycle test the steel pin to 5000 — Ben (by 2 Oct)</div>
+      </div>
+
+      <div class="pact">
+        <button class="btn dark">Open room</button>
+        <button class="btn">Tracker</button>
+        <button class="btn danger">Delete review</button>
+      </div>
+    </aside>
+  </div>
+  <p class="callout">Your avatar colour moves to a small menu behind your name. The feature list and the left column go away.</p>
+</div>

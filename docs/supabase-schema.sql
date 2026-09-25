@@ -229,6 +229,25 @@ alter table review_curations
 alter table review_curations
   add column if not exists archived boolean not null default false;
 
+-- A picture of the review's own 3D scene (added 2026-09-25,
+-- docs/plan/15-sessions-and-variants.md batch BO).
+--
+-- A small JPEG data URL — no larger than 480x270 and about 60 KB of base64 —
+-- captured in the room from its WebGL canvas, and read back by the lobby's
+-- review cards and its preview so a list of reviews shows the scenes they are
+-- about instead of a row of identical placeholders. lib/reviews/thumbnail.ts
+-- holds both limits and refuses to write a capture that comes out bigger, so
+-- this column cannot quietly become where a megabyte-per-review image
+-- collection lives.
+--
+-- NULLABLE and with no default, which is what makes it free to apply: every
+-- review that already exists keeps its row exactly as it was, and an install
+-- that has not re-applied this file since batch BO simply has no thumbnails.
+-- Idempotent like the blocks above it, because install.sh re-applies this whole
+-- file on every run and an upgrade is exactly a second run of it.
+alter table review_curations
+  add column if not exists thumbnail text;
+
 create index if not exists review_curations_updated_at_idx
   on review_curations (updated_at desc);
 
@@ -239,6 +258,20 @@ create trigger review_curations_updated_at
 
 alter table review_curations enable row level security;
 
+-- DELETE has no policy (removed 2026-09-25, docs/plan/15-sessions-and-variants.md
+-- batch BN), and the drop above is what takes the old one away on an upgrade:
+-- install.sh re-applies this whole file on every run, so a policy that is dropped
+-- here and never re-created is gone from every install that has been upgraded.
+--
+-- Deleting a design review is not one row. It is the review's meetings, the cards
+-- raised in them and their status history, its lines, its roster and its stored
+-- revisions, and those have to agree with each other — half of it is worse than
+-- none, because a review whose curation row is gone leaves sessions and cards in
+-- the tracker that no review can be opened on. So the delete is
+-- `delete_review(p_review)` further down this file, called by api/reviews/delete.ts
+-- with the service role, which is also where the caller's role is checked. The
+-- revoke after the table-wide grant below is the second mechanism, the way
+-- review_lines' is.
 drop policy if exists "public read curations" on review_curations;
 drop policy if exists "public insert curations" on review_curations;
 drop policy if exists "public update curations" on review_curations;
@@ -246,7 +279,6 @@ drop policy if exists "public delete curations" on review_curations;
 create policy "public read curations"   on review_curations for select using (true);
 create policy "public insert curations" on review_curations for insert with check (true);
 create policy "public update curations" on review_curations for update using (true);
-create policy "public delete curations" on review_curations for delete using (true);
 
 -- Enable Supabase Realtime so multiple curators editing the same review see
 -- each other's changes live (used by the setup page to merge concurrent
@@ -955,6 +987,136 @@ begin
   end if;
 end $$;
 
+-- ─── Deleting a design review, and deleting one of its sessions ─────────────
+--
+-- Added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BN. Two
+-- functions for the same reason adopt and drop are functions: each one writes
+-- several tables that have to agree with each other, and one call is one
+-- transaction, which is what makes a half-delete impossible rather than merely
+-- unlikely.
+--
+--   delete_review           everything the review is: the status history of its
+--                           cards, its cards, its lines, its meetings, its
+--                           roster, its stored revisions, and its own row.
+--   delete_review_session   one meeting: its cards and their status history, and
+--                           the meeting's own row.
+--
+-- THE ORDER OF THE DELETES IS THE POINT. review_lines.parent_session_id is a
+-- foreign key to tracker_sessions(id), so a review's lines have to go before its
+-- meetings or the delete is refused by the key and nothing is removed at all.
+-- tracker_items and tracker_status_history both cascade, and are deleted
+-- explicitly anyway: a delete that only works because of a cascade two tables
+-- away is one that silently stops working when that cascade is edited.
+--
+-- STORED MODEL FILES ARE NOT DELETED, and cannot be from here. A file in model
+-- storage is content-addressed — model_revisions.hash is its name — so the same
+-- bytes can be the Rev B of two different reviews, and removing them for one
+-- would break the other. The rows go; the files stay, exactly as they do for a
+-- revision the admin console deletes.
+--
+-- SESSION NUMBERS ARE NOT REUSED AND NOT RENUMBERED. tracker_sessions.seq is left
+-- alone, so a review that deletes S2 keeps an S1 and an S3: a card that says it
+-- was raised in S3 must go on saying that, and renumbering would silently change
+-- what every card raised after the deleted meeting claims about itself.
+--
+-- BOTH ARE `security definer` AND EXECUTABLE BY THE SERVICE ROLE ALONE (the
+-- revokes are immediately below), the same pattern as adopt_review_line: EXECUTE
+-- goes to PUBLIC by default on a new function and the table-level grants further
+-- down this file do not cover functions, so without the revoke the published anon
+-- key could delete any review on the install.
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function delete_review(p_review text) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_found boolean;
+  v_items int;
+  v_sessions int;
+begin
+  select exists (select 1 from review_curations where id = p_review) into v_found;
+  if not v_found then
+    return jsonb_build_object('ok', false, 'error', 'no_such_review');
+  end if;
+
+  select count(*) into v_items from tracker_items where review_id = p_review;
+  select count(*) into v_sessions from tracker_sessions where review_id = p_review;
+
+  delete from tracker_status_history
+   where item_id in (select id from tracker_items where review_id = p_review);
+  delete from tracker_items where review_id = p_review;
+  -- Before the meetings, because review_lines.parent_session_id references them.
+  delete from review_lines where review_id = p_review;
+  delete from tracker_sessions where review_id = p_review;
+  delete from review_members where review_id = p_review;
+  delete from model_revisions where review_id = p_review;
+  delete from review_curations where id = p_review;
+
+  return jsonb_build_object('ok', true, 'items', v_items, 'sessions', v_sessions);
+end;
+$$;
+
+create or replace function delete_review_session(p_session uuid) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_found boolean;
+  v_items int;
+  v_variant review_lines;
+begin
+  select exists (select 1 from tracker_sessions where id = p_session) into v_found;
+  if not v_found then
+    return jsonb_build_object('ok', false, 'error', 'no_such_session');
+  end if;
+
+  -- A variant leaves FROM this meeting, and the map draws its line starting at
+  -- this stop. Refused rather than repaired: which of the two should go is a
+  -- decision about the variant, and it belongs to the people exploring it. The
+  -- api asks the same question first so that it can name the variant in the
+  -- refusal; this check is the one that cannot be raced, because it is inside the
+  -- same transaction as the delete.
+  select * into v_variant from review_lines
+   where parent_session_id = p_session
+   order by created_at
+   limit 1;
+  if found then
+    return jsonb_build_object(
+      'ok', false,
+      'error', 'variant_starts_here',
+      'lineId', v_variant.id,
+      'kind', v_variant.kind,
+      'letter', v_variant.letter,
+      'name', v_variant.name
+    );
+  end if;
+
+  select count(*) into v_items from tracker_items where session_id = p_session;
+
+  delete from tracker_status_history
+   where item_id in (select id from tracker_items where session_id = p_session);
+  delete from tracker_items where session_id = p_session;
+  delete from tracker_sessions where id = p_session;
+
+  return jsonb_build_object('ok', true, 'items', v_items);
+end;
+$$;
+
+-- The service role is the ONLY caller, for the reason given above.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on function public.delete_review(text) from public, anon, authenticated;
+    revoke all on function public.delete_review_session(uuid) from public, anon, authenticated;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.delete_review(text) to service_role;
+    grant execute on function public.delete_review_session(uuid) to service_role;
+  end if;
+end $$;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Application settings (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md
 -- batch BF). One row per setting, written from the admin console's AI section
@@ -1051,6 +1213,30 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
     revoke update, delete on public.review_lines from anon, authenticated;
+  end if;
+end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- …and review_curations loses its DELETE, for the same reason and in the same
+-- position (added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BN).
+-- The grant above has just handed the two browser roles a DELETE that the absence
+-- of a delete policy already refuses; a table grant is checked BEFORE row level
+-- security, so without this revoke the missing policy would be the only thing
+-- between the published anon key and every design review on the install.
+--
+-- Deleting a review is `delete_review(p_review)` — the review's meetings, cards,
+-- lines, roster and revisions in one transaction — called by
+-- api/reviews/delete.ts with the service role, which is also where the caller's
+-- role is checked. Two mechanisms agreeing is the pattern this file uses for
+-- app_settings and for review_lines.
+--
+-- SELECT, INSERT and UPDATE stay: a 'none' install writes its curation rows with
+-- the anon key, and every room reads its own.
+-- ─────────────────────────────────────────────────────────────────────────────
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke delete on public.review_curations from anon, authenticated;
   end if;
 end $$;
 

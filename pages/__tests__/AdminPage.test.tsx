@@ -1,17 +1,18 @@
 // Tests for the admin page: gate states, the reviews section, and the models
 // section. The Reviews section now fetches from /api/admin/reviews (the admin
-// endpoint) instead of curationsRepo directly; the toggle-listed and delete
-// actions still go through curationsRepo (supabase mock).
+// endpoint) instead of curationsRepo directly; the toggle-listed action still goes
+// through curationsRepo (supabase mock) and the delete goes through
+// /api/reviews/delete, because a design review is not one row to remove — its
+// meetings, cards, lines and roster go with it, in one transaction, and the
+// published anon key is no longer allowed to delete any of it.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
-// Mock supabase for the curationsRepo calls (setCurationListed, deleteCuration).
+// Mock supabase for the curationsRepo calls that still go through it (setCurationListed).
 const mockUpdate = vi.fn();
-const mockDelete = vi.fn();
-const mockDeleteEq = vi.fn();
 const mockUpdateEq = vi.fn();
 
 vi.mock('../../lib/supabase', () => ({
@@ -20,11 +21,14 @@ vi.mock('../../lib/supabase', () => ({
       if (table === 'review_curations') {
         return {
           update: mockUpdate,
-          delete: mockDelete,
         };
       }
       return {};
     },
+    // lib/reviews/deleteClient asks for a session to attach; the admin console has
+    // none to give, and a client with no token is exactly what an install with no
+    // accounts sends.
+    auth: { getSession: vi.fn(async () => ({ data: { session: null } })) },
   },
   supabaseConfigured: true,
 }));
@@ -148,6 +152,12 @@ function routeFetch(overrides: {
         headers: { 'Content-Type': 'application/json' },
       });
     }
+    if (url.includes('/api/reviews/delete')) {
+      return new Response(
+        JSON.stringify({ ok: true, action: 'review', reviewId: 'rev-1', sessions: 2, items: 5 }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
     return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
 }
@@ -156,11 +166,9 @@ describe('AdminPage', () => {
   beforeEach(() => {
     resetAdminGateForTests();
     vi.clearAllMocks();
-    // eq chains for curationsRepo (setCurationListed, deleteCuration).
+    // eq chains for curationsRepo (setCurationListed).
     mockUpdate.mockReturnValue({ eq: mockUpdateEq });
     mockUpdateEq.mockResolvedValue({ error: null });
-    mockDelete.mockReturnValue({ eq: mockDeleteEq });
-    mockDeleteEq.mockResolvedValue({ error: null });
   });
   afterEach(() => {
     cleanup();
@@ -220,8 +228,9 @@ describe('AdminPage', () => {
     expect(screen.getByText(/1 revision/)).toBeTruthy();
   });
 
-  it('delete requires two clicks before deleteCuration is called', async () => {
-    vi.stubGlobal('fetch', routeFetch());
+  it('delete requires two clicks, and then asks the endpoint rather than the database', async () => {
+    const fetchMock = routeFetch();
+    vi.stubGlobal('fetch', fetchMock);
 
     renderAdmin();
 
@@ -236,12 +245,24 @@ describe('AdminPage', () => {
       expect(screen.getByText('Confirm delete')).toBeTruthy();
     });
 
+    const sent = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/reviews/delete'));
+    // The first click only asks. A delete that fires on the click that reveals the
+    // confirmation is a delete that happens to anybody who misclicks.
+    expect(sent()).toHaveLength(0);
+
     const confirmBtn = screen.getByText('Confirm delete');
     fireEvent.click(confirmBtn);
 
     await vi.waitFor(() => {
-      expect(mockDelete).toHaveBeenCalled();
+      expect(sent().length).toBeGreaterThan(0);
     });
+    // The whole review goes, not one row: api/reviews/delete.ts removes its meetings,
+    // cards, lines and roster with it, in one transaction. The admin console no longer
+    // deletes a curation row and leaves a tracker full of cards nobody can open.
+    const body = JSON.parse(String(sent()[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body['action']).toBe('review');
+    expect(body['reviewId']).toBe('rev-1');
   });
 
   it('renders the models section when navigated to', async () => {

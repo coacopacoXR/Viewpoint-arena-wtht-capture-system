@@ -1,24 +1,34 @@
-// The lobby's "New design review" — the one button that brings a review into existence.
+// One button starts a design review, and it opens the room with Edit on.
 //
-// docs/plan/14-rooms-models-admin-ai.md batch BH, rewritten for batch BO of
-// docs/plan/15-sessions-and-variants.md. The curate page is gone; its tabs are the
-// room's side panel with Edit on. What that leaves this button responsible for is a
-// ROW: a review with no review_curations row opens with nothing to edit, so the row is
-// written FIRST and the room is entered at the id the row was written with.
+// This file's subject used to be the DIFFERENCE between two buttons. docs/plan/15-
+// sessions-and-variants.md batch BN gave the lobby a "New session" that wrote a
+// review_curations row exactly the way "New design review →" did, which fixed the bug
+// the user had reported — an admin (or, on an install with no accounts, the meeting
+// host) got the Edit button, because `can(role, 'editReview')` is about the PERSON, and
+// then found a panel saying there was no design review to edit; views and pins could
+// not be saved, and a participant in the same room was told import was locked because
+// nobody owned the review. But it left the two buttons differing in one respect only:
+// whether the room opened with `?edit=1`.
 //
-// Batch BO also took away the lobby's second creating button. "New session" (batch BN)
-// had become this button minus `?edit=1`, and one button remains; the merged behaviour
-// is what lobbyNewSession.test.tsx now pins. What is pinned here is
+// Batch BO removed "New session". A second creating button whose whole meaning was a
+// query parameter is a choice with one right answer, and the answer is Edit on: every
+// room started from the lobby IS a design review, and the person who just created it is
+// the person about to put a model in it — without Edit they land in a room where the
+// import is locked until somebody else hands it over. So the difference this file was
+// written about is GONE, and what is pinned here is the merged behaviour on the one
+// remaining button, `data-testid="new-design-review"`:
 //
-//   * the id the row was created with is the id in the address bar — creating the row
-//     before navigating is the whole point, because a link that works for anybody it is
-//     sent to has to work from the first moment the review exists
-//   * a refused write STILL opens the room, with a local draft to edit: the default
-//     self-hosted install has no database configured, so a refusal is its normal answer
-//     and not an incident
-//   * two clicks make one review (a double-click must not orphan a row)
-//   * and a review that ALREADY exists is opened WITHOUT `?edit=1`. Edit on arrival is
-//     the creator's, and this button is the only one that hands it out.
+//   * it is the only thing on the page that creates a review
+//   * the id the row was written with is the id in the address bar, and the room opens
+//     WITH `?edit=1`
+//   * the draft handed to the room is the one that was written, so the row and the panel
+//     agree about what the review is called
+//   * a refused write still opens the room: the default self-hosted install has no
+//     database configured, so a refusal is its normal answer and not an incident
+//   * no name, no review — nobody enters a room nameless
+//   * two clicks make one review
+//   * and "Join" creates nothing, but does carry a pasted link's variant through to the
+//     address it navigates to
 //
 // The mocking setup is the one all four lobby test files share: a fake Supabase that
 // applies the filters it is handed rather than answering a canned list, so
@@ -28,11 +38,10 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
-import type { MyReview } from '../../lib/reviewParticipantsRepo';
-// The real store, not a mock: what the room is handed when the database refused
-// the row is the point of two of the tests below.
+// The real store, not a mock: what the room is handed is the point of two of the tests.
 import { useReviewSetupStore } from '../../lib/reviewSetupStore';
 import { resetLineCache } from '../../lib/reviews/linesRepo';
+import type { MyReview } from '../../lib/reviewParticipantsRepo';
 
 /** The tables this lobby reads, as rows. Emptied between tests. */
 const db = vi.hoisted(() => ({
@@ -119,15 +128,13 @@ const { createReviewMock, configHolder } = vi.hoisted(() => ({
 }));
 
 // Only the two functions LobbyPage imports. The grid does NOT come out of
-// curationsRepo any more — lib/lobby/useLobbyData reads review_curations itself — so
-// listRecentCurations is no longer part of this page's surface.
+// curationsRepo any more — lib/lobby/useLobbyData reads review_curations itself.
 vi.mock('../../lib/curationsRepo', () => ({
   createReview: (reviewId: string) => createReviewMock(reviewId),
   getCurationSummary: vi.fn(async () => null),
 }));
 
-// Not exercised by this button — a review being "mine" needs a deployment with
-// accounts and a signed-in browser — but useLobbyData calls it, so it has to answer.
+// Not exercised by this button, but useLobbyData calls it, so the mock has to answer.
 vi.mock('../../lib/reviewParticipantsRepo', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/reviewParticipantsRepo')>()),
   listMyReviews: vi.fn(async () => [] as MyReview[]),
@@ -164,30 +171,9 @@ const RoomProbe: React.FC = () => {
   );
 };
 
-/** A review_curations row. Every column useLobbyData reads is explicit: the fake
- *  database compares values and applies no column defaults. */
-function curation(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 'room-9',
-    title: 'A design review that already exists',
-    description: '',
-    asset: null,
-    thumbnail: null,
-    owner_id: null,
-    archived: false,
-    listed: true,
-    created_at: '2026-09-20T00:00:00Z',
-    updated_at: '2026-09-22T00:00:00Z',
-    ...overrides,
-  };
-}
-
 /** A typed name, the way every other lobby test sets one. */
-function signIn(overrides: Record<string, unknown> = {}) {
-  localStorage.setItem(
-    'vp_user',
-    JSON.stringify({ name: 'Alex Chen', color: '#4F8EF7', ...overrides }),
-  );
+function signIn() {
+  localStorage.setItem('vp_user', JSON.stringify({ name: 'Alex Chen', color: '#4F8EF7' }));
 }
 
 async function renderLobby() {
@@ -199,14 +185,12 @@ async function renderLobby() {
       </Routes>
     </MemoryRouter>,
   );
-  // The grid arrives by promise, and so does the selected review's own detail — the
-  // preview panel reads it only once the grid has answered with an id to ask about.
+  // The grid arrives by promise, and so does the selected review's own detail.
   await act(async () => {});
   await act(async () => {});
 }
 
-/** Held by test id rather than looked up by name: while a create is in flight the
- *  label changes to "Creating…", so a name query would not find it. */
+/** Held by test id, because the label changes to "Creating…" while a write is in flight. */
 function newReviewButton(): HTMLElement {
   return screen.getByTestId('new-design-review');
 }
@@ -224,50 +208,15 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-describe('the button itself', () => {
-  it('says "New design review", and the old wording is gone', async () => {
+describe('the lobby has one button that starts a design review', () => {
+  it('offers no second way in, and this one opens the room with Edit on', async () => {
     await renderLobby();
 
-    expect(newReviewButton()).toBeInTheDocument();
+    // "New session" and "Start new session" are both gone. A second creating button is
+    // not a shortcut, it is a second answer to "what happens when I press this", and
+    // the two used to differ only in a query parameter.
+    expect(screen.queryByRole('button', { name: /new session/i })).toBeNull();
     expect(screen.getByRole('button', { name: 'New design review' })).toBeInTheDocument();
-    expect(screen.queryByText('Curate a design review')).toBeNull();
-  });
-
-  it('is what the empty grid points at', async () => {
-    await renderLobby();
-
-    // With no account behind the name the grid opens on "All", which is the one chip
-    // whose empty state offers a way out — and it names the button, so the two have to
-    // keep agreeing.
-    expect(screen.queryByTestId('review-card')).toBeNull();
-    expect(screen.getByText('No design reviews yet.')).toBeInTheDocument();
-    const hint = screen.getByText(/it saves as you go and appears here/);
-    expect(hint.textContent).toContain('New design review');
-    expect(screen.queryByText('Curate a design review')).toBeNull();
-  });
-});
-
-describe('creating a review', () => {
-  it('refuses without a name, and creates nothing', async () => {
-    localStorage.clear();
-    await renderLobby();
-
-    // The name rule survived the redesign, and so did its placement: with no account
-    // behind this browser the field is drawn INLINE above the actions, not folded into
-    // the identity chip's menu where nobody would find it.
-    expect(screen.getByTestId('lobby-name-field')).toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
-
-    expect(screen.getByText('Enter your name first.')).toBeInTheDocument();
-    expect(createReviewMock).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('room-path')).toBeNull();
-  });
-
-  it('writes the row first, then opens that same review with Edit on', async () => {
-    await renderLobby();
 
     await act(async () => {
       fireEvent.click(newReviewButton());
@@ -275,38 +224,12 @@ describe('creating a review', () => {
 
     expect(createReviewMock).toHaveBeenCalledTimes(1);
     const reviewId = createReviewMock.mock.calls[0][0];
-    expect(reviewId).not.toBe('');
-    // The id in the address bar is the id the row was written with: a link that is
-    // shared from here opens the review that exists, not an empty room.
     expect(screen.getByTestId('room-path').textContent).toBe(`/room/${reviewId}`);
-    // And WITH Edit on, which is the half of "New session" this button absorbed: the
-    // person who just created a review is the one about to put a model in it.
+    // Edit on, which is the half of "New session" this button absorbed: the creator is
+    // the person about to put a model in the review, and without it the import is
+    // locked until somebody inside hands it over.
     expect(screen.getByTestId('room-search').textContent).toBe('?edit=1');
-    // enterRoom, not a bare navigate: the identity is written first.
     expect(sessionStorage.getItem('vp_enteredRoom')).toBe(reviewId);
-    expect(JSON.parse(localStorage.getItem('vp_user') ?? '{}').name).toBe('Alex Chen');
-  });
-
-  it('still opens the room when the database refused the row, with a local draft to edit', async () => {
-    createReviewMock.mockResolvedValue(null);
-    await renderLobby();
-
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
-
-    // The default self-hosted install has no database configured, so a refused write is
-    // its NORMAL answer, not an incident. Blocking the room there would take this
-    // button away from the one install that has no other way to start a review — and
-    // the curate page it replaces never needed a row to work.
-    const reviewId = createReviewMock.mock.calls[0][0];
-    expect(screen.getByTestId('room-path').textContent).toBe(`/room/${reviewId}`);
-    expect(screen.getByTestId('room-search').textContent).toBe('?edit=1');
-    // RoomPage reads the local draft FIRST, so the side panel has a review to show
-    // rather than "this room has no design review to edit yet".
-    const draft = useReviewSetupStore.getState().draft;
-    expect(draft?.reviewId).toBe(reviewId);
-    expect(draft?.title).toBe('Untitled design review');
   });
 
   it('hands the room the draft that was written, so the row and the panel agree', async () => {
@@ -318,7 +241,42 @@ describe('creating a review', () => {
       fireEvent.click(newReviewButton());
     });
 
+    // RoomPage reads the handover draft FIRST, so the side panel has a review to show
+    // rather than a panel with nothing in it.
     expect(useReviewSetupStore.getState().draft).toEqual(written);
+  });
+
+  it('still opens the room when the database refused the row, with a local draft to edit', async () => {
+    createReviewMock.mockResolvedValue(null);
+    await renderLobby();
+
+    await act(async () => {
+      fireEvent.click(newReviewButton());
+    });
+
+    // The default self-hosted install has no database configured, so a refused write is
+    // its NORMAL answer, not an incident. Blocking the room there would take this button
+    // away from the one install that has no other way to start a meeting. The room's own
+    // edit panel creates the row if it can, and says plainly what failed if it cannot.
+    const reviewId = createReviewMock.mock.calls[0][0];
+    expect(screen.getByTestId('room-path').textContent).toBe(`/room/${reviewId}`);
+    expect(screen.getByTestId('room-search').textContent).toBe('?edit=1');
+    const draft = useReviewSetupStore.getState().draft;
+    expect(draft?.reviewId).toBe(reviewId);
+    expect(draft?.title).toBe('Untitled design review');
+  });
+
+  it('refuses without a name, and creates nothing', async () => {
+    localStorage.clear();
+    await renderLobby();
+
+    await act(async () => {
+      fireEvent.click(newReviewButton());
+    });
+
+    expect(screen.getByText('Enter your name first.')).toBeInTheDocument();
+    expect(createReviewMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('room-path')).toBeNull();
   });
 
   it('makes one review when the button is clicked twice', async () => {
@@ -335,11 +293,9 @@ describe('creating a review', () => {
       fireEvent.click(button);
     });
     expect(button).toBeDisabled();
-    expect(button).toHaveTextContent('Creating…');
 
-    // The button is disabled while a create is in flight, and the handler also returns
-    // early on `creating` — either one alone would stop the second row, and a second
-    // row is a review nobody will ever open again.
+    // Either the disabled button or the handler's own early return would stop the second
+    // row, and a second row is a review nobody will ever open again.
     await act(async () => {
       fireEvent.click(button);
     });
@@ -350,32 +306,41 @@ describe('creating a review', () => {
     });
 
     expect(createReviewMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('room-path').textContent).toBe(
-      `/room/${createReviewMock.mock.calls[0][0]}`,
-    );
-    expect(screen.getByTestId('room-search').textContent).toBe('?edit=1');
   });
-});
 
-describe('a review that already exists', () => {
-  it('opens it as a card in the grid, without Edit, and creates nothing', async () => {
-    db.tables = { review_curations: [curation({ id: 'room-9' })] };
+  it('leaves "Join" alone, which still opens somebody else’s room by its code', async () => {
+    // Only the button that STARTS a review writes a row. Joining one must not: the
+    // review either exists already or the person who started it created it, and minting
+    // a room out of a mistyped link is how a lobby fills up with reviews nobody opens.
     await renderLobby();
 
-    // The grid is the row, and the preview beside it is the way in: there is no
-    // per-row "Resume editing" action any more, and no second creating button.
-    expect(screen.getByTestId('review-card')).toBeInTheDocument();
-
+    fireEvent.change(screen.getByLabelText('Room code or link'), { target: { value: 'abc123' } });
     await act(async () => {
-      fireEvent.click(screen.getByTestId('preview-open-room'));
+      fireEvent.click(screen.getByTestId('join-button'));
     });
 
     expect(createReviewMock).not.toHaveBeenCalled();
-    expect(screen.getByTestId('room-path').textContent).toBe('/room/room-9');
-    // `?edit=1` belongs to the person who CREATED the review. Somebody opening one
-    // that already exists arrives as a participant, and Edit is handed over from
-    // inside the room the way it always was.
+    expect(screen.getByTestId('room-path').textContent).toBe('/room/abc123');
+    // Joining is not creating, so no Edit either.
     expect(screen.getByTestId('room-search').textContent).toBe('');
-    expect(sessionStorage.getItem('vp_enteredRoom')).toBe('room-9');
+  });
+
+  it('carries a pasted link’s variant through to the room it opens', async () => {
+    // The box takes the link somebody was sent, whole. Dropping the `?line=` would put
+    // a person invited to Variant A into the main line's room — a different meeting
+    // looking at a different model — so the address the lobby navigates to is
+    // lib/reviews/lines.roomPath's spelling, not one built here.
+    await renderLobby();
+
+    fireEvent.change(screen.getByLabelText('Room code or link'), {
+      target: { value: 'https://viewpoint.example.test/room/abc123?line=line-variant-a' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('join-button'));
+    });
+
+    expect(createReviewMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('room-path').textContent).toBe('/room/abc123');
+    expect(screen.getByTestId('room-search').textContent).toBe('?line=line-variant-a');
   });
 });
