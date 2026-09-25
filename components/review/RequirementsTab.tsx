@@ -59,7 +59,7 @@ export const RequirementsTab: React.FC<{
               value={req.description}
               onChange={(e) => actions.updateRequirement(req.id, { description: e.target.value })}
               placeholder="Requirement description"
-              className="flex-1 bg-transparent text-xs outline-none placeholder:text-gray-600 min-w-0"
+              className="flex-1 bg-transparent text-xs text-gray-100 outline-none placeholder:text-gray-600 min-w-0"
             />
             <button onClick={() => actions.removeRequirement(req.id)} className="text-gray-500 hover:text-red-400 shrink-0">
               <Trash2 size={13} />

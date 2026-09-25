@@ -588,9 +588,7 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
 
       updateRequirement: (id, patch) => set((s) => {
         if (!s.draft) return s;
-        const cleaned = patch.code !== undefined
-          ? { ...patch, code: patch.code.trim() || s.draft.requirements.find((r) => r.id === id)?.code || '' }
-          : patch;
+        const cleaned = patch; // taken as typed — see lib/activeReviewStore updateRequirement
         const next: ReviewDraft = {
           ...s.draft,
           requirements: s.draft.requirements.map((r) => r.id === id ? { ...r, ...cleaned } : r),

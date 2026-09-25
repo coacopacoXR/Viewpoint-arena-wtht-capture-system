@@ -744,7 +744,10 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     const id = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
       ? crypto.randomUUID()
       : Math.random().toString(36).slice(2);
-    const code = req.code.trim() || `REQ-${id.slice(0, 4).toUpperCase()}`;
+    // No invented code: the user found a pre-filled "REQ-3F2A" in every new
+    // requirement unwelcome (2026-09-25). The code is only ever displayed, so an
+    // empty one is fine and the field shows its placeholder.
+    const code = req.code.trim();
     const next: ReviewDraft = {
       ...cfg,
       requirements: [...cfg.requirements, { ...req, id, code }],
@@ -758,12 +761,12 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
   updateRequirement: (id, patch) => {
     const cfg = get().config;
     if (!cfg) return null;
-    const cleaned = patch.code !== undefined
-      ? { ...patch, code: patch.code.trim() || cfg.requirements.find((r) => r.id === id)?.code || '' }
-      : patch;
+    // Taken as typed. It used to fall back to the old code whenever the field was
+    // empty, so the box could never be cleared to type a new name (user,
+    // 2026-09-25) — and trimming on every keystroke ate the space being typed.
     const next: ReviewDraft = {
       ...cfg,
-      requirements: cfg.requirements.map((r) => r.id === id ? { ...r, ...cleaned } : r),
+      requirements: cfg.requirements.map((r) => r.id === id ? { ...r, ...patch } : r),
       updatedAt: Date.now(),
     };
     applyEdit(set, next);

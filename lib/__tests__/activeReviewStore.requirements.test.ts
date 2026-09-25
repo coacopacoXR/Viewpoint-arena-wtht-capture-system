@@ -98,3 +98,22 @@ describe('activeReviewStore — requirements', () => {
     expect(useActiveReviewStore.getState().removeRequirement('r1')).toBeNull();
   });
 });
+
+// User, 2026-09-25: a new requirement came pre-named "REQ-xxxx", and its code box
+// could never be emptied to type a new one.
+describe('requirement codes are the user\'s', () => {
+  it('adds a requirement with no invented code, and lets the code be cleared and retyped', () => {
+    useActiveReviewStore.getState().setConfig(baseDraft({ requirements: [] }));
+    const added = useActiveReviewStore.getState().addRequirement({
+      code: '', description: '', category: '', status: 'PENDING',
+    });
+    const req = added!.requirements[0];
+    expect(req.code).toBe('');
+
+    useActiveReviewStore.getState().updateRequirement(req.id, { code: 'HINGE 1' });
+    useActiveReviewStore.getState().updateRequirement(req.id, { code: '' });
+    expect(useActiveReviewStore.getState().config!.requirements[0].code).toBe('');
+    useActiveReviewStore.getState().updateRequirement(req.id, { code: 'Load ' });
+    expect(useActiveReviewStore.getState().config!.requirements[0].code).toBe('Load ');
+  });
+});
