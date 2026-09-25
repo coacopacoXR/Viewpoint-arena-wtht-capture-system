@@ -10,3 +10,20 @@ edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/aggregate.test.ts:
 edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/aggregate.test.ts:generic-api-key:243
 edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/aggregate.test.ts:generic-api-key:245
 edd21bf2a7760340f405f1aa161d70335f943baa:lib/health/__tests__/aggregate.test.ts:generic-api-key:246
+
+# Test fixtures from plans 13-14 (2026-09-24/25), all fake and all in test files:
+# the placeholder signing secret "test-jwt-secret-long-enough-for-hs256" (HS256
+# needs 32+ characters, which is what makes it secret-shaped), and two JWT-shaped
+# strings whose signature part is literally "first-signature"/"second-signature".
+# Listed by fingerprint, as above, so any new secret-shaped string is still flagged.
+36e6fb8debdfa4a2194c2f91679d60fe957db221:api/reviews/__tests__/members.test.ts:generic-api-key:32
+8e8c4f44a71a9badf023a6c8bbbd1ef62cbce9db:lib/__tests__/presenceAccessToken.test.tsx:jwt:88
+8e8c4f44a71a9badf023a6c8bbbd1ef62cbce9db:lib/__tests__/presenceAccessToken.test.tsx:jwt:89
+98092f40eb38eb1289cac490fca010b0ccda8528:lib/ai/__tests__/secretBox.test.ts:generic-api-key:16
+98092f40eb38eb1289cac490fca010b0ccda8528:lib/ai/__tests__/settingsStore.test.ts:generic-api-key:27
+d6b5699e8bc025329b8bd57c5ac96ab8b970b05b:api/admin/__tests__/models.test.ts:generic-api-key:11
+d6b5699e8bc025329b8bd57c5ac96ab8b970b05b:api/admin/__tests__/reviews.test.ts:generic-api-key:12
+f8404a6612e9efcbf1b4f7eb7a594d68ac58ed4f:api/_lib/__tests__/adminAuth.test.ts:generic-api-key:16
+f8404a6612e9efcbf1b4f7eb7a594d68ac58ed4f:api/_lib/__tests__/serviceRole.test.ts:generic-api-key:11
+f8404a6612e9efcbf1b4f7eb7a594d68ac58ed4f:api/admin/__tests__/claim.test.ts:generic-api-key:11
+f8404a6612e9efcbf1b4f7eb7a594d68ac58ed4f:api/admin/__tests__/users.test.ts:generic-api-key:12
