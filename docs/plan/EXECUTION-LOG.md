@@ -931,8 +931,8 @@ and committed:
 admin) is the only one. The install is left in accounts mode, as the user asked.
 
 **Open:**
-- The disappearing Import button: not reproduced. Waiting on host/guest,
-  page, and window size.
+- The disappearing Import button: resolved; the user retested after the
+  import rework and it works.
 - Model transforms persist in room storage, not in the review row.
 - Adding a pin inside the room has no UI yet.
 - The main bundle is 1.2 MB, so lazy-load ReviewEditPanel.

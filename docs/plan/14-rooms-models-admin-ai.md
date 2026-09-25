@@ -125,7 +125,9 @@ screen shows "key set · ends in …7f2a"). Settings made here override
 
 ## Added 2026-09-24 (afternoon), from the user
 
-- **Bug: the Import 3D Model button disappears after importing.** Not
+- **Bug: the Import 3D Model button disappears after importing.** RESOLVED —
+  the user retested after BB/BH reworked the import flow (2026-09-25) and it
+  works. Never reproduced before that; original note kept below. Not
   reproduced yet on the install: a STEP assembly and a 27-part GLB were
   imported by a signed-in host, then parts pointed at and the tree scrolled,
   and the button stayed visible and in place each time. Waiting on the exact
