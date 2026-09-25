@@ -26,8 +26,23 @@
 // database, a review whose row predates the column — and all of them happen with
 // a person standing in a working room. A thumbnail is a nicety there; losing the
 // room over one is not a trade anybody would make.
+//
+// WHAT IT IS A PICTURE OF, batch BP. Not the room's own view. The camera a person is
+// looking through is wherever they left it — twenty units back, or turned to the door,
+// or the left half of a split screen — and framing the card with it produced the
+// picture the user reported from live testing: the model a speck in a wide grey floor.
+// So the capture renders one frame through a camera of ITS OWN, posed on the bounding
+// box of the review's models by the same arithmetic the lobby's "Turn in 3D" viewer
+// frames with (lib/scene/frameBox.ts), from the same three-quarter angle and slightly
+// above. The room's camera is never read and never written, so there is nothing to
+// restore. The grid, the floor shadow, the agents, the lasers and the pins are still
+// in the frame — they are what makes it look like the room — they just no longer
+// decide what is in the middle of it, or how big it is.
 
+import * as THREE from 'three';
 import { supabase, supabaseConfigured } from '../supabase';
+import { FRAME_FOV, applyFrame, frameBox } from '../scene/frameBox';
+import { reviewModelBounds } from '../scene/modelBounds';
 
 /** The picture the lobby stores: a JPEG data URL, small enough to read in a list. */
 export const THUMBNAIL_MAX_WIDTH = 480;
@@ -194,10 +209,69 @@ export function downscaleJpeg(
   }
 }
 
-/** The part of a three.js WebGLRenderer this file touches. */
+/**
+ * The part of a three.js WebGLRenderer this file touches.
+ *
+ * Structural, like the canvas and the context above it, so a test can hand this a fake
+ * and the arithmetic and the refusals stay testable with no WebGL anywhere. A real
+ * THREE.WebGLRenderer satisfies it.
+ *
+ * The five state members are here because the room's own frame loop leaves the renderer
+ * configured for whatever view the person is in, and a capture that rendered through
+ * that configuration would not be a picture of the model. components/Scene/
+ * ViewpointCanvas.tsx sets `autoClear = false` and then clears by hand every frame, so
+ * a render that did not turn clearing back on would draw the model ON TOP of the frame
+ * the person is looking at — two rooms in one JPEG. And the split-screen branch leaves
+ * a scissor rectangle over half the canvas and the scissor test on, so a capture taken
+ * while somebody is comparing two views would arrive clipped to the left half of it.
+ * All four are set for the one render; `autoClear` is put back because it is the one a
+ * later frame does not necessarily re-assert before something else reads the buffer.
+ */
 export interface ThumbnailRenderer {
   render(scene: unknown, camera: unknown): void;
   domElement: ThumbnailCanvas;
+  autoClear: boolean;
+  /**
+   * The renderer's device pixel ratio, because setViewport and setScissor take CSS
+   * pixels and multiply it in themselves while `domElement.width` is already the
+   * multiplied drawing-buffer size. Passing the buffer's numbers straight back would
+   * ask for a viewport twice the canvas on a HiDPI screen.
+   */
+  getPixelRatio(): number;
+  setViewport(x: number, y: number, width: number, height: number): void;
+  setScissor(x: number, y: number, width: number, height: number): void;
+  setScissorTest(enabled: boolean): void;
+}
+
+/**
+ * The camera one capture renders with: its own, posed on the review's models.
+ *
+ * A fresh PerspectiveCamera per capture rather than a module-level one, because a
+ * camera is cheap and a shared one would be shared between two rooms in two canvases
+ * on a page that has both open. Exported for the same reason the rest of this file's
+ * arithmetic is: the framing is the part worth testing, and it can be tested with a
+ * scene of real three.js objects and no WebGL context at all.
+ *
+ * @returns null when the scene holds nothing tagged as the product — an empty room, or
+ *          one whose models have not finished parsing. A capture answers null for that
+ *          and the review keeps the picture it already had, which is a better card than
+ *          a grey floor and better than the stale-but-real alternative of falling back
+ *          to wherever the person happened to be standing.
+ */
+export function captureCameraFor(
+  scene: THREE.Object3D | null | undefined,
+  aspect: number,
+): THREE.PerspectiveCamera | null {
+  const framed = frameBox(reviewModelBounds(scene));
+  if (!framed) return null;
+  const camera = new THREE.PerspectiveCamera(
+    FRAME_FOV,
+    Number.isFinite(aspect) && aspect > 0 ? aspect : THUMBNAIL_MAX_WIDTH / THUMBNAIL_MAX_HEIGHT,
+    framed.near,
+    framed.far,
+  );
+  applyFrame(camera, framed);
+  return camera;
 }
 
 /**
@@ -220,18 +294,45 @@ export interface ThumbnailRenderer {
  */
 export function captureRoomThumbnail(
   gl: ThumbnailRenderer,
-  scene: unknown,
-  camera: unknown,
+  scene: THREE.Object3D | null | undefined,
   makeCanvas: CanvasFactory,
   quality: number = THUMBNAIL_QUALITY,
 ): string | null {
   try {
-    gl.render(scene, camera);
     const canvas = gl.domElement;
     // A renderer that has not been given a size yet has a 0x0 canvas, and a
     // detached one may have no canvas at all. Both are "not yet", and the caller
-    // can simply ask again on a later frame.
+    // can simply ask again on a later frame. Checked BEFORE anything is rendered:
+    // there is no aspect to frame with and nowhere to read from.
     if (!canvas || !(canvas.width > 0) || !(canvas.height > 0)) return null;
+
+    // Its own camera, framed on the models. Null when the scene has nothing tagged in
+    // it, which is the "never replace a good picture with a grey rectangle" case the
+    // caller's own guard also covers — a room whose models are still parsing is not a
+    // room with nothing in it, and the debounce asks again three seconds later.
+    const camera = captureCameraFor(scene, canvas.width / canvas.height);
+    if (!camera) return null;
+
+    // Take the renderer off whatever the room's frame loop left it doing, for this one
+    // render — see ThumbnailRenderer for why each of these is here. The room re-asserts
+    // all of them on its next frame, which is 16 ms away and before anything else can
+    // draw; `autoClear` is restored anyway because "Save this view" reads the buffer
+    // from a button press that can land between frames and expects the room's own
+    // compositing to have been in charge.
+    const ratio = gl.getPixelRatio() || 1;
+    const width = canvas.width / ratio;
+    const height = canvas.height / ratio;
+    const autoClear = gl.autoClear;
+    gl.autoClear = true;
+    gl.setScissorTest(false);
+    gl.setViewport(0, 0, width, height);
+    gl.setScissor(0, 0, width, height);
+    try {
+      gl.render(scene, camera);
+    } finally {
+      gl.autoClear = autoClear;
+    }
+
     return downscaleJpeg(canvas, makeCanvas, quality);
   } catch (err) {
     // A renderer whose context was lost throws on render rather than drawing

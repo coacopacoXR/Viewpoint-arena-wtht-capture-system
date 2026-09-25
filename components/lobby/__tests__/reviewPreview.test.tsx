@@ -141,6 +141,25 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+describe('the preview panel — the session map it embeds', () => {
+  it('embeds it compact, so the panel does not say everything twice', () => {
+    renderPanel();
+
+    const map = screen.getByTestId('preview-session-map');
+    // This panel's own header has just named the review, counted its sessions and drawn
+    // a card around the lot. Batch BO embedded the map as the room mounts it, so the
+    // same three facts appeared again three lines lower, inside a second card inside
+    // the first — which is what `compact` is for.
+    expect(map.querySelector('[data-testid="session-map-heading"]')).toBeNull();
+    expect(map.innerHTML).not.toMatch(/shadow-xl/);
+    // What the map is FOR survives: the drawing, its stops, and the key that explains
+    // the two end states a line can be in.
+    expect(map.querySelectorAll('[data-testid="session-stop"]')).toHaveLength(3);
+    expect(map.textContent).toContain('Adopted');
+    expect(map.textContent).toContain('Dropped');
+  });
+});
+
 describe('the preview panel', () => {
   it('names the review, how many people have been in it, and how many meetings it has held', () => {
     renderPanel();

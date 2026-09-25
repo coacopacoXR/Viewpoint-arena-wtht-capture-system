@@ -15,8 +15,11 @@
 //   * the review's stored placements reach the model through the room's own
 //     applyStoredPlacements, so what somebody moved in a meeting stands where they
 //     left it here too
-//   * nothing it does reaches store.ts, because the lobby has no room to put a
-//     scene in and a session spent scrolling it must not leave any behind
+//   * nothing IT does reaches store.ts, because the lobby has no room to put a
+//     scene in and a session spent scrolling it must not leave any behind — with the
+//     one exception of the room's own components for the three bundled samples, which
+//     register their points of interest and their scene trees exactly as they do in a
+//     room and never a scene (see ReviewModelViewer's SAMPLE_COMPONENTS)
 //   * what it parses, it frees
 //
 // There is no WebGL in jsdom, so @react-three/fiber and @react-three/drei are
@@ -68,11 +71,14 @@ vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children }: { children?: React.ReactNode }) => (
     <div data-testid="r3f-canvas">{children}</div>
   ),
-  // The viewer asks R3F for its camera and its controls so it can frame the model.
-  // There is neither here, and it has to cope: that is the same situation as a real
-  // canvas whose models landed a render before its controls did.
-  useThree: (select: (state: { camera: null; controls: null }) => null) =>
-    select({ camera: null, controls: null }),
+  // The viewer asks R3F for its scene, its camera and its controls so it can frame the
+  // model. There is none of the three here, and it has to cope: that is the same
+  // situation as a real canvas whose models landed a render before its controls did.
+  useThree: (select: (state: { camera: null; controls: null; scene: null }) => null) =>
+    select({ camera: null, controls: null, scene: null }),
+  // A sample's framing waits for its geometry to land and is driven by the frame loop.
+  // There is no frame loop here, so the callback is simply never called.
+  useFrame: () => {},
 }));
 
 vi.mock('@react-three/drei', () => ({
@@ -84,6 +90,19 @@ vi.mock('@react-three/drei', () => ({
   // components/Scene/ImportedModel imports this. The viewer imports that module for
   // placeImportedGroup and never renders its component.
   Html: () => null,
+}));
+
+// The room's own components for the three bundled samples. The viewer reaches each
+// through a React.lazy of its own, so which one it asked for is visible — and the real
+// ones suspend on a GLB through drei's useGLTF, which the stub above does not have.
+vi.mock('../../../components/Scene/Product', () => ({
+  default: () => <div data-testid="sample-synth" />,
+}));
+vi.mock('../../../components/Scene/Headphones', () => ({
+  default: () => <div data-testid="sample-headphones" />,
+}));
+vi.mock('../../../components/Scene/Bicycle', () => ({
+  default: () => <div data-testid="sample-bicycle" />,
 }));
 
 vi.mock('../../../lib/curationsRepo', () => ({
@@ -152,6 +171,12 @@ const IMPORTED_ASSET: ReviewAsset = {
 /** A review whose asset names one of the app's bundled models and nothing else. */
 const PRESET_ASSET: ReviewAsset = {
   modelType: 'headphones',
+  references: [],
+};
+
+/** A review that has genuinely never had a model: no import, and no sample chosen. */
+const NO_MODEL_ASSET: ReviewAsset = {
+  modelType: 'none',
   references: [],
 };
 
@@ -419,8 +444,8 @@ describe('ReviewModelViewer — the lobby looking inside a design review', () =>
     quiet.mockRestore();
   });
 
-  it('says there is nothing to show for a review with no model, and fetches nothing', async () => {
-    loadCurationMock.mockResolvedValue(draftWith(PRESET_ASSET));
+  it('says there is nothing to show for a review with no model at all, and fetches nothing', async () => {
+    loadCurationMock.mockResolvedValue(draftWith(NO_MODEL_ASSET));
     sceneFromRevisionsMock.mockReturnValue({ models: [], builtIn: null });
 
     render(<ReviewModelViewer reviewId={REVIEW_ID} />);
@@ -429,6 +454,61 @@ describe('ReviewModelViewer — the lobby looking inside a design review', () =>
     expect(fetchMock).not.toHaveBeenCalled();
     expect(parseMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId('r3f-canvas')).toBeNull();
+  });
+
+  it("draws the room's own component for a review whose model is a bundled sample", async () => {
+    loadCurationMock.mockResolvedValue(draftWith(PRESET_ASSET));
+    sceneFromRevisionsMock.mockReturnValue({ models: [], builtIn: null });
+
+    render(<ReviewModelViewer reviewId={REVIEW_ID} />);
+
+    // A canvas, and not the sentence. Batch BO said "no model to show yet" here, which
+    // was a panel giving up on a review that had a pair of headphones standing in it.
+    await waitFor(() => expect(screen.getByTestId('r3f-canvas')).toBeTruthy());
+    expect(screen.queryByText(NO_MODEL_MESSAGE)).toBeNull();
+    expect(screen.queryByText(LOAD_FAILED_MESSAGE)).toBeNull();
+
+    // Named the way the menu that offers it names it, not the way the scene spells it.
+    expect(screen.getByText('Headphones')).toBeTruthy();
+
+    // Nothing was downloaded from model storage: a sample has no hash and no revision,
+    // and its geometry arrives through the room's own loader instead.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(parseMock).not.toHaveBeenCalled();
+
+    // Through that sample's own lazy chunk, and none of the other two — the bicycle's
+    // GLB is 3.3 MB and a review looking at headphones must not pay for it.
+    await waitFor(() => expect(screen.getByTestId('sample-headphones')).toBeTruthy());
+    expect(screen.queryByTestId('sample-bicycle')).toBeNull();
+    expect(screen.queryByTestId('sample-synth')).toBeNull();
+  });
+
+  it('draws whichever sample the review names, and lets a scene that recorded one win', async () => {
+    loadCurationMock.mockResolvedValue(draftWith({ modelType: 'bicycle', references: [] }));
+    sceneFromRevisionsMock.mockReturnValue({ models: [], builtIn: 'synth' });
+
+    render(<ReviewModelViewer reviewId={REVIEW_ID} />);
+
+    // The scene record first and the asset's model type as the fallback, which is the
+    // room's own precedence: store.ts derives activeModelType from the scene and only
+    // then from what the curation asked for.
+    await waitFor(() => expect(screen.getByTestId('sample-synth')).toBeTruthy());
+    expect(screen.getByText('Synth assembly')).toBeTruthy();
+    expect(screen.queryByTestId('sample-bicycle')).toBeNull();
+  });
+
+  it('prefers an imported model over the sample the same asset names', async () => {
+    loadCurationMock.mockResolvedValue(draftWith({ ...IMPORTED_ASSET, modelType: 'headphones' }));
+
+    render(<ReviewModelViewer reviewId={REVIEW_ID} />);
+    await waitFor(() => expect(screen.getByTestId('r3f-canvas')).toBeTruthy());
+
+    // The room draws a preset only while its scene holds no models of its own, and so
+    // does this: a review that started on the headphones and then imported its own
+    // bracket shows the bracket, exactly as the room opened on it would.
+    expect(fetchMock).toHaveBeenCalledWith(HASH_A, 'bracket.step');
+    expect(screen.getByText('bracket · Rev A')).toBeTruthy();
+    expect(screen.queryByTestId('sample-headphones')).toBeNull();
   });
 
   it('says the same for a review the database has no row for', async () => {

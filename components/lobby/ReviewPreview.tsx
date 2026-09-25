@@ -290,8 +290,11 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
           tracker want them because the map is the only control surface there. Here it is
           a DIAGRAM in a panel that already has both deletes, inline, under its own list
           of sessions: two ways to remove the same review, one of them a browser dialog
-          that cannot be styled to this panel and cannot be tested, is one too many. */}
-      <div className="border-b border-gray-100 p-2" data-testid="preview-session-map">
+          that cannot be styled to this panel and cannot be tested, is one too many.
+          `compact` for the same reason it is a diagram: this panel has already named the
+          review, counted its sessions and drawn its own card, so the map drops its
+          heading and its chrome and keeps its key. */}
+      <div className="border-b border-gray-100 px-3 py-2" data-testid="preview-session-map">
         <SessionMap
           reviewTitle={title}
           lines={lines}
@@ -300,6 +303,7 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
           cards={map.cards}
           reviewId={review.id}
           mayDelete={false}
+          compact
           onChanged={() => { map.refresh(); onChanged(); }}
           emptyMessage="No sessions recorded in this design review yet."
         />

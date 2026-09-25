@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useStore } from '../../store';
 import {
     CheckCircle2, Lightbulb, FileText, Download,
-    ShieldAlert, Scale, MessageSquare, ArrowRight, LayoutDashboard, List,
+    ShieldAlert, Scale, MessageSquare, ArrowRight, ArrowLeft, LayoutDashboard, List,
     Users, Box, CircleDollarSign, Fingerprint, Gavel,
     Construction, HelpCircle, User, Building2, Zap, Microscope, Eye,
     BarChart2, Search, CircleDot, TriangleAlert, Target,
@@ -846,6 +846,20 @@ const MeetingSummary: React.FC = () => {
                     <div className="flex items-center gap-3">
                         <button className="bg-gray-800 text-gray-300 px-4 py-2 rounded font-bold text-xs hover:text-white hover:bg-gray-700 transition-colors flex items-center gap-2">
                             <Download size={14} /> PDF Report
+                        </button>
+                        {/* The way back to the lobby, which until batch BP this board did
+                            not have: it offered the tracker and the room the meeting was
+                            held in, and a person who had finished a review and wanted the
+                            list of design reviews had to edit the address bar to get
+                            there. Arrow-left because it goes back out of the meeting,
+                            where the tracker's arrow goes sideways into another view of
+                            the same cards. */}
+                        <button
+                            onClick={() => navigate('/')}
+                            data-testid="summary-lobby"
+                            className="bg-gray-800 text-gray-300 px-4 py-2 rounded font-bold text-xs hover:text-white hover:bg-gray-700 transition-colors flex items-center gap-2"
+                        >
+                            <ArrowLeft size={14} /> Lobby
                         </button>
                         <button
                             onClick={() => navigate('/tracker')}

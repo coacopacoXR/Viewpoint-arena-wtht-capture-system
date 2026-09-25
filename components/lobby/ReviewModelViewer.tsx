@@ -17,8 +17,10 @@
 //      shared scene so the room renders it; a lobby that has been scrolled past
 //      twelve reviews must not leave twelve scenes behind in the room's global
 //      state, and it has no room to leave them in. So the scene is computed into
-//      this component's own state and thrown away, and nothing here reads or writes
-//      a store.
+//      this component's own state and thrown away, and nothing in THIS file reads or
+//      writes a store. The one exception is a review whose model is one of the app's
+//      three bundled samples, which is drawn by the room's own component for it — see
+//      SAMPLE_COMPONENTS below for what those write and why it is safe.
 //   2. It draws what the SCENE says is visible — `model.visible === true` — which
 //      is store.ts's `sceneModelVisible` with no local overrides. Hiding a model so
 //      you can see the one behind it is one participant's business and lives in the
@@ -41,8 +43,8 @@
 // pulls in three.js, @react-three/fiber and @react-three/drei, and the lobby's
 // first paint must not pay for them.
 
-import React, { Suspense, useEffect, useState } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   ContactShadows,
   Environment,
@@ -61,12 +63,16 @@ import {
 } from '../../lib/reviews/revisionsRepo';
 import { originRevisionIds } from '../../lib/reviews/linesRepo';
 import { curationSceneModel } from '../../lib/scene/curationScene';
+import { FRAME_FOV, applyFrame, frameBox } from '../../lib/scene/frameBox';
+import { reviewModelBounds } from '../../lib/scene/modelBounds';
 import { applyStoredPlacements } from '../../lib/scene/placement';
 import {
   sceneModelLabel,
   sceneModelTransform,
+  type BuiltInModel,
   type SceneModel,
 } from '../../lib/scene/roomScene';
+import { SAMPLE_MODELS } from '../../lib/scene/sampleModels';
 import { parseSceneModelFile, type SceneModelEntry } from '../../lib/scene/sceneEntries';
 import { placeImportedGroup } from '../Scene/ImportedModel';
 
@@ -79,30 +85,61 @@ import { placeImportedGroup } from '../Scene/ImportedModel';
 
 /** While the review's scene is being read and its models downloaded and parsed. */
 export const LOADING_MESSAGE = 'Loading the model…';
-/** Nothing to draw: no model on the review, or only a bundled preset. */
+/** Nothing to draw: neither an imported model nor one of the app's bundled samples. */
 export const NO_MODEL_MESSAGE = 'This design review has no model to show yet.';
 /** The read threw, or every model this review named failed to load. */
 export const LOAD_FAILED_MESSAGE = 'The model could not be loaded.';
 
-/** The camera's field of view, and the one framing falls back to. */
-const CAMERA_FOV = 45;
 /**
- * How much further back than "exactly fills the frame" the camera sits.
- *
- * A model that touches all four edges reads as a thumbnail that was cropped, not as
- * something you are looking at, and it leaves nowhere for the eye to go when the
- * first thing somebody does is drag it.
+ * The camera's field of view. The fit rule itself — how far back to sit for a box to
+ * fill a frame, and from what angle — is lib/scene/frameBox.ts's, shared with the
+ * capture that takes the snapshot this button replaces. Two framings that differ would
+ * make the live view and the picture of it two different compositions of one model.
  */
-const FRAME_PADDING = 1.4;
+const CAMERA_FOV = FRAME_FOV;
+
 /**
- * The angle the camera arrives from, as a direction.
+ * The room's own component for each of the app's three bundled samples, each behind a
+ * React.lazy of its own.
  *
- * The room's own default camera is at [8, 6, 8] (components/Scene/
- * ViewpointCanvas.tsx), so this is that same three-quarter view scaled to whatever
- * the model turns out to be — the lobby picture and the room picture start from the
- * same place, which is the point of the panel.
+ * The room's and not a second copy: "the lobby shows what the room shows" is the whole
+ * claim of this panel, and a sample redrawn here would agree with components/Scene/
+ * Bicycle.tsx today and drift from it the first time that file changed. Lazy because a
+ * sample fetches a GLB — the bicycle's is 3.3 MB — and the review being looked at has
+ * either one sample or none of them. Importing the three statically would have every
+ * "Turn in 3D" press in the lobby download all three, including for a review whose
+ * model is an uploaded STEP file that has no use for any of them.
+ *
+ * These are the only files in the lobby's graph that DO reach store.ts, which point 1
+ * of this file's header promises nothing here does: Product.tsx registers its knobs as
+ * points of interest and the two GLB samples install their scene trees. Every one of
+ * those writes is the one the room makes for the same sample, and all of them are
+ * derived state a room recomputes from its own scene on open — none of them is a scene.
+ * So the promise that matters, that looking at a review in the lobby cannot leave a
+ * scene behind in the room, still holds; duplicating the presets to keep the import
+ * graph pure would have been the worse trade.
  */
-const FRAME_DIRECTION = new THREE.Vector3(8, 6, 8).normalize();
+const SAMPLE_COMPONENTS: Record<BuiltInModel, React.LazyExoticComponent<React.ComponentType>> = {
+  synth: React.lazy(() => import('../Scene/Product')),
+  headphones: React.lazy(() => import('../Scene/Headphones')),
+  bicycle: React.lazy(() => import('../Scene/Bicycle')),
+};
+
+/** What a sample is called, from the one list that names them. */
+function sampleLabel(sample: BuiltInModel): string {
+  return SAMPLE_MODELS.find((one) => one.builtIn === sample)?.label ?? sample;
+}
+
+/**
+ * Which of the app's three bundled samples a review's model type names, or null.
+ *
+ * Read off `SAMPLE_MODELS` rather than a literal list of three strings so the samples
+ * this viewer can draw and the samples the room's menu offers cannot come apart.
+ */
+function sampleOf(modelType: string | null | undefined): BuiltInModel | null {
+  const found = SAMPLE_MODELS.find((one) => one.builtIn === modelType);
+  return found ? found.builtIn : null;
+}
 
 // ─── State ──────────────────────────────────────────────────────────────────
 
@@ -124,16 +161,22 @@ interface LoadedModel {
 }
 
 /**
- * The four things the panel can be showing.
+ * The five things the panel can be showing.
  *
  * One value rather than a `loading` flag beside a list, because the failure this
  * exists to prevent is the two disagreeing — a spinner over a canvas that has
  * nothing in it, or a "no model" message over one that has.
+ *
+ * `sample` is its own state and not a `ready` with an empty list: a bundled sample has
+ * nothing this viewer parsed, placed or measured, so it has no box to frame with and no
+ * group to dispose. What it has is the name of a component the room owns, which arrives
+ * with its own geometry and its own loading.
  */
 type ViewerState =
   | { status: 'loading' }
   | { status: 'empty' }
   | { status: 'failed' }
+  | { status: 'sample'; sample: BuiltInModel }
   | { status: 'ready'; loaded: LoadedModel[]; box: THREE.Box3 };
 
 // ─── Disposal ───────────────────────────────────────────────────────────────
@@ -208,9 +251,23 @@ function disposeGroup(group: THREE.Object3D): void {
  * models and recorded all four. Gating on modelType the way the room's caller does
  * would have shown an empty panel for exactly the reviews worth looking into. So
  * the gate here is whether the review has any imported model to draw at all, from
- * its history or from its asset, and `modelType` is not read.
+ * its history or from its asset, and `modelType` is not read as a gate.
+ *
+ * IT IS READ AS A SAMPLE, though, and that is the second half of the room's rule. A
+ * room opens a review by handing the asset to showCurationModel, which answers false
+ * for anything but 'imported'; lib/activeReviewStore's syncMainModel then calls
+ * setActiveModelType(asset.modelType), and the store turns that into `scene.builtIn`,
+ * which is what World.tsx draws one of its three presets from. So for a review whose
+ * model IS a sample, `modelType` is the whole of the answer and the scene record has
+ * nothing to say — sceneFromRevisions always answers `builtIn: null`, because a
+ * sample has no revisions and no row in model_revisions. Hence `sampleOf` below,
+ * reading the same field the room reads, and `scene.builtIn` kept as the first answer
+ * so a history that ever did record a sample is honoured too.
  */
-async function reviewSceneFor(reviewId: string): Promise<SceneModel[]> {
+async function reviewSceneFor(reviewId: string): Promise<{
+  models: SceneModel[];
+  sample: BuiltInModel | null;
+}> {
   const draft = await loadCuration(reviewId);
   const asset = draft?.asset;
 
@@ -229,7 +286,7 @@ async function reviewSceneFor(reviewId: string): Promise<SceneModel[]> {
     asset?.placements,
   );
 
-  return scene.models;
+  return { models: scene.models, sample: scene.builtIn ?? sampleOf(asset?.modelType) };
 }
 
 /**
@@ -301,33 +358,79 @@ function retarget(controls: THREE.EventDispatcher | null, center: THREE.Vector3)
  * models and then leaves the camera alone: this is a read-only view, and a viewer
  * that kept re-framing would fight whoever is dragging it.
  *
- * The distance is the bounding sphere's radius over tan(fov/2), padded — good enough
- * for a bracket and for an assembly, and it needs no knowledge of what the model is.
+ * The box is the one the load measured with the models detached, so it is exact — see
+ * LoadedModel.box. How far back to sit for it is lib/scene/frameBox's answer, which is
+ * also the thumbnail capture's, so the snapshot and this view are the same composition.
  */
 const FrameToContent: React.FC<{ box: THREE.Box3 }> = ({ box }) => {
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls);
 
   useEffect(() => {
-    if (!camera || box.isEmpty()) return;
-    const sphere = box.getBoundingSphere(new THREE.Sphere());
-    if (!Number.isFinite(sphere.radius) || sphere.radius <= 0) return;
-
-    const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : CAMERA_FOV;
-    const distance = (sphere.radius / Math.tan((fov * Math.PI) / 360)) * FRAME_PADDING;
-
-    camera.position.copy(sphere.center).addScaledVector(FRAME_DIRECTION, distance);
-    // Fitted to the model rather than left at the canvas defaults: a 20 mm fastener
-    // and a 6 m assembly cannot share a near plane, and guessing wrong clips one of
-    // them into nothing.
-    camera.near = Math.max(distance / 1000, 0.001);
-    camera.far = distance * 100 + sphere.radius * 10;
-    camera.updateProjectionMatrix();
-    camera.lookAt(sphere.center);
-    retarget(controls, sphere.center);
+    // The only camera this viewer mounts is a perspective one, so anything else is a
+    // canvas that has not published its camera yet — the same late-by-a-render case
+    // `retarget` guards.
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    const framed = frameBox(box, camera.fov);
+    if (!framed) return;
+    applyFrame(camera, framed);
+    retarget(controls, framed.target);
   }, [box, camera, controls]);
 
   return null;
+};
+
+/**
+ * The same framing, for a bundled sample — asked of the canvas rather than computed
+ * before it.
+ *
+ * A sample's geometry is not this viewer's to measure: components/Scene/Bicycle.tsx
+ * suspends on a 3.3 MB GLB, scales it to a target size and drops it on the floor once
+ * it has landed, and all of that happens inside a component the room owns. So there is
+ * no box to hand in, and the honest answer is to wait for the scene graph and measure
+ * what the room's own `userData.modelId` marker says is the product — the same
+ * measurement lib/reviews/thumbnail.ts frames its snapshot with, which is what makes a
+ * sample's snapshot and its live view match.
+ *
+ * A frame callback that stops after its first success rather than an effect, because
+ * there is nothing to be notified by: useGLTF resolves into a Suspense boundary that
+ * this component is a sibling of, so no prop or state of this viewer's changes when the
+ * bicycle arrives. Polling costs one bounding-box walk per frame until it does, and
+ * nothing at all after.
+ */
+const FrameToSample: React.FC = () => {
+  const scene = useThree((state) => state.scene);
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls);
+  const framed = useRef(false);
+
+  useFrame(() => {
+    if (framed.current) return;
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    const view = frameBox(reviewModelBounds(scene), camera.fov);
+    if (!view) return;
+    framed.current = true;
+    applyFrame(camera, view);
+    retarget(controls, view.target);
+  });
+
+  return null;
+};
+
+/**
+ * One of the app's bundled samples, drawn by the room's own component for it.
+ *
+ * Suspended because the two GLB samples fetch their file, and the fallback is nothing:
+ * an empty stage with a grid on it, which is what the room itself shows for the moment
+ * a sample takes to arrive.
+ */
+const SampleModel: React.FC<{ sample: BuiltInModel }> = ({ sample }) => {
+  const Component = SAMPLE_COMPONENTS[sample];
+  return (
+    <Suspense fallback={null}>
+      <Component />
+    </Suspense>
+  );
 };
 
 // ─── The panel ──────────────────────────────────────────────────────────────
@@ -404,7 +507,7 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
     };
 
     const run = async (): Promise<void> => {
-      const models = await reviewSceneFor(reviewId);
+      const { models, sample } = await reviewSceneFor(reviewId);
       if (cancelled) return;
 
       // A model with no hash has nothing to fetch — that is the legacy marker
@@ -412,14 +515,15 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
       // uploaded, and lib/scene/useSceneModelLoader.ts skips it for the same reason.
       const wanted = models.filter((model) => model.visible === true && model.hash !== '');
       if (wanted.length === 0) {
-        // Includes a review whose asset names one of the app's bundled models —
-        // headphones, bicycle, synth. Those are React components deep in the room's
-        // own scene graph (components/Scene/Headphones.tsx and its siblings), and
-        // drawing one here would mean mounting the room's product presets into the
-        // lobby's bundle for a preview. Out of scope for this batch: the snapshot
-        // the panel already had is the better answer for such a review, and saying
-        // "no model to show yet" is honest enough next to it.
-        setState({ status: 'empty' });
+        // Batch BP. A review whose model is one of the app's bundled samples — the
+        // synth assembly, the headphones, the bicycle — used to say it had no model to
+        // show, because those are React components in the room's scene graph and not a
+        // hash in model storage. It now draws the sample, with the room's own component
+        // for it, which is the same answer the room gives: store.ts's activeModelTypeFor
+        // prefers imported models and falls back to the sample, so a review with both
+        // shows its models here exactly as it does there. Only a review with neither
+        // gets the sentence.
+        setState(sample ? { status: 'sample', sample } : { status: 'empty' });
         return;
       }
 
@@ -453,7 +557,9 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
   const names =
     state.status === 'ready'
       ? state.loaded.map(({ model }) => sceneModelLabel(model)).join(', ')
-      : '';
+      : state.status === 'sample'
+        ? sampleLabel(state.sample)
+        : '';
 
   return (
     <div
@@ -500,7 +606,7 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
           </div>
         )}
 
-        {state.status === 'ready' && (
+        {(state.status === 'ready' || state.status === 'sample') && (
           <Canvas
             dpr={[1, 2]}
             gl={{ antialias: true, alpha: true }}
@@ -537,23 +643,31 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
               position={[0, -0.01, 0]}
             />
 
-            {state.loaded.map(({ model, entry }) => {
-              // The room's own transform for this model, applied to the WRAPPER and
-              // not to the geometry inside it: placeImportedGroup has already scaled
-              // and centred that group, and scaling it again would scale the centring
-              // with it and slide the model off its own origin.
-              const transform = sceneModelTransform(model);
-              return (
-                <group
-                  key={model.id}
-                  position={transform.offset}
-                  rotation={transform.rotation}
-                  scale={transform.scale}
-                >
-                  <primitive object={entry.group} />
-                </group>
-              );
-            })}
+            {state.status === 'ready' &&
+              state.loaded.map(({ model, entry }) => {
+                // The room's own transform for this model, applied to the WRAPPER and
+                // not to the geometry inside it: placeImportedGroup has already scaled
+                // and centred that group, and scaling it again would scale the centring
+                // with it and slide the model off its own origin.
+                const transform = sceneModelTransform(model);
+                return (
+                  <group
+                    key={model.id}
+                    position={transform.offset}
+                    rotation={transform.rotation}
+                    scale={transform.scale}
+                  >
+                    <primitive object={entry.group} />
+                  </group>
+                );
+              })}
+
+            {/* A review whose model is one of the app's three bundled samples, drawn by
+                the room's own component for it. On the same stage as an imported model —
+                the same lights, grid, floor shadow and controls — because it is the same
+                room seen from outside, and a sample in a bare canvas would be a second
+                way of drawing a design review that could drift from the first. */}
+            {state.status === 'sample' && <SampleModel sample={state.sample} />}
 
             <ContactShadows
               opacity={0.35}
@@ -569,7 +683,11 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
                 for a drag to be mistaken for. */}
             <OrbitControls makeDefault enablePan={false} enableDamping dampingFactor={0.12} />
 
-            <FrameToContent box={state.box} />
+            {state.status === 'ready' ? (
+              <FrameToContent box={state.box} />
+            ) : (
+              <FrameToSample />
+            )}
           </Canvas>
         )}
       </div>

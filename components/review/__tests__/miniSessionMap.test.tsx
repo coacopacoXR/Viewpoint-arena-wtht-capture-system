@@ -88,6 +88,19 @@ function circleOf(stop: Element | null): Element | null {
   return stop?.querySelector('circle') ?? null;
 }
 
+/**
+ * A stop's radius in CSS pixels, i.e. after `meet` has shrunk the viewBox into the
+ * 34px-tall box. The height is what binds for these maps — they are far wider than they
+ * are tall — so it is the scale the drawing arrives at.
+ */
+function radiusOnScreen(container: HTMLElement): number {
+  const svg = container.querySelector('[data-testid="mini-session-map"]');
+  const viewBoxHeight = Number(attr(svg, 'viewBox').split(' ')[3]);
+  const scale = Number(attr(svg, 'height')) / viewBoxHeight;
+  const stop = container.querySelector('[data-testid="mini-stop"]');
+  return num(circleOf(stop), 'r') * scale;
+}
+
 function stops(container: HTMLElement): Element[] {
   return [...container.querySelectorAll('[data-testid="mini-stop"]')];
 }
@@ -253,5 +266,70 @@ describe('drawing into 34px', () => {
     );
     // Taller viewBox, smaller scale, thicker strokes: the two have to move together.
     expect(Math.min(...taller)).toBeGreaterThan(Math.max(...plainWidths));
+  });
+
+  it('draws every stop as a 4px dot on screen, however many rows the map has', () => {
+    // A stop is the thing a card has to be readable by, so its radius is written
+    // against the screen rather than against the viewBox: at 2 units it was a 2px speck
+    // on a main line alone and under 1.5px once variant rows had shrunk the scale.
+    expect(radiusOnScreen(draw().container)).toBeCloseTo(4, 6);
+
+    const withVariant = draw({
+      lines: [MAIN, variant()],
+      sessions: [...MAIN_SESSIONS, ...VARIANT_SESSIONS],
+    });
+    expect(radiusOnScreen(withVariant.container)).toBeCloseTo(4, 6);
+  });
+});
+
+describe('the main line itself', () => {
+  it('runs from the left edge to the meeting the review is at', () => {
+    const { container } = draw();
+
+    const line = container.querySelector('[data-testid="mini-main-line"]');
+    const current = circleOf(container.querySelector('[data-current]'));
+    expect(attr(line, 'd')).toBe(
+      `M 0 ${num(current, 'cy')} L ${num(current, 'cx')} ${num(current, 'cy')}`,
+    );
+    // The main line's own ink, solid: it is the review's history and not a dropped one.
+    expect(attr(line, 'stroke')).toBe(INK);
+    expect(line?.hasAttribute('stroke-dasharray')).toBe(false);
+  });
+
+  it('is drawn for a review that has met once, which is the case that was a lone dot', () => {
+    const { container } = draw({ sessions: [MAIN_SESSIONS[0]] });
+
+    expect(stops(container)).toHaveLength(1);
+    // layoutSessionMap only ever draws an edge BETWEEN two stops, so a review that has
+    // met once arrived as a single dot in an empty box — on a card, the shape of a
+    // picture that failed to load, and the commonest review there is.
+    const line = container.querySelector('[data-testid="mini-main-line"]');
+    expect(line).toBeTruthy();
+    const dot = circleOf(container.querySelector('[data-current]'));
+    expect(attr(line, 'd')).toBe(`M 0 ${num(dot, 'cy')} L ${num(dot, 'cx')} ${num(dot, 'cy')}`);
+    expect(num(dot, 'cx')).toBeGreaterThan(0);
+    // And the one meeting is still the filled one: the line says where the review has
+    // got to, the dot says the same thing, and the two agree.
+    expect(attr(dot, 'fill')).toBe(INK);
+  });
+
+  it('stops at the last meeting, and lets the layout draw on to a variant that came back', () => {
+    const lines = [MAIN, variant({ status: 'adopted', closedAt: '2026-05-08T10:00:00.000Z' })];
+    const { container } = draw({ lines, sessions: [...MAIN_SESSIONS, ...VARIANT_SESSIONS] });
+
+    const line = container.querySelector('[data-testid="mini-main-line"]');
+    const current = circleOf(container.querySelector('[data-current]'));
+    const rejoin = circleOf(rejoins(container)[0]);
+
+    // The ink line reaches the newest MEETING and no further. The green stop where the
+    // variant came back is not a meeting, so it is joined by the layout's own green edge
+    // rather than by this one — which keeps the main line a single unbroken stroke and
+    // keeps the shared layout's ordering, rather than this file inventing a second one.
+    expect(attr(line, 'd').endsWith(`L ${num(current, 'cx')} ${num(current, 'cy')}`)).toBe(true);
+    expect(num(current, 'cx')).toBeLessThan(num(rejoin, 'cx'));
+    const green = [...container.querySelectorAll('path')].filter(
+      (path) => attr(path, 'stroke') === ADOPTED,
+    );
+    expect(green.length).toBeGreaterThan(0);
   });
 });

@@ -366,6 +366,28 @@ export interface SessionMapProps {
   isMeetingHost?: boolean;
   /** Read the lines, sessions and cards again, after an action changed them. */
   onChanged?: () => void;
+  /**
+   * Draw the map as a DIAGRAM inside somebody else's panel: no heading, no card.
+   *
+   * Batch BP. The lobby's preview panel embeds this map, and embedded it repeated the
+   * panel's own header — "DESIGN REVIEW", the same title, the same session count — three
+   * lines under a header that had just said all of it, inside a bordered white card
+   * inside the panel's own bordered white card. Compact drops both: the heading, because
+   * the panel it sits in has one, and the rounded border and shadow, because the panel
+   * is the card. The drawing, the row labels down its left edge, the stop panel one of
+   * its stops opens and the variant actions are all unchanged, and so is every other
+   * caller: the room and the tracker both mount this map as the whole of a surface, so
+   * both keep the heading and the chrome and neither passes this.
+   *
+   * What survives of the heading is the key, moved above the drawing and right-aligned
+   * out of its way: "Adopted" and "Dropped" are the two states a line can end in and the
+   * only part of the drawing that does not label itself. It is shown at every width here
+   * rather than from the `sm` breakpoint up, because that breakpoint measures the
+   * VIEWPORT and this map is now inside a panel of a fixed narrow width — a phone in
+   * landscape would have kept the key and a desktop with a narrow window would have
+   * dropped it, which is an answer about the window and not about the room available.
+   */
+  compact?: boolean;
 }
 
 /** The button style VariantActions uses, so a session's actions all read alike. */
@@ -474,6 +496,7 @@ const SessionMap: React.FC<SessionMapProps> = ({
   mayDelete = false,
   isMeetingHost = false,
   onChanged,
+  compact = false,
 }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const layout = useMemo(
@@ -504,9 +527,32 @@ const SessionMap: React.FC<SessionMapProps> = ({
   const selectedAttendees = selected?.session.attendeeNames ?? [];
 
   return (
-    <div className="h-full flex flex-col bg-white rounded-lg border border-gray-200 shadow-xl overflow-hidden">
+    <div
+      className={
+        compact
+          ? 'h-full flex flex-col bg-white overflow-hidden'
+          : 'h-full flex flex-col bg-white rounded-lg border border-gray-200 shadow-xl overflow-hidden'
+      }
+    >
+      {/* The key on its own, which is all of the heading a compact map keeps. */}
+      {compact && (
+        <div
+          className="flex-shrink-0 flex items-center justify-end gap-3 px-1 pb-1 font-mono text-[9px] text-gray-400"
+          data-testid="session-map-legend"
+        >
+          <span className="flex items-center gap-1">
+            <span className="w-2.5 h-2.5 rounded-full border-2" style={{ borderColor: ADOPTED }} /> Adopted
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="w-2.5 h-px border-t border-dashed" style={{ borderColor: FAINT }} /> Dropped
+          </span>
+        </div>
+      )}
       {/* Heading */}
-      <div className="flex-shrink-0 flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-100 bg-gray-50/60">
+      {!compact && <div
+        className="flex-shrink-0 flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-100 bg-gray-50/60"
+        data-testid="session-map-heading"
+      >
         <div className="min-w-0">
           <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">Design review</p>
           <h2 className="text-sm font-semibold text-gray-900 leading-snug truncate">
@@ -540,7 +586,7 @@ const SessionMap: React.FC<SessionMapProps> = ({
             </button>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* The drawing */}
       <div className="flex-1 min-h-0 overflow-auto custom-scrollbar bg-white">

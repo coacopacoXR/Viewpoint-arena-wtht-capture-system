@@ -34,6 +34,13 @@
 // The renderer's drawing buffer is NOT preserved between frames unless the canvas asked
 // for `preserveDrawingBuffer`, so lib/reviews/thumbnail.ts renders a frame and reads it
 // in the same synchronous call. That is also why nothing here awaits between the two.
+//
+// THE CAMERA IS NOT THE ROOM'S. Batch BP: framing the card with the camera whoever
+// pressed End happened to be looking through is what produced a model the size of a
+// speck in a wide grey floor, because that camera is at [8, 6, 8] at best and anywhere
+// at all in practice. lib/reviews/thumbnail.ts poses a temporary camera of its own on
+// the bounding box of the review's models, with the same fit rule the lobby's "Turn in
+// 3D" viewer uses. Nothing here reads the room's camera and nothing restores one.
 
 import React, { useCallback, useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
@@ -63,7 +70,7 @@ function somethingToShow(): boolean {
 }
 
 const ThumbnailCapture: React.FC = () => {
-  const { gl, scene, camera } = useThree();
+  const { gl, scene } = useThree();
   const reviewId = useStore((state) => state.activeReviewId);
   const snapshotRequest = useStore((state) => state.snapshotRequest);
   const sessionHostId = useStore((state) => state.sessionHostId);
@@ -77,17 +84,17 @@ const ThumbnailCapture: React.FC = () => {
   const mayCapture = reviewId !== null && !loading && can('editReview');
 
   // Read through a ref at the moment of capture rather than closed over, because the
-  // debounced call fires three seconds after the render that armed it and the camera may
-  // well have moved since. A stale closure here is a picture of where the room was.
-  const latest = useRef({ gl, scene, camera, reviewId, mayCapture });
-  latest.current = { gl, scene, camera, reviewId, mayCapture };
+  // debounced call fires three seconds after the render that armed it and the scene may
+  // well have changed since. A stale closure here is a picture of a room that has gone.
+  const latest = useRef({ gl, scene, reviewId, mayCapture });
+  latest.current = { gl, scene, reviewId, mayCapture };
 
   const capture = useCallback(async () => {
-    const { gl: renderer, scene: world, camera: view, reviewId: id, mayCapture: allowed } = latest.current;
+    const { gl: renderer, scene: world, reviewId: id, mayCapture: allowed } = latest.current;
     if (!allowed || !id) return;
     if (!somethingToShow()) return;
     try {
-      const thumbnail = captureRoomThumbnail(renderer, world, view, makeCanvas);
+      const thumbnail = captureRoomThumbnail(renderer, world, makeCanvas);
       if (!thumbnail) return;
       await saveReviewThumbnail(id, thumbnail);
     } catch (err) {

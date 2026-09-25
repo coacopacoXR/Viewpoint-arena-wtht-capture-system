@@ -51,10 +51,17 @@ const HOLLOW = '#ffffff';
  * main line on its own, and proportionally thicker once variant rows make the viewBox
  * taller and the scale smaller. SessionMap's own 2 / 1.5 / 14 would arrive here under
  * a pixel wide.
+ *
+ * RADIUS is the one of them written against the SCREEN rather than against the drawing:
+ * a stop is a dot somebody has to recognise at a glance, so it arrives with a 4 CSS
+ * pixel radius however many rows the map has, and in viewBox units that is four of these
+ * — `unitOf` is exactly the shrink the scale undoes. At 2 the dot was 2px across on a
+ * main line alone and under 1.5px once two variant rows had shrunk the scale further,
+ * which is a dot that has to be squinted at.
  */
 const ALONG = 1;
 const ELBOW = 0.85;
-const RADIUS = 2;
+const RADIUS = 4;
 /** Dash length for a dropped line, which has to survive the same shrink. */
 const DASH = 2.4;
 
@@ -152,6 +159,30 @@ export const MiniSessionMap: React.FC<MiniSessionMapProps> = ({ lines, sessions,
       aria-label={label}
       className={className}
     >
+      {/* The main line itself, from the left edge of the drawing to the meeting the
+          review is at.
+
+          layoutSessionMap only ever draws an edge BETWEEN two stops, which is right for
+          a review that has met twice and leaves a review that has met once as a single
+          dot floating in an empty box — the shape of a card that failed to load, and the
+          case most reviews in a new install are in. So the line is drawn here from the
+          edge rather than from a first stop: it says "this is the main line and this is
+          where it has got to", which is the whole of what the miniature is for, and it
+          says it for one meeting as well as for twenty. To the LAST stop, which is the
+          same stop `current` fills in, so the line and the filled dot always agree about
+          where the review is; an adopted variant's green stop further right is joined to
+          it by the layout's own green edge, so the main line stays one unbroken stroke. */}
+      {current && (
+        <path
+          data-testid="mini-main-line"
+          d={`M 0 ${current.y} L ${current.x} ${current.y}`}
+          fill="none"
+          stroke={INK}
+          strokeWidth={unit * ALONG}
+          strokeLinecap="round"
+        />
+      )}
+
       {layout.edges.map((edge) => (
         <path
           key={edge.id}
