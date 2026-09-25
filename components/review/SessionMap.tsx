@@ -398,6 +398,10 @@ const SessionMap: React.FC<SessionMapProps> = ({
   );
 
   const selectedCards = selected ? cards.filter((card) => card.sessionId === selected.session.id) : [];
+  // The names a meeting recorded, which are what "Attended" says from batch BM on.
+  // [] for a meeting recorded before the column existed, and then the head count is
+  // the answer — it is still a true statement about who was in the room.
+  const selectedAttendees = selected?.session.attendeeNames ?? [];
 
   return (
     <div className="h-full flex flex-col bg-white rounded-lg border border-gray-200 shadow-xl overflow-hidden">
@@ -609,7 +613,11 @@ const SessionMap: React.FC<SessionMapProps> = ({
             <div>
               <dt className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">Attended</dt>
               <dd className="text-xs text-gray-800 mt-0.5">
-                {selected.session.participantCount} {selected.session.participantCount === 1 ? 'person' : 'people'}
+                {selectedAttendees.length > 0
+                  ? selectedAttendees.join(', ')
+                  : `${selected.session.participantCount} ${
+                      selected.session.participantCount === 1 ? 'person' : 'people'
+                    }`}
               </dd>
             </div>
             <div>
@@ -649,9 +657,23 @@ const SessionMap: React.FC<SessionMapProps> = ({
           {selected.session.summary ? (
             <div className="mt-3">
               <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">Summary</p>
-              <p className="text-[11px] text-gray-600 leading-relaxed mt-1 whitespace-pre-wrap">
-                {selected.session.summary}
-              </p>
+              {/* Model output, so no dangerouslySetInnerHTML and no markdown
+                  library: every line is React text. Only the two shapes the minutes
+                  use are recognised — "## " headings and "- " bullets — so the
+                  markers do not show; anything else stays as written. Capped, so a
+                  long meeting's minutes scroll inside the panel instead of pushing
+                  the cards out of reach. */}
+              <div className="text-[11px] text-gray-600 leading-relaxed mt-1 max-h-40 overflow-y-auto custom-scrollbar">
+                {summaryLines(selected.session.summary).map((line, i) => (
+                  line.kind === 'heading' ? (
+                    <p key={i} className="font-semibold text-gray-800 mt-2 first:mt-0">{line.text}</p>
+                  ) : line.kind === 'bullet' ? (
+                    <p key={i} className="pl-3 -indent-2">• {line.text}</p>
+                  ) : line.text === '' ? null : (
+                    <p key={i}>{line.text}</p>
+                  )
+                ))}
+              </div>
             </div>
           ) : (
             <p className="mt-3 text-[11px] font-mono italic text-gray-300">
@@ -712,4 +734,16 @@ export function stopLabels(layout: SessionMapLayout): string[] {
 /** The line labels down the left edge, top to bottom. */
 export function rowLabels(layout: SessionMapLayout): string[] {
   return layout.rows.map((row) => row.label);
+}
+
+/** The minutes, line by line, as the three shapes the session panel draws. */
+export function summaryLines(summary: string): { kind: 'heading' | 'bullet' | 'text'; text: string }[] {
+  return summary.split(/\r?\n/).map((raw) => {
+    const line = raw.trim();
+    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    if (heading) return { kind: 'heading', text: heading[1] };
+    const bullet = /^[-*]\s+(.*)$/.exec(line);
+    if (bullet) return { kind: 'bullet', text: bullet[1] };
+    return { kind: 'text', text: line };
+  });
 }

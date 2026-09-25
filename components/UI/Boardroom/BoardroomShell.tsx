@@ -13,7 +13,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { InsightCard } from '../../../types';
 import type { AgentState } from '../../../types';
 import { usePresence } from '../../../lib/PresenceContext';
-import { participantLabel } from '../../../lib/identity';
+import { participantLabel, attendeeNames, getDisplayName } from '../../../lib/identity';
 import InsightExplainer from '../InsightExplainer';
 import MeetingManagerPopover from './MeetingManagerPopover';
 import FocusLayout from './layouts/FocusLayout';
@@ -125,6 +125,16 @@ const BoardroomShell: React.FC = () => {
   // so they still need the explicit "Request to Present" button. Approved
   // takeover users get the button hidden because they can just drag to take over.
   const canSelfTakeover = takeoverModeEnabled && takeoverApprovedUserIds.includes(localUserId);
+
+  // One handler for the two End buttons (the layout's and the manager's), because
+  // they must do the same thing: the person at this browser pressed End, so this
+  // browser is the one that records the meeting, with the names of who was in it
+  // beside the head count. Everybody else hears MEETING_END and ends on screen
+  // without writing a second session row — see store.meetingEndedRemotely.
+  const endSession = () => {
+    endMeeting(true, remoteParticipantList.length + 1, attendeeNames(getDisplayName(), remoteParticipantList));
+    broadcastMeetingEnd();
+  };
 
   // Auto-clear a "denied" toast after a few seconds so it doesn't linger.
   useEffect(() => {
@@ -266,7 +276,7 @@ const BoardroomShell: React.FC = () => {
         isCamOn={isCamOn}
         toggleMic={toggleMic}
         toggleCam={toggleCam}
-        onEnd={() => { endMeeting(true, remoteParticipantList.length + 1); broadcastMeetingEnd(); }}
+        onEnd={endSession}
         isHost={isHost}
         boardroomLeaderId={boardroomLeaderId}
       />
@@ -522,7 +532,7 @@ const BoardroomShell: React.FC = () => {
           {/* End — host only */}
           {isHost && (
           <button
-            onClick={() => { endMeeting(true, remoteParticipantList.length + 1); broadcastMeetingEnd(); }}
+            onClick={endSession}
             className="px-2.5 py-1.5 rounded text-[9px] font-bold uppercase tracking-wide bg-red-600/20 text-red-400 border border-red-500/30 hover:bg-red-600/40 transition-all flex items-center gap-1"
           >
             <Power size={10} />

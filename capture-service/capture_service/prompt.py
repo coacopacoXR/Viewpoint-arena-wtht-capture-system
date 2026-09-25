@@ -235,6 +235,7 @@ A bullet per question that was asked and not settled.
 
 Rules:
 - Never invent a fact that is not in the transcript or the cards. If nobody said who owns an action, do not guess an owner.
+- Never write a person's name, a date or a decision that does not appear in the transcript or the cards. A short input gets short minutes.
 - Quote a speaker's own words only when the wording itself matters.
 - Use the component names the speakers actually used.
 - Write in the past tense and in plain sentences. No marketing language, no "the team collaboratively leveraged".

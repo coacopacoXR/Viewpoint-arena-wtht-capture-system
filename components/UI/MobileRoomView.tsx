@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStore } from '../../store';
 import { useShallow } from 'zustand/react/shallow';
 import { usePresence } from '../../lib/PresenceContext';
-import { participantLabel } from '../../lib/identity';
+import { participantLabel, attendeeNames } from '../../lib/identity';
 import { useWebRTCContext } from '../../lib/WebRTCContext';
 import ViewpointCanvas from '../Scene/ViewpointCanvas';
 import BoardroomCountdown from './BoardroomCountdown';
@@ -295,7 +295,14 @@ const MobileRoomView: React.FC<Props> = ({ roomId, userName }) => {
           </button>
           {isHost && (
             <button
-              onClick={() => { endMeeting(true); broadcastMeetingEnd(); }}
+              onClick={() => {
+                // This browser's person pressed End, so this one records the
+                // meeting — names beside the count, which is left to the store's
+                // own fallback here exactly as it was. See store.meetingEndedRemotely
+                // for why the browsers that receive MEETING_END write nothing.
+                endMeeting(true, undefined, attendeeNames(userName, remoteParticipantList));
+                broadcastMeetingEnd();
+              }}
               className="rounded-full flex items-center justify-center transition-all"
               style={{ width: 52, height: 52, background: 'rgba(239,68,68,0.3)', border: '1px solid rgba(239,68,68,0.45)' }}
             >

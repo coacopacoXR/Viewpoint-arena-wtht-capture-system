@@ -690,6 +690,28 @@ alter table tracker_sessions
 create index if not exists tracker_sessions_line_idx
   on tracker_sessions (line_id, seq);
 
+-- Who attended a meeting, and the minutes of it
+-- (added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BM).
+--
+-- `attendee_names` is the same people `participant_count` counts, by name, in the
+-- order the room knew them: the person who ended the meeting first, then everybody
+-- else in it. Two columns rather than one because they answer two different
+-- questions and because a meeting recorded before this column existed has a count
+-- and no names — the session map's panel shows the names when there are any and
+-- falls back to "6 people" when there are not, so an old row still reads.
+--
+-- `summary` is the markdown api/capture/summary.ts writes for the meeting, stored
+-- on the meeting's own row by the one browser that recorded it. NULL is the normal
+-- state and not a failure: a meeting with no transcript and no cards, a room in
+-- privacy mode, capture paused while somebody curated the review, and any provider
+-- failure all leave it NULL, and the panel then says that no summary was stored.
+-- It is written by an UPDATE after the row exists, never by the INSERT, so a
+-- meeting is recorded even when its minutes are not.
+alter table tracker_sessions
+  add column if not exists attendee_names text[];
+alter table tracker_sessions
+  add column if not exists summary text;
+
 -- Which line a card belongs to, and which one it was raised on
 -- (added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BK).
 --

@@ -1025,3 +1025,19 @@ actually found problems is written up in `delegation/README.md`.
     full load, lazy-chunk and install.sh tests were failing at random.
 - Test data: the reviews made by deleted accounts keep a NULL owner, so the
   cleanup must delete by review id, not by owner.
+- BM: one record per meeting, plus its minutes and who attended.
+  - **Bug, present since the tracker existed:** every browser that received
+    MEETING_END saved the meeting too. Two people meant two sessions and every
+    card twice; I confirmed it live before the fix. Now only the browser whose
+    person pressed End records; the others use `meetingEndedRemotely()`.
+  - `tracker_sessions.attendee_names` and `summary`. The session panel shows
+    names and minutes, with headings and bullets drawn as React text.
+  - Minutes come from `/api/capture/summary` only when a transcript exists.
+    Given one card and no speech, the built-in 7B model invented "John",
+    "Sarah", decisions and deadlines, so a meeting with cards only gets minutes
+    written from its cards in code. The prompt (TS and Python, kept identical)
+    now also forbids names, dates or decisions not in the input.
+  - The summary endpoint's strict parser rejected + Card cards (empty
+    description and agentId). `cardForSummary` fixes that.
+  - Tested live with two accounts: one session, one card, both names, and
+    minutes stored and shown.

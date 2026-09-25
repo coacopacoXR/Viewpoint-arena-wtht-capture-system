@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, ReviewGizmoMode, BoardroomLayout, LiveChatMessage, ViewCapture } from './types';
 import { Vector3, type Group } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
+import { writeMeetingMinutes } from './lib/capture/meetingMinutes';
 import { flattenSceneTree, type FlatComponent } from './lib/componentIndex';
 import { useReviewSetupStore } from './lib/reviewSetupStore';
 // Read inside endMeeting only, and lib/activeReviewStore reads this store inside
@@ -633,8 +634,25 @@ interface AppState {
   toggleGaze: () => void;
   toggleTrails: () => void;
   togglePlay: () => void;
-  /** `participantCount` is the number of real people; agents are not participants. */
-  endMeeting: (ended: boolean, participantCount?: number) => void;
+  /**
+   * End the meeting from HERE: the person at this browser pressed End, so this
+   * browser is the one that records it.
+   *
+   * `participantCount` is the number of real people; agents are not participants.
+   * `attendeeNames` is those same people by name (lib/identity.attendeeNames),
+   * which is what the session row's `attendee_names` carries — a head count says
+   * that three people met, and not who they were.
+   */
+  endMeeting: (ended: boolean, participantCount?: number, attendeeNames?: string[]) => void;
+  /**
+   * End the meeting because somebody ELSE in the room pressed End.
+   *
+   * The same on-screen state change `endMeeting(true)` makes, and nothing more: no
+   * session row and no cards are written. Every browser in a room holds the same
+   * broadcast cards, so letting the receivers flush too recorded one meeting three
+   * times. Called from MEETING_END in lib/usePartyPresence.ts.
+   */
+  meetingEndedRemotely: () => void;
   setTime: (time: number) => void;
   resetTime: () => void;
 
@@ -932,9 +950,9 @@ export const useStore = create<AppState>((set, get) => ({
   toggleGaze: () => set((state) => ({ showGaze: !state.showGaze })),
   toggleTrails: () => set((state) => ({ showTrails: !state.showTrails })),
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
-  endMeeting: (ended, participantCount) => {
+  endMeeting: (ended, participantCount, attendeeNames) => {
     if (ended) {
-      const { insightCards, agents, activeModelType, hideAgents, scene, activeReviewId, activeLine } = get();
+      const { insightCards, agents, activeModelType, hideAgents, scene, activeReviewId, activeLine, chatHistory, isPrivacyMode } = get();
       const roomId = window.location.pathname.split('/room/')[1] ?? 'local';
       // The labels of the review this meeting was held in. The room's own copy
       // first, because batch BH3 drops the lobby's handover draft once the room
@@ -946,7 +964,11 @@ export const useStore = create<AppState>((set, get) => ({
       const labels = useActiveReviewStore.getState().config?.labels
         ?? useReviewSetupStore.getState().draft?.labels
         ?? {};
-      flushSessionToTracker({
+      // The review's name, for the minutes' heading, on the same reasoning.
+      const reviewTitle = useActiveReviewStore.getState().config?.title
+        ?? useReviewSetupStore.getState().draft?.title
+        ?? null;
+      const flushed = flushSessionToTracker({
         roomId,
         insightCards,
         // Real people, passed in by the caller (which knows the presence
@@ -954,6 +976,7 @@ export const useStore = create<AppState>((set, get) => ({
         // attendees of every meeting; with agents hidden it would have
         // recorded four people who were never there.
         participantCount: participantCount ?? (hideAgents ? 1 : agents.length),
+        attendeeNames,
         // The product this meeting was held on, or null when it was held on
         // nothing — an empty room. 'none' is the app's own spelling of "no model"
         // and is not a product name, so it is not what the tracker row should say.
@@ -974,9 +997,31 @@ export const useStore = create<AppState>((set, get) => ({
         // rather than recording a session the map cannot place.
         lineId: activeLine?.id ?? null,
       });
+      // The minutes, asked for once the meeting's own row exists and in the
+      // background: a summary is one AI job on the whole meeting, which is seconds
+      // of work, and the person who pressed End must get their meeting back now —
+      // as must the tracker row, which is the record and does not wait on prose
+      // that may never arrive. `sessionId` is null when the flush wrote nothing (a
+      // meeting with no cards), and then there is no row to put minutes on either.
+      void flushed.then((sessionId) => {
+        if (!sessionId) return;
+        void writeMeetingMinutes({
+          sessionId,
+          chatHistory,
+          cards: insightCards,
+          title: reviewTitle,
+          privacyMode: isPrivacyMode,
+        });
+      });
     }
     set({ isMeetingEnded: ended, isPlaying: !ended });
   },
+  // The same on-screen change endMeeting(true) makes and NOT its write. Cards are
+  // broadcast to every browser in the room, so each of them holds the same
+  // insightCards: a meeting with three people in it used to end with three
+  // tracker_sessions rows — S1, S2 and S3 on the line — and every card three
+  // times. One meeting is recorded once, by the browser whose person pressed End.
+  meetingEndedRemotely: () => set({ isMeetingEnded: true, isPlaying: false }),
   setTime: (time) => set({ time }),
   resetTime: () => set({ time: 0, chatHistory: [], insightCards: [] }),
   

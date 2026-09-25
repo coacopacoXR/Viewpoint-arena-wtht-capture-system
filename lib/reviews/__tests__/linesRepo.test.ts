@@ -371,7 +371,30 @@ describe('listReviewSessions and lastSessionOnLine', () => {
   it('reads a meeting recorded before this batch, with no line and no revisions', async () => {
     answerWith([{ id: 'sess-0', title: 'Old', ended_at: '2026-01-01T10:00:00.000Z', participant_count: 2 }]);
     const [session] = await listReviewSessions(REVIEW);
-    expect(session).toMatchObject({ lineId: null, seq: null, revisionIds: [], summary: null, modelName: null });
+    expect(session).toMatchObject({
+      lineId: null, seq: null, revisionIds: [], summary: null, modelName: null, attendeeNames: [],
+    });
+  });
+
+  it('reads who attended and the minutes, when the row has them', async () => {
+    // Batch BM. Both come off the same `select('*')` the revisions do, and both
+    // stay optional at the row level: a meeting recorded before either column
+    // existed reads back [] and null, which is what the session panel falls back on.
+    answerWith([{ ...newer, attendee_names: ['Olga Owner', 'Ben Editor'], summary: '## Decisions\nRev B approved.' }]);
+    const [session] = await listReviewSessions(REVIEW);
+    expect(session).toMatchObject({
+      participantCount: 5,
+      attendeeNames: ['Olga Owner', 'Ben Editor'],
+      summary: '## Decisions\nRev B approved.',
+    });
+  });
+
+  it('drops a blank name out of the list it reads back', async () => {
+    // A blank in the middle of the list reads as a missing attendee in the panel,
+    // and the count beside it is the fallback for "we never knew".
+    answerWith([{ ...newer, attendee_names: ['Olga Owner', ''] }]);
+    const [session] = await listReviewSessions(REVIEW);
+    expect(session.attendeeNames).toEqual(['Olga Owner']);
   });
 
   it('answers [] for a review that has not met, and for a database that has not been upgraded', async () => {

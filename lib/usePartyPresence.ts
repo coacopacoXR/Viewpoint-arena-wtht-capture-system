@@ -23,9 +23,13 @@ import { usePointingTimelineStore } from './pointingTimelineStore';
 import type { PointingSegment } from './pointingTimelineStore';
 import { supabase } from './supabase';
 import { getStoredIdentity } from './identity';
+import { recordingStateRef, type RecordingStatePayload } from './recordingState';
 import type { Session } from '@supabase/supabase-js';
 
 export type { ParticipantPresence };
+// Re-exported from where it now lives, so this module's readers — usePointingTimeline,
+// RecordingContext — keep importing it from here. See lib/recordingState.ts.
+export type { RecordingStatePayload };
 
 type RoomMessage =
   | { type: 'PRESENCE'; payload: ParticipantPresence }
@@ -95,13 +99,10 @@ const partySocketRef: { current: PartySocket | null } = { current: null };
 // RecordingContext, outside the hook's return) can send without a socket
 // ref of its own. Subscribers are notified when the state changes so the
 // RecordingIndicator and per-client mic slicer can react.
-export interface RecordingStatePayload {
-  recording: boolean;
-  startedAt: number;
-  byUserId: string;
-  byName: string;
-}
-const recordingStateRef: { current: RecordingStatePayload | null } = { current: null };
+//
+// The ref itself lives in lib/recordingState.ts, which imports nothing: store.ts's
+// endMeeting reads the recording's startedAt from there to pick out this meeting's
+// live transcript, and this module imports the store.
 const recordingStateSubscribers = new Set<(state: RecordingStatePayload | null) => void>();
 
 function notifyRecordingStateSubscribers() {
@@ -631,8 +632,14 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
           setSessionHostId(msg.payload.hostId);
         }
       } else if (msg.type === 'MEETING_END') {
-        const { endMeeting } = useStore.getState();
-        endMeeting(true);
+        // Somebody else in the room pressed End. This browser ends the meeting on
+        // screen and records NOTHING. Cards are broadcast to everybody, so every
+        // browser in the room holds the same insightCards and a three-person
+        // meeting that let all three flush wrote three tracker_sessions — S1, S2
+        // and S3 on the line — and every card three times. Only the browser whose
+        // person pressed End records it; see endMeeting in store.ts.
+        const { meetingEndedRemotely } = useStore.getState();
+        meetingEndedRemotely();
       } else if (msg.type === 'TAKEOVER_SYNC') {
         setTakeoverModeEnabled(msg.payload.enabled);
         setTakeoverApprovedUserIds(msg.payload.approvedUserIds);

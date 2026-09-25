@@ -54,6 +54,33 @@ export function participantLabel(name: string, guest?: boolean): string {
   return guest ? `${name} (guest)` : name;
 }
 
+/**
+ * Who attended a meeting, as names: this browser's person first, then everybody
+ * else in the room.
+ *
+ * The names are stored WITHOUT the "(guest)" suffix participantLabel adds on
+ * screen, for the reason UserIdentity.guest gives: a suffix in the text would end
+ * up in a tracker row, and the row is a record of who was in the meeting rather
+ * than of how one of them signed in.
+ *
+ * Deduplicated and with no blanks in it. Two browsers can hold the same person
+ * (a tab reopened without a reload), and a participant whose presence arrived
+ * before their name did would otherwise be recorded as an empty string in the
+ * middle of the list — which reads as a missing name in the session panel.
+ */
+export function attendeeNames(
+  localName: string,
+  remote: readonly { name?: string | null }[],
+): string[] {
+  const names: string[] = [];
+  for (const raw of [localName, ...remote.map((person) => person?.name ?? '')]) {
+    const name = (raw ?? '').trim();
+    if (name === '' || names.includes(name)) continue;
+    names.push(name);
+  }
+  return names;
+}
+
 // `storage` only fires in OTHER tabs, so a sign-in or sign-out written here
 // (lib/auth/useAuth.ts) would leave every mounted useIdentity() consumer
 // showing the old name until a reload. One custom event closes that gap.

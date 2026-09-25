@@ -5,7 +5,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const flushSessionToTracker = vi.fn();
 vi.mock('../lib/trackerBridge', () => ({
-  flushSessionToTracker: (...args: unknown[]) => flushSessionToTracker(...args),
+  // async, because the real flushSessionToTracker answers a promise and store.ts
+  // chains the meeting's minutes onto the session id it resolves with (batch BM).
+  flushSessionToTracker: async (...args: unknown[]) => flushSessionToTracker(...args),
 }));
 
 import { useStore } from '../store';

@@ -38,6 +38,9 @@ const handlers = {
 };
 
 function setup(options: { isHost?: boolean; micOn?: boolean; micBlocked?: boolean } = {}) {
+  // The person at this browser, whose name leads the attendee list the End button
+  // passes down (batch BM). Without it lib/identity answers 'Guest'.
+  localStorage.setItem('vp_user', JSON.stringify({ name: 'Olga Owner', color: '#4F8EF7' }));
   storeState = {
     viewMode: ViewMode.FREE,
     setViewMode: vi.fn(),
@@ -80,6 +83,7 @@ describe('CallBar', () => {
 
   afterEach(() => {
     cleanup();
+    localStorage.removeItem('vp_user');
   });
 
   it('carries no playback transport and no OP.STATUS readout', () => {
@@ -155,7 +159,9 @@ describe('CallBar', () => {
 
     fireEvent.click(screen.getByTitle('End Session'));
 
-    expect(storeState.endMeeting).toHaveBeenCalledWith(true, 3);
+    // The head count AND the names: the count says that three people met, the
+    // names say who they were, and the session row now carries both (batch BM).
+    expect(storeState.endMeeting).toHaveBeenCalledWith(true, 3, ['Olga Owner', 'Maria', 'Jonas']);
     expect(presenceState.broadcastMeetingEnd).toHaveBeenCalledTimes(1);
     expect(screen.queryByTitle('Leave')).toBeNull();
   });

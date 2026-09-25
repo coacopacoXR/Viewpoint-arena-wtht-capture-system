@@ -187,6 +187,16 @@ export interface LineSession {
   title: string;
   endedAt: string;
   participantCount: number;
+  /**
+   * Who attended, by name — the person who ended the meeting first, then everybody
+   * else in the room, deduplicated (lib/identity.attendeeNames).
+   *
+   * Optional and [] for a meeting recorded before the column existed, which is why
+   * `participantCount` is still here: the session panel shows the names when there
+   * are any and the count when there are not, so an old row still says something
+   * true about who was in the room.
+   */
+  attendeeNames?: string[];
   modelName: string | null;
   /** The line this meeting was on, or null for one recorded before lines existed. */
   lineId: string | null;
@@ -195,14 +205,14 @@ export interface LineSession {
   /** The model_revisions that were on screen when it ended. */
   revisionIds: string[];
   /**
-   * The minutes, when they were stored.
+   * The minutes of the meeting, when they were written.
    *
-   * Always null today and the column does not exist: /api/capture/summary answers
-   * with markdown and stores nothing, so a summary is generated for a meeting that
-   * is still open and is gone when it ends. The field is here because the session
-   * panel has a slot for one and a slot that cannot be filled is a slot that lies
-   * by omission — reading `row['summary']` costs nothing, answers null on every
-   * schema version so far, and starts working the day a summary is persisted.
+   * Null is the normal answer and not a gap: api/capture/summary.ts is asked once
+   * per meeting by the one browser that recorded it (lib/capture/meetingMinutes),
+   * and a meeting with no transcript and no cards, a room in privacy mode, capture
+   * paused while somebody curated the review, and any provider failure all leave it
+   * null. The session panel then says that no summary was stored, which is the
+   * truth about that meeting rather than a blank slot.
    */
   summary: string | null;
 }
@@ -213,6 +223,7 @@ function toLineSession(row: Record<string, unknown>): LineSession | null {
   const rawSeq = row['seq'];
   const seq = typeof rawSeq === 'number' && Number.isInteger(rawSeq) ? rawSeq : null;
   const rawRevisions = row['revision_ids'];
+  const rawAttendees = row['attendee_names'];
   const rawCount = row['participant_count'];
   const summary = typeof row['summary'] === 'string' && row['summary'] !== '' ? row['summary'] : null;
   return {
@@ -220,6 +231,13 @@ function toLineSession(row: Record<string, unknown>): LineSession | null {
     title: typeof row['title'] === 'string' ? row['title'] : '',
     endedAt: typeof row['ended_at'] === 'string' ? row['ended_at'] : '',
     participantCount: typeof rawCount === 'number' ? rawCount : Number(rawCount ?? 0),
+    // `select('*')` and a runtime check rather than a column list, for the reason
+    // revision_ids below gives: an install whose database predates batch BM has no
+    // attendee_names, and an empty list is the answer that lets the panel fall back
+    // to the count instead of the read failing and losing the meeting.
+    attendeeNames: Array.isArray(rawAttendees)
+      ? rawAttendees.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+      : [],
     modelName: typeof row['model_name'] === 'string' ? row['model_name'] : null,
     lineId: typeof row['line_id'] === 'string' && row['line_id'] !== '' ? row['line_id'] : null,
     seq,

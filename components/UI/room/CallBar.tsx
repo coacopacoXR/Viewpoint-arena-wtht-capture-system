@@ -17,6 +17,7 @@ import { useStore } from '../../../store';
 import { ViewMode } from '../../../types';
 import { usePresence } from '../../../lib/PresenceContext';
 import { useWebRTCContext } from '../../../lib/WebRTCContext';
+import { attendeeNames, getDisplayName } from '../../../lib/identity';
 import BarButton from './BarButton';
 
 const iconSlot =
@@ -123,7 +124,14 @@ const CallBar: React.FC<CallBarProps> = ({ isHost, onFreeView, onLeaderToggle, o
       {/* The way out: the host ends the session, everybody else leaves it. */}
       {isHost ? (
         <button
-          onClick={() => { endMeeting(true, remoteParticipantList.length + 1); broadcastMeetingEnd(); }}
+          onClick={() => {
+            // The person at this browser pressed End, so this browser is the one
+            // that records the meeting: the names travel with the head count, and
+            // MEETING_END tells everybody else to end on screen without writing a
+            // second session row. See store.meetingEndedRemotely.
+            endMeeting(true, remoteParticipantList.length + 1, attendeeNames(getDisplayName(), remoteParticipantList));
+            broadcastMeetingEnd();
+          }}
           title="End Session"
           className={clsx(iconSlot, 'bg-black text-white border-black hover:bg-gray-800')}
         >

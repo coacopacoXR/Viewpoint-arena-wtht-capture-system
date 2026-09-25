@@ -37,6 +37,16 @@ export async function flushSessionToTracker(opts: {
   roomId: string;
   insightCards: InsightCard[];
   participantCount: number;
+  /**
+   * Who attended, by name — this browser's person and everybody else in the room,
+   * already deduplicated by lib/identity.attendeeNames.
+   *
+   * Written next to `participant_count` rather than instead of it: the count is
+   * all a session recorded before this column existed has, and the session map's
+   * panel falls back to it. Absent means the caller did not know — an ad-hoc room
+   * with no presence — and the row then gets an empty list, not a guess.
+   */
+  attendeeNames?: string[];
   modelName: string | null;
   labels?: Record<string, string>;
   /**
@@ -98,6 +108,7 @@ export async function flushSessionToTracker(opts: {
       title: `Design Review — ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`,
       ended_at: new Date().toISOString(),
       participant_count: participantCount,
+      attendee_names: opts.attendeeNames ?? [],
       model_name: modelName,
       labels: labels ?? {},
       review_id: reviewId,
