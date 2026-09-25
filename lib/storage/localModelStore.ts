@@ -10,11 +10,12 @@
 //     <dir>/<sha256>.json     the sidecar (lib/storage/sidecar.ts)
 //
 // Flat is enough because the name is a 64-char content address: there are no
-// collisions to shard around and no directory to grow a listing of. It also
-// means the ONLY thing that decides a path is a value MODEL_HASH_RE accepted,
-// which is what makes a request for `/api/models/../../etc/passwd` unreach this
-// module at all — and it is checked again here so a future caller that forgot
-// the api's validation still cannot escape `dir`.
+// collisions to shard around and no subdirectory tree for a listing to walk —
+// `list()` is one `readdirSync` of this directory. It also means the ONLY thing
+// that decides a path is a value MODEL_HASH_RE accepted, which is what makes a
+// request for `/api/models/../../etc/passwd` unreach this module at all — and it
+// is checked again here so a future caller that forgot the api's validation
+// still cannot escape `dir`.
 
 import { randomBytes } from 'node:crypto';
 import {
@@ -22,15 +23,22 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { isModelHash, sha256Hex } from './hash.ts';
-import { buildSidecar, parseSidecar, sidecarName } from './sidecar.ts';
-import type { ModelMeta, ModelRef, ModelStore, ModelUploadMeta } from './modelStore.ts';
+import { compareModelHashes, isModelHash, sha256Hex } from './hash.ts';
+import { SIDECAR_SUFFIX, buildSidecar, parseSidecar, sidecarName } from './sidecar.ts';
+import type {
+  ModelListEntry,
+  ModelMeta,
+  ModelRef,
+  ModelStore,
+  ModelUploadMeta,
+} from './modelStore.ts';
 
 export class LocalModelStore implements ModelStore {
   constructor(private readonly dir: string) {}
@@ -85,6 +93,43 @@ export class LocalModelStore implements ModelStore {
       return null;
     }
     return parseSidecar(raw);
+  }
+
+  /**
+   * The directory's sidecars, each answered with the metadata it holds.
+   *
+   * Sidecars rather than objects: `<hash>.json` is the only name in here that
+   * can describe a file, and the bytes beside it can say nothing about
+   * themselves. Listing them is also what makes the state a crash mid-`put`
+   * leaves — a sidecar with no object yet — visible to an admin, instead of
+   * being something only a `du` on the volume would ever turn up.
+   */
+  async list(): Promise<ModelListEntry[]> {
+    let names: string[];
+    try {
+      names = readdirSync(this.dir);
+    } catch {
+      // Nothing has been put yet, so the directory does not exist; or the
+      // volume went away. Either way there is nothing to describe, and an empty
+      // listing is the same answer `head` gives for an absent object.
+      return [];
+    }
+
+    const entries: ModelListEntry[] = [];
+    for (const name of names) {
+      if (!name.endsWith(SIDECAR_SUFFIX)) continue;
+      const hash = name.slice(0, -SIDECAR_SUFFIX.length);
+      // Leaves out the object itself, a temp file from a write still in flight,
+      // and any other name that is not a content address. `head` makes the same
+      // check again before it builds a path.
+      if (!isModelHash(hash)) continue;
+      // Null for a sidecar that went away between the two reads, or one that
+      // does not parse: a file the store cannot describe is not one this
+      // listing can show.
+      const meta = await this.head(hash);
+      if (meta) entries.push({ hash, ...meta });
+    }
+    return entries.sort((a, b) => compareModelHashes(a.hash, b.hash));
   }
 
   async delete(hash: string): Promise<boolean> {

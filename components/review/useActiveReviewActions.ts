@@ -25,12 +25,28 @@
 import { useMemo } from 'react';
 import { usePresence } from '../../lib/PresenceContext';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
-import type { ReviewDraft, ReviewPin, ReviewViewpoint } from '../../lib/reviewSetupStore';
+import type { ReviewAssetReference, ReviewDraft, ReviewPin, ReviewViewpoint } from '../../lib/reviewSetupStore';
 import type { Requirement } from '../../types';
 import type { NewAgendaItem } from '../../lib/reviewSetupStore';
 import type { ReviewDraftActions } from './draftActions';
 
-export function useActiveReviewActions(): ReviewDraftActions {
+/**
+ * The room's writes that no curation tab makes.
+ *
+ * Deliberately NOT part of draftActions.ts: that interface is the contract a tab is
+ * rendered against and every caller has to satisfy it, whereas this has one caller
+ * — the PLM launch, recording the document the review was opened from — and one
+ * store. Widening the tab contract for it would mean inventing a no-op for every
+ * test that builds one, to describe a write no tab can make.
+ *
+ * It goes through the same `publish` as the rest, so the reference reaches
+ * everybody else in the room and not only this screen.
+ */
+export interface ReviewLaunchActions {
+  addReference(ref: Omit<ReviewAssetReference, 'id'>): void;
+}
+
+export function useActiveReviewActions(): ReviewDraftActions & ReviewLaunchActions {
   const { broadcastReviewConfig } = usePresence();
 
   return useMemo(() => {
@@ -72,6 +88,7 @@ export function useActiveReviewActions(): ReviewDraftActions {
       reorderRequirements: (fromIndex: number, toIndex: number) => publish(store().reorderRequirements(fromIndex, toIndex)),
       setLabel: (fieldId: string, value: string) => publish(store().setLabel(fieldId, value)),
       clearLabel: (fieldId: string) => publish(store().clearLabel(fieldId)),
+      addReference: (ref: Omit<ReviewAssetReference, 'id'>) => publish(store().addReference(ref)),
     };
   }, [broadcastReviewConfig]);
 }

@@ -36,6 +36,7 @@ import TopBar from './room/TopBar';
 import CallBar from './room/CallBar';
 import ManageButton from './room/ManageButton';
 import EditingStrip from '../review/EditingStrip';
+import PlmLaunch from '../review/PlmLaunch';
 import ReviewEditPanel from '../review/ReviewEditPanel';
 import ReviewEditingNotice from '../review/ReviewEditingNotice';
 import { useReviewRole } from '../../lib/reviews/useReviewRole';
@@ -295,6 +296,15 @@ const Interface: React.FC = () => {
           <MeetingSummary />
           {showExplainer && <ViewConfigExplainer onClose={() => setShowExplainer(false)} />}
           {showDeicticExplainer && <DeicticFeaturesExplainer onClose={() => setShowDeicticExplainer(false)} />}
+
+          {/* The PLM launch this room was opened from (T5.3): Onshape's document
+              browser, and the card that says what a launch recorded. Mounted at the
+              room's own level rather than inside the Edit panel, because the
+              reference it writes is written on ARRIVAL — before the room has
+              answered the ?edit=1 request — and a child that only exists with Edit
+              on would wait for an answer that may never come. Only the browser is
+              gated on the amber strip, and it gates itself. */}
+          <PlmLaunch />
       </div>
       
       {/* Drawer Layer */}

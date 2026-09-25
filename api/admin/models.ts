@@ -1,8 +1,15 @@
 // Models admin endpoint (plan 14, batch BE).
 //
-// GET    /api/admin/models                        — list every stored model file
-//                                                  with references from revisions
-//                                                  and curation assets.
+// GET    /api/admin/models                        — list every file storage holds,
+//                                                  with the references from
+//                                                  revisions and curation assets.
+//                                                  Files no design review points at
+//                                                  are listed too, marked
+//                                                  `referenced: false`: a model
+//                                                  uploaded in a plain session has
+//                                                  no row anywhere, and a file the
+//                                                  console cannot show is a file
+//                                                  nobody can delete.
 // DELETE /api/admin/models?type=revision&id=...   — remove a model_revisions row.
 // DELETE /api/admin/models?type=file&hash=...     — remove a file from storage,
 //                                                  only when nothing references
@@ -15,6 +22,7 @@ import { requireAdmin } from '../_lib/adminAuth.ts';
 import { postgrestFetch } from '../_lib/postgrest.ts';
 import { resolveModelStore } from '../_lib/models.ts';
 import { isModelHash } from '../../lib/storage/hash.ts';
+import type { ModelListEntry } from '../../lib/storage/modelStore.ts';
 
 interface RevisionRow {
   id: string;
@@ -55,6 +63,12 @@ interface AdminModelEntry {
   content_type: string;
   uploaded_at: string;
   uploaded_by_name: string;
+  /**
+   * Whether a revision row or a curation asset points at this hash. False means
+   * the file is in storage and no design review uses it — the console says so,
+   * and deleting it is exactly what the DELETE route's 409 guard allows.
+   */
+  referenced: boolean;
   revisions: ModelRevisionRef[];
   curation_refs: CurationRef[];
 }
@@ -136,14 +150,36 @@ async function handleList(res: VercelResponse) {
     }
   }
 
-  // Build the store to read metadata for each hash.
+  // Every file storage holds, described by the store rather than by a caller's
+  // hash. The two queries above only know about files a design review points
+  // at, so a model imported in a plain session is in neither — and a file this
+  // listing does not add is a file the console cannot show, which is a file
+  // nobody can delete. The metadata comes with it, so the referenced hashes are
+  // described by the same one listing instead of by a `head` each.
   const store = await resolveModelStore();
+  const storedByHash = new Map<string, ModelListEntry>();
+  if (store) {
+    try {
+      for (const stored of await store.list()) {
+        storedByHash.set(stored.hash, stored);
+        if (!byHash.has(stored.hash)) {
+          byHash.set(stored.hash, { revisions: [], curation_refs: [] });
+        }
+      }
+    } catch (err) {
+      // Degrade to the database's answer — the referenced files, described by
+      // their revision rows — rather than 500 the whole section, and say why in
+      // the api log. The console then shows fewer files than storage holds,
+      // which is the old behaviour and a lesser harm than no models section.
+      console.error('[admin/models] store listing failed:', err);
+    }
+  }
 
   const entries: AdminModelEntry[] = [];
   let totalStorage = 0;
 
   for (const [hash, { revisions: revs, curation_refs }] of byHash) {
-    const meta = store ? await store.head(hash) : null;
+    const meta = storedByHash.get(hash);
     const firstRev = revs[0];
     const fileName = meta?.fileName ?? firstRev?.file_name ?? '';
     const size = meta?.size ?? firstRev?.size ?? 0;
@@ -158,6 +194,7 @@ async function handleList(res: VercelResponse) {
       content_type: contentType,
       uploaded_at: uploadedAt,
       uploaded_by_name: uploadedByName,
+      referenced: revs.length > 0 || curation_refs.length > 0,
       revisions: revs.map((r) => ({
         id: r.id,
         review_id: r.review_id,

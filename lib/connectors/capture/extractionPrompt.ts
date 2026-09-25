@@ -59,7 +59,8 @@ Reply with a single raw JSON object and nothing else. No markdown, no code fence
         "tradeoffAnalysis": "RATIONALE only: what was given up",
         "department": "ACTION only: owning department",
         "assignee": "ACTION only: owning person",
-        "dueDate": "ACTION only: YYYY-MM-DD. Resolve a relative deadline ("by Friday") against today's date given above the transcript; omit if no deadline was stated"
+        "dueDate": "ACTION only: YYYY-MM-DD. Resolve a relative deadline ("by Friday") against today's date given above the transcript; omit if no deadline was stated",
+        "dueDateText": "ACTION only: the deadline exactly as it was spoken ("by Friday", "next week", "end of the month"). Copy the speaker's words verbatim and never convert them into a date; omit if no deadline was stated"
       }
     }
   ]
@@ -70,6 +71,7 @@ Rules:
 - Do not emit "id" or "timestamp"; the application assigns those.
 - Do not add any field that is not listed above.
 - "priority" is required on every card. Judge it from the speaker's own emphasis: Critical only for safety, yield-blocking or schedule-blocking concerns.
+- Whenever a deadline was spoken, fill BOTH date fields: "dueDateText" with the speaker's own words, verbatim, and "dueDate" with your best reading of them. The application resolves "dueDateText" against the calendar it sends with the transcript and prefers that answer, because a copied phrase can be resolved exactly and a date you computed often cannot be.
 - When a "Components in this model" list is provided, \`componentReference\` MUST be an id from that list, or omitted entirely. Never invent a component id. Never use a part name that is not in the list.
 - When an utterance is deictic ("this", "that", "here") and a pointing segment from the same speaker overlaps its time window, prefer that part as the componentReference.
 - Otherwise resolve a spoken component name against the list; if you are unsure which id matches, omit componentReference rather than guess.`;

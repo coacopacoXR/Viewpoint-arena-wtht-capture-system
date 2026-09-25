@@ -150,7 +150,10 @@ describe('curationsRepo — listed column', () => {
   // ─── listRecentCurations sends the filter ────────────────────────────────
 
   it('listRecentCurations sends .eq(listed, true)', async () => {
-    const afterEq = { order: mockOrder };
+    // `.eq` answers with itself: listRecentCurations chains a second filter
+    // (`.eq('archived', false)`) on the way to `.order`, and this test is about
+    // the `listed` one — see curationsRepo.archived.test.ts for the other.
+    const afterEq = { eq: mockEq, order: mockOrder };
     const afterOrder = { limit: mockLimit };
     mockLimit.mockResolvedValue({ data: [], error: null });
 
@@ -169,17 +172,20 @@ describe('curationsRepo — listed column', () => {
     // An install that has not re-applied docs/supabase-schema.sql gets
     // "column review_curations.listed does not exist" (42703) for the whole
     // query. Returning [] there would empty the lobby of every saved review
-    // over a flag that database has never heard of.
-    mockSelectChain
-      .mockReturnValueOnce({ eq: mockEq })          // first attempt, with the filter
-      .mockReturnValueOnce({ order: mockOrder });   // retry, without it
-
+    // over a flag that database has never heard of. Such a database has not
+    // heard of `archived` either, so both filtered attempts come back 42703 and
+    // the third — no filters, no `listed` column — is the one that answers.
     const failingLimit = vi.fn().mockResolvedValue({
       data: null,
       error: { code: '42703', message: 'column review_curations.listed does not exist' },
     });
-    mockEq.mockReturnValue({ order: vi.fn().mockReturnValue({ limit: failingLimit }) });
+    const failing = { eq: mockEq, order: vi.fn().mockReturnValue({ limit: failingLimit }) };
+    mockSelectChain
+      .mockReturnValueOnce(failing)               // listed + archived
+      .mockReturnValueOnce(failing)               // listed on its own
+      .mockReturnValueOnce({ order: mockOrder }); // neither
 
+    mockEq.mockReturnValue(failing);
     mockOrder.mockReturnValue({ limit: mockLimit });
     mockLimit.mockResolvedValue({
       data: [{
@@ -192,7 +198,7 @@ describe('curationsRepo — listed column', () => {
 
     const list = await listRecentCurations(8);
 
-    expect(failingLimit).toHaveBeenCalled();     // it did try the filter first
+    expect(failingLimit).toHaveBeenCalledTimes(2);  // it did try both filters first
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe('rev-old');
   });

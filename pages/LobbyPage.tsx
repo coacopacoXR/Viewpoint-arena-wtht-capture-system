@@ -5,7 +5,7 @@ import { useIdentity, AVATAR_COLORS, UserIdentity } from '../lib/identity';
 import { signOutOfAccount } from '../lib/auth/useAuth';
 import { identityRequired, publicIdentityOf } from '../lib/auth/authRules';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
-import { listRecentCurations, deleteCuration, getCurationSummary, createReview, type CurationSummary } from '../lib/curationsRepo';
+import { listRecentCurations, listArchivedIds, deleteCuration, getCurationSummary, createReview, type CurationSummary } from '../lib/curationsRepo';
 import { useReviewSetupStore, createReviewDraft } from '../lib/reviewSetupStore';
 import { listMyReviews, describeLastVisit, type MyReview } from '../lib/reviewParticipantsRepo';
 import { Camera, MapPin, Layers, Play, Pencil, Trash2 } from 'lucide-react';
@@ -79,6 +79,8 @@ const LobbyPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // Reviews an admin has put away are filtered out by the query itself, so
+    // the rows this returns are exactly the rows the section renders.
     listRecentCurations(8).then(setCurations);
   }, []);
 
@@ -89,7 +91,14 @@ const LobbyPage: React.FC = () => {
   useEffect(() => {
     if (!showMyReviews) { setMyReviews(null); return; }
     let cancelled = false;
-    listMyReviews().then(rows => { if (!cancelled) setMyReviews(rows); });
+    // This list follows the person, not the link: it comes out of
+    // review_participants, which has no `archived` column to filter on, so the
+    // flag is asked for separately — one query for the whole list — and the
+    // archived ones are dropped here.
+    listMyReviews().then(async rows => {
+      const archived = await listArchivedIds(rows.map(r => r.reviewId));
+      if (!cancelled) setMyReviews(rows.filter(r => !archived.has(r.reviewId)));
+    });
     return () => { cancelled = true; };
   }, [showMyReviews]);
 

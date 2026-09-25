@@ -17,9 +17,15 @@
 // already guarantees.
 
 import { Readable } from 'node:stream';
-import { isModelHash, sha256Hex } from './hash.ts';
-import { buildSidecar, parseSidecar, sidecarName } from './sidecar.ts';
-import type { ModelMeta, ModelRef, ModelStore, ModelUploadMeta } from './modelStore.ts';
+import { compareModelHashes, isModelHash, sha256Hex } from './hash.ts';
+import { SIDECAR_SUFFIX, buildSidecar, parseSidecar, sidecarName } from './sidecar.ts';
+import type {
+  ModelListEntry,
+  ModelMeta,
+  ModelRef,
+  ModelStore,
+  ModelUploadMeta,
+} from './modelStore.ts';
 
 export interface SupabaseModelStoreOptions {
   /** Project URL with no trailing slash, e.g. https://xyz.supabase.co. */
@@ -39,6 +45,28 @@ export interface SupabaseModelStoreOptions {
  */
 const ABSENT_STATUSES = new Set([400, 404]);
 
+/**
+ * How many names one page of Storage's list route asks for, and how many pages
+ * `list()` will read.
+ *
+ * The page size is the most Storage answers at once. The page cap is not a
+ * limit on the bucket — it is what turns a server that ignored `offset` and
+ * answered the same page for ever into a truncated listing rather than a request
+ * that never returns. Fifty pages is fifty thousand objects, past anything this
+ * app stores.
+ */
+const LIST_PAGE_SIZE = 1000;
+const LIST_MAX_PAGES = 50;
+
+/**
+ * One row of the list route. Only `name` is read: the size and mimetype Storage
+ * reports beside it describe the sidecar object, not the file the sidecar is
+ * about, so a listed file's metadata still comes from its own sidecar.
+ */
+interface StorageListEntry {
+  name?: unknown;
+}
+
 export class SupabaseModelStore implements ModelStore {
   private readonly fetchFn: typeof fetch;
 
@@ -50,6 +78,12 @@ export class SupabaseModelStore implements ModelStore {
   private objectUrl(path: string): string {
     const bucket = encodeURIComponent(this.options.bucket);
     return `${this.options.url}/storage/v1/object/${bucket}/${path}`;
+  }
+
+  /** `/storage/v1/object/list/<bucket>`, the route that names what the bucket holds. */
+  private listUrl(): string {
+    const bucket = encodeURIComponent(this.options.bucket);
+    return `${this.options.url}/storage/v1/object/list/${bucket}`;
   }
 
   private headers(contentType?: string): Record<string, string> {
@@ -100,6 +134,36 @@ export class SupabaseModelStore implements ModelStore {
     return parseSidecar(await res.text());
   }
 
+  /**
+   * The bucket's sidecars, each answered with the metadata it holds.
+   *
+   * Two kinds of request, because Storage's list route answers names and not
+   * the files they describe: one walk of the listing to find the hashes, then
+   * the sidecars themselves. The sidecar reads go out together rather than one
+   * after the other — an install with a hundred stored files would otherwise
+   * wait for a hundred round trips before the admin console could render.
+   */
+  async list(): Promise<ModelListEntry[]> {
+    const hashes: string[] = [];
+    for (const name of await this.listNames()) {
+      if (!name.endsWith(SIDECAR_SUFFIX)) continue;
+      const hash = name.slice(0, -SIDECAR_SUFFIX.length);
+      // Leaves out the object beside each sidecar, and any other name in the
+      // bucket: only a sidecar of a content address describes a model file.
+      if (isModelHash(hash)) hashes.push(hash);
+    }
+
+    const described = await Promise.all(
+      hashes.map(async (hash): Promise<ModelListEntry | null> => {
+        const meta = await this.head(hash);
+        return meta ? { hash, ...meta } : null;
+      }),
+    );
+    return described
+      .filter((entry): entry is ModelListEntry => entry !== null)
+      .sort((a, b) => compareModelHashes(a.hash, b.hash));
+  }
+
   async delete(hash: string): Promise<boolean> {
     if (!isModelHash(hash)) return false;
     const objectRes = await this.fetchFn(this.objectUrl(hash), {
@@ -127,6 +191,44 @@ export class SupabaseModelStore implements ModelStore {
       body,
     });
     if (!res.ok) throw this.storageError('upload', path, res.status);
+  }
+
+  /**
+   * Every name in the bucket, walked a page at a time.
+   *
+   * A POST, because that is the shape Storage's list route has: the page and
+   * its offset arrive in the body, not in a query string.
+   */
+  private async listNames(): Promise<string[]> {
+    const names: string[] = [];
+    for (let page = 0; page < LIST_MAX_PAGES; page += 1) {
+      const res = await this.fetchFn(this.listUrl(), {
+        method: 'POST',
+        headers: this.headers('application/json'),
+        body: JSON.stringify({ limit: LIST_PAGE_SIZE, offset: page * LIST_PAGE_SIZE }),
+      });
+      // A bucket nobody created yet is a 404, and 404 is what this module
+      // already reads as "not here": an install with no bucket holds no model
+      // files, so the honest listing is an empty one rather than a thrown
+      // storage error the admin console would report as a failure.
+      if (ABSENT_STATUSES.has(res.status)) return names;
+      if (!res.ok) throw this.storageError('list', this.options.bucket, res.status);
+
+      const listed = (await res.json()) as StorageListEntry[] | null;
+      if (!Array.isArray(listed)) {
+        // A 200 whose body is not a listing is a proxy or a Storage version
+        // this module does not speak. Saying so beats walking an empty page
+        // forever, or reporting the bucket as empty when it is not.
+        throw new Error(
+          `supabase storage list returned an unexpected body for ${this.options.bucket}`,
+        );
+      }
+      for (const entry of listed) {
+        if (typeof entry?.name === 'string') names.push(entry.name);
+      }
+      if (listed.length < LIST_PAGE_SIZE) return names;
+    }
+    return names;
   }
 
   /**

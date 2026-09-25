@@ -222,6 +222,11 @@ function rowToSummary(r: CurationListRow): CurationSummary {
 // read that gave up here would empty the lobby of every saved review over a
 // flag that database has never heard of, so each one asks again with the
 // pre-`listed` column list and treats the rows as listed, which they are.
+//
+// `archived` shipped a day later (batch BE) and needs the same way back, but
+// only in the one read that filters on it — and there it needs a step of its
+// own, because a database can have `listed` and not `archived`. Dropping both
+// filters at once would put every link-only review back in the lobby.
 const UNDEFINED_COLUMN = '42703';
 
 // Each pair differs only by `listed`. They are spelled out rather than derived
@@ -243,24 +248,40 @@ const SUMMARY_COLUMNS_LEGACY =
   'id,title,description,viewpoints,pins,agenda,requirements,team,created_at,updated_at';
 
 export async function listRecentCurations(limit = 8): Promise<CurationSummary[]> {
-  // Only listed reviews appear here; a link-only one is still reachable by its
-  // link through loadCuration / getCurationSummary.
+  // Only listed reviews appear here, and not the ones an admin has put away.
+  // Both are still reachable by their link through loadCuration /
+  // getCurationSummary, which is what keeps /room/:id and the invited preview
+  // working for a review the lobby no longer offers. Filtering here rather than
+  // in the page also means the `limit` counts reviews that will be shown: a
+  // filtered-afterwards list of 8 would come back short.
   const first = await supabase
     .from('review_curations')
     .select(LIST_COLUMNS)
     .eq('listed', true)
+    .eq('archived', false)
     .order('updated_at', { ascending: false })
     .limit(limit);
 
-  // No `listed` column: drop both the filter and the column, and take every
-  // row — in such a database every review is listed by definition.
-  const { data, error } = first.error?.code === UNDEFINED_COLUMN
+  // No `archived` column: keep the `listed` filter, which this database does
+  // have, and take every listed row — nothing in it can have been archived.
+  const second = first.error?.code === UNDEFINED_COLUMN
+    ? await supabase
+        .from('review_curations')
+        .select(LIST_COLUMNS)
+        .eq('listed', true)
+        .order('updated_at', { ascending: false })
+        .limit(limit)
+    : first;
+
+  // No `listed` column either: drop both the filters and the column, and take
+  // every row — in such a database every review is listed by definition.
+  const { data, error } = second.error?.code === UNDEFINED_COLUMN
     ? await supabase
         .from('review_curations')
         .select(LIST_COLUMNS_LEGACY)
         .order('updated_at', { ascending: false })
         .limit(limit)
-    : first;
+    : second;
 
   if (error) {
     console.error('[curationsRepo] listRecentCurations failed:', error);
@@ -269,8 +290,9 @@ export async function listRecentCurations(limit = 8): Promise<CurationSummary[]>
   return ((data ?? []) as unknown as CurationListRow[]).map(rowToSummary);
 }
 
-// Every review on this install, including link-only ones — used by the admin
-// screen.
+// Every review on this install, including link-only and archived ones — used
+// by the admin screen and by the tracker, both of which have to reach a review
+// the lobby no longer offers. Never filter this one on `archived`.
 export async function listAllCurations(limit = 100): Promise<CurationSummary[]> {
   const first = await supabase
     .from('review_curations')
@@ -291,6 +313,35 @@ export async function listAllCurations(limit = 100): Promise<CurationSummary[]> 
     return [];
   }
   return ((data ?? []) as unknown as CurationListRow[]).map(rowToSummary);
+}
+
+/**
+ * Which of these reviews an admin has put away.
+ *
+ * The lobby's "Your design reviews" follows the PERSON rather than the link:
+ * lib/reviewParticipantsRepo reads review_participants and looks the titles up
+ * by id afterwards, so it never sees a column of the curation row and cannot
+ * filter on one. This is the other half of that lookup — one query for the
+ * whole list — and the caller drops the ids that come back.
+ *
+ * Answers with nothing to hide on any failure, including the 42703 of a
+ * database that has never heard of `archived` and so has nothing archived in
+ * it. A list that could not check is an inconvenience; an empty one is not
+ * what that database means.
+ */
+export async function listArchivedIds(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set<string>();
+  const { data, error } = await supabase
+    .from('review_curations')
+    .select('id')
+    .eq('archived', true)
+    .in('id', ids);
+  if (error) {
+    console.error('[curationsRepo] listArchivedIds failed:', error);
+    return new Set<string>();
+  }
+  const rows = (data ?? []) as Array<{ id: string }>;
+  return new Set(rows.map((row) => row.id));
 }
 
 export async function deleteCuration(id: string): Promise<boolean> {

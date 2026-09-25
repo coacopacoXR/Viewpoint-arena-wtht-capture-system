@@ -62,6 +62,11 @@ FULL_CARD: dict[str, Any] = {
     "timestamp": 1_699_999_999_999,
     "relatedPoiId": " bracket-assembly ",
     "sourceMessageIds": [" c1 ", "c2"],
+    # Both allowed by CARD_KEYS and both dropped by the parser: a model that
+    # claims its card was typed by Maria must not get a hand-made card into the
+    # tracker. test_a_full_card_keeps_every_field_it_was_given asserts the drop.
+    "source": "manual",
+    "createdByName": "Maria Okafor",
     "affectedRequirementIds": ["REQ-12"],
     "kbRecommendations": ["Check ISO 5817 weld class"],
     "details": {
@@ -69,6 +74,7 @@ FULL_CARD: dict[str, Any] = {
         "status": "In Review",
         "assignee": " Dana ",
         "dueDate": "2026-09-30",
+        "dueDateText": " by the end of the month ",
         "componentReference": "Bracket",
         "designStage": "DETAILED_DESIGN",
         "decisionRole": "FINAL_DECISION",
@@ -123,6 +129,7 @@ def test_a_full_card_keeps_every_field_it_was_given() -> None:
                 "status": "In Review",
                 "assignee": "Dana",
                 "dueDate": "2026-09-30",
+                "dueDateText": "by the end of the month",
                 "componentReference": "Bracket",
                 "designStage": "DETAILED_DESIGN",
                 "decisionRole": "FINAL_DECISION",
@@ -135,6 +142,12 @@ def test_a_full_card_keeps_every_field_it_was_given() -> None:
             },
         }
     ]
+    # "Keeps every field" has two exceptions, and they are the ones that say who
+    # wrote the card. FULL_CARD claims source/createdByName; a card this service
+    # parsed was written by a model, so the claim is dropped rather than passed
+    # through to the tracker as a hand-made card by somebody who never typed it.
+    assert cards[0].source is None
+    assert cards[0].created_by_name is None
 
 
 def test_an_empty_batch_is_a_legal_reply() -> None:

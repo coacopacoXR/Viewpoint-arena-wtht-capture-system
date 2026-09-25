@@ -32,6 +32,7 @@ import {
     type SceneModel,
     type SceneUpdate,
 } from '../../lib/scene/roomScene';
+import { claimSceneImports } from '../../lib/scene/importHandoff';
 import { compareOffsets, nextToOffset, type SceneExtent } from '../../lib/scene/placement';
 import { sceneModelEntry } from '../../lib/scene/sceneEntries';
 
@@ -715,17 +716,26 @@ const SceneTree: React.FC = () => {
         fileInputRef.current?.click();
     };
 
-    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
+    /**
+     * One file, all the way into the scene: validate it, share it, parse it, then
+     * place it or ask where it goes.
+     *
+     * This was the file input's onChange until batch BG split the file out of the
+     * event, because the PLM launch's document browser hands over a File it got
+     * from Onshape rather than one somebody picked (lib/scene/importHandoff.ts).
+     * There is still exactly one copy of the pipeline: the "already in the scene"
+     * guard, the beside / replace / revision choice and the model_revisions row are
+     * the parts of an import that are easy to get subtly wrong, and a second
+     * pipeline for launched models would be a second place to get them wrong.
+     *
+     * The picker's own value is not reset here — that belongs to the caller that
+     * has one.
+     */
+    const importPickedFile = async (file: File) => {
         // Validate file
         const error = validateModelFile(file);
         if (error) {
             setImportError(error);
-            if (fileInputRef.current) {
-                fileInputRef.current.value = '';
-            }
             return;
         }
 
@@ -750,7 +760,6 @@ const SceneTree: React.FC = () => {
             setImportError(error instanceof Error ? error.message : MODEL_UPLOAD_NETWORK_MESSAGE);
             setShareProgress(null);
             setIsImporting(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
             return;
         } finally {
             setShareProgress(null);
@@ -763,7 +772,6 @@ const SceneTree: React.FC = () => {
             // model. Saying so beats an add that silently does nothing.
             setImportError(`That file is already in the scene as ${sceneModelLabel(already)}.`);
             setIsImporting(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
             return;
         }
 
@@ -778,12 +786,10 @@ const SceneTree: React.FC = () => {
             console.error('Model import error:', error);
             setImportError(error instanceof Error ? error.message : 'Failed to import model file');
             setIsImporting(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
             return;
         }
 
         setIsImporting(false);
-        if (fileInputRef.current) fileInputRef.current.value = '';
 
         if (useStore.getState().scene.models.length === 0) {
             // Nothing in the scene, so there is nothing to ask about: it goes in
@@ -793,6 +799,34 @@ const SceneTree: React.FC = () => {
         }
         setPending({ fileName: stored.fileName, hash: stored.hash, size: stored.size, parsed });
     };
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+            await importPickedFile(file);
+        } finally {
+            // Whatever happened — refused, already in the scene, shared and placed —
+            // the picker is left empty again, so choosing the same file twice in a
+            // row still fires a change.
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    // The PLM launch's document browser leaves its file in a module slot rather
+    // than passing it down: it is an overlay in the room's Edit panel and this is a
+    // panel in the room's left column, so there is no prop between them and no
+    // second pipeline to write (lib/scene/importHandoff.ts).
+    //
+    // Read through a ref and claimed once for the length of the mount, the way
+    // components/UI/Interface.tsx reads the sender of its own ?edit=1 request: the
+    // function is a fresh closure on every render, so a claim that listed it as a
+    // dependency would clear and re-take the slot on every render of the tree.
+    const importPickedFileRef = useRef(importPickedFile);
+    useEffect(() => {
+        importPickedFileRef.current = importPickedFile;
+    });
+    useEffect(() => claimSceneImports((file) => { void importPickedFileRef.current(file); }), []);
 
     /**
      * Put an uploaded, parsed file into the scene, the way the user just asked.

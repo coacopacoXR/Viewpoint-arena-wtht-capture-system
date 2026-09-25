@@ -50,6 +50,7 @@ import {
   parseInsightCards,
 } from '../connectors/capture/parseInsightCards.ts';
 import type { CaptureParseFailureReason } from '../connectors/capture/parseInsightCards.ts';
+import { applyResolvedDeadlines } from '../capture/resolveDeadline.ts';
 import type { InsightCard } from '../../types.ts';
 import type {
   ComponentTreeEntry,
@@ -951,6 +952,29 @@ function checkComponents(
 }
 
 /**
+ * The two passes every provider's cards go through on their way out of the
+ * router, so that no provider — cloud, built-in or webhook — is exempt from
+ * either.
+ *
+ * The second pass is the deadline (docs/plan/14 batch BG). The extraction asks
+ * for the spoken words as well as a date, and lib/capture/resolveDeadline turns
+ * "by Friday" into a date in code, because the built-in 7B model gets that
+ * arithmetic wrong even with a fortnight of weekday names in its prompt to look
+ * it up in. Applied HERE rather than in each provider or in the browser, because
+ * this is the one place all five cards paths meet: a resolution that lived in a
+ * provider would leave the other four answering with the wrong date, and one
+ * that lived in the browser would leave the api's own response — which the
+ * capture-service and webhook clients read — wrong.
+ */
+function finishCards(
+  job: ResolvedJob,
+  cards: InsightCard[],
+  components: ComponentTreeEntry[] | undefined,
+): InsightCard[] {
+  return applyResolvedDeadlines(checkComponents(job, cards, components));
+}
+
+/**
  * The cards job for a provider that answers with MODEL TEXT: OpenAI, Anthropic,
  * Azure, Gemini and anything OpenAI-compatible.
  *
@@ -967,7 +991,7 @@ function parseCardsFromText(
   components: ComponentTreeEntry[] | undefined,
 ): InsightCard[] {
   try {
-    return checkComponents(job, parseInsightCards(raw, { defaultAgentId }), components);
+    return finishCards(job, parseInsightCards(raw, { defaultAgentId }), components);
   } catch (err) {
     if (err instanceof AiJobError) throw err;
     if (err instanceof CaptureExtractionError) {
@@ -998,7 +1022,7 @@ function parseCardsFromPayload(
       note: parsed.reason ?? 'invalid_card',
     });
   }
-  return checkComponents(job, parsed.value, components);
+  return finishCards(job, parsed.value, components);
 }
 
 // ─── Summary ────────────────────────────────────────────────────────────────

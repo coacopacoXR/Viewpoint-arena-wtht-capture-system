@@ -65,6 +65,12 @@ DESIGN_STAGES: Final[tuple[str, ...]] = tuple(member.value for member in DesignS
 # Allowlists, not denylists: a field the model invents is rejected rather than
 # silently passed through into the tracker. These are exactly the keys of
 # InsightCard and InsightDetails in types.ts.
+#
+# "source" and "createdByName" are listed but never copied onto a card (see
+# _validate_card): they say who wrote a card, and a card this parser produced was
+# written by a model, so it is an AI card whatever it claims. Listing them keeps
+# the set equal to the TypeScript interface, which tests/test_typescript_parity.py
+# checks, while a model that echoes them back is tolerated rather than trusted.
 ENVELOPE_KEYS: Final[frozenset[str]] = frozenset({"cards"})
 CARD_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -77,6 +83,8 @@ CARD_KEYS: Final[frozenset[str]] = frozenset(
         "relatedPoiId",
         "sourceMessageIds",
         "details",
+        "source",
+        "createdByName",
         "affectedRequirementIds",
         "kbRecommendations",
     }
@@ -87,6 +95,7 @@ DETAILS_KEYS: Final[frozenset[str]] = frozenset(
         "status",
         "assignee",
         "dueDate",
+        "dueDateText",
         "componentReference",
         "designStage",
         "decisionRole",
@@ -104,6 +113,7 @@ DETAILS_KEYS: Final[frozenset[str]] = frozenset(
 STRING_DETAIL_KEYS: Final[tuple[str, ...]] = (
     "assignee",
     "dueDate",
+    "dueDateText",
     "componentReference",
     "impact",
     "mitigationStrategy",

@@ -13,6 +13,9 @@ const POSTGREST_URL = 'http://rest:3000/rest/v1/';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
+// Imported in a plain session: no revision row and no curation asset names it,
+// so storage is the only place that knows it exists.
+const HASH_C = 'c'.repeat(64);
 
 function base64Url(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url');
@@ -125,16 +128,47 @@ const CURATION_ROWS = [
   },
 ];
 
+/**
+ * What storage holds, as `store.list()` answers it.
+ *
+ * Two of the three are referenced — HASH_A by a revision row, HASH_B by both a
+ * revision row and a curation asset — and HASH_C by nothing at all. It is the
+ * third one this listing exists for.
+ */
+const STORED_FILES = [
+  {
+    hash: HASH_A,
+    fileName: 'bracket.glb',
+    size: 1024,
+    contentType: 'model/gltf-binary',
+    uploadedAt: '2026-09-24T09:00:00Z',
+  },
+  {
+    hash: HASH_B,
+    fileName: 'bracket-v2.glb',
+    size: 2048,
+    contentType: 'model/gltf-binary',
+    uploadedAt: '2026-09-24T10:00:00Z',
+  },
+  {
+    hash: HASH_C,
+    fileName: 'loose-import.step',
+    size: 4096,
+    contentType: 'model/step',
+    uploadedAt: '2026-09-24T11:00:00Z',
+  },
+];
+
 const mockDelete = vi.fn();
-const mockHead = vi.fn();
+const mockList = vi.fn();
 
 vi.mock('../../_lib/models.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../_lib/models.ts')>();
   return {
     ...actual,
     resolveModelStore: vi.fn(async () => ({
-      head: mockHead,
       delete: mockDelete,
+      list: mockList,
     })),
   };
 });
@@ -142,19 +176,45 @@ vi.mock('../../_lib/models.ts', async (importOriginal) => {
 describe('GET /api/admin/models', () => {
   const originalEnv = process.env;
 
+  interface ListBody {
+    models: Array<{
+      hash: string;
+      file_name: string;
+      size: number;
+      content_type: string;
+      uploaded_at: string;
+      uploaded_by_name: string;
+      referenced: boolean;
+      revisions: Array<{ id: string; review_title: string }>;
+      curation_refs: Array<{ review_id: string }>;
+    }>;
+    total_storage: number;
+  }
+
+  /** PostgREST answering the two reads the list makes. */
+  function stubDatabase(revisions: unknown = REVISION_ROWS, curations: unknown = CURATION_ROWS) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input);
+        if (url.includes('model_revisions')) {
+          return new Response(JSON.stringify(revisions), { status: 200 });
+        }
+        if (url.includes('review_curations')) {
+          return new Response(JSON.stringify(curations), { status: 200 });
+        }
+        return new Response('[]', { status: 200 });
+      }),
+    );
+  }
+
   beforeEach(() => {
     process.env = { ...originalEnv, VIEWPOINT_CONFIG: ACCOUNTS_CONFIG, ...ENV_VARS };
-    mockHead.mockReset();
     mockDelete.mockReset();
-    mockHead.mockImplementation(async (hash: string) => {
-      if (hash === HASH_A) {
-        return { fileName: 'bracket.glb', size: 1024, contentType: 'model/gltf-binary', uploadedAt: '2026-09-24T09:00:00Z' };
-      }
-      if (hash === HASH_B) {
-        return { fileName: 'bracket-v2.glb', size: 2048, contentType: 'model/gltf-binary', uploadedAt: '2026-09-24T10:00:00Z' };
-      }
-      return null;
-    });
+    mockList.mockReset();
+    // The listing describes every file the store holds, which is where the
+    // handler now reads names and sizes from instead of asking per hash.
+    mockList.mockResolvedValue(STORED_FILES);
   });
 
   afterEach(() => {
@@ -171,43 +231,93 @@ describe('GET /api/admin/models', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('lists model files with references and total storage', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
-      const url = String(input);
-      if (url.includes('model_revisions')) {
-        return new Response(JSON.stringify(REVISION_ROWS), { status: 200 });
-      }
-      if (url.includes('review_curations')) {
-        return new Response(JSON.stringify(CURATION_ROWS), { status: 200 });
-      }
-      return new Response('[]', { status: 200 });
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it('lists every stored file, with its references and the total storage', async () => {
+    stubDatabase();
 
     const { handler } = await import('../models.ts');
     const res = createMockRes();
     await handler(adminReq(), res as never);
 
     expect(res.statusCode).toBe(200);
-    const body = res.body as {
-      models: Array<{
-        hash: string;
-        file_name: string;
-        size: number;
-        revisions: Array<{ id: string; review_title: string }>;
-        curation_refs: Array<{ review_id: string }>;
-      }>;
-      total_storage: number;
-    };
-    expect(body.models).toHaveLength(2);
-    expect(body.total_storage).toBe(3072);
+    const body = res.body as ListBody;
+    expect(body.models).toHaveLength(3);
+    expect(body.total_storage).toBe(7168);
 
     const entryB = body.models.find((m) => m.hash === HASH_B);
     expect(entryB).toBeDefined();
+    expect(entryB!.referenced).toBe(true);
     expect(entryB!.revisions).toHaveLength(1);
     expect(entryB!.revisions[0].review_title).toBe('Bracket Review');
     expect(entryB!.curation_refs).toHaveLength(1);
     expect(entryB!.curation_refs[0].review_id).toBe('review-1');
+  });
+
+  it('lists a file no design review references, marked so the console can say so', async () => {
+    stubDatabase();
+
+    const { handler } = await import('../models.ts');
+    const res = createMockRes();
+    await handler(adminReq(), res as never);
+
+    const body = res.body as ListBody;
+    const loose = body.models.find((m) => m.hash === HASH_C);
+    expect(loose).toBeDefined();
+    expect(loose!.referenced).toBe(false);
+    expect(loose!.revisions).toEqual([]);
+    expect(loose!.curation_refs).toEqual([]);
+    // Nothing in the database ever named this file, so every field comes from
+    // storage — including the size that makes it into the total.
+    expect(loose!.file_name).toBe('loose-import.step');
+    expect(loose!.size).toBe(4096);
+    expect(loose!.content_type).toBe('model/step');
+    expect(loose!.uploaded_at).toBe('2026-09-24T11:00:00Z');
+    expect(loose!.uploaded_by_name).toBe('');
+  });
+
+  it('marks a file only a curation asset points at as referenced', async () => {
+    // No revision row survives — the review kept the model but its revisions
+    // were deleted — and the 409 guard would still refuse the file.
+    stubDatabase([], [{ id: 'review-1', title: 'Bracket Review', asset: { modelHash: HASH_A } }]);
+
+    const { handler } = await import('../models.ts');
+    const res = createMockRes();
+    await handler(adminReq(), res as never);
+
+    const body = res.body as ListBody;
+    const entryA = body.models.find((m) => m.hash === HASH_A);
+    expect(entryA!.referenced).toBe(true);
+    expect(entryA!.revisions).toEqual([]);
+    expect(entryA!.curation_refs).toEqual([{ review_id: 'review-1', review_title: 'Bracket Review' }]);
+  });
+
+  it('falls back to the referenced files when storage cannot be listed', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockList.mockRejectedValue(
+      new Error('supabase storage list failed for review-models: HTTP 500'),
+    );
+    stubDatabase();
+
+    const { handler } = await import('../models.ts');
+    const res = createMockRes();
+    await handler(adminReq(), res as never);
+
+    expect(errorLog).toHaveBeenCalledWith(
+      '[admin/models] store listing failed:',
+      expect.any(Error),
+    );
+    errorLog.mockRestore();
+
+    // Degraded, not broken: the files the database knows about are still
+    // listed, described by their revision rows rather than by storage.
+    expect(res.statusCode).toBe(200);
+    const body = res.body as ListBody;
+    expect(body.models.map((m) => m.hash).sort()).toEqual([HASH_A, HASH_B]);
+    expect(body.models.every((m) => m.referenced)).toBe(true);
+    const entryA = body.models.find((m) => m.hash === HASH_A);
+    expect(entryA!.file_name).toBe('bracket.glb');
+    expect(entryA!.size).toBe(1024);
+    expect(entryA!.content_type).toBe('');
+    expect(body.total_storage).toBe(3072);
   });
 });
 
@@ -216,7 +326,6 @@ describe('DELETE /api/admin/models — revision', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv, VIEWPOINT_CONFIG: ACCOUNTS_CONFIG, ...ENV_VARS };
-    mockHead.mockReset();
     mockDelete.mockReset();
   });
 
@@ -257,7 +366,6 @@ describe('DELETE /api/admin/models — file', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv, VIEWPOINT_CONFIG: ACCOUNTS_CONFIG, ...ENV_VARS };
-    mockHead.mockReset();
     mockDelete.mockReset();
     mockDelete.mockResolvedValue(true);
   });
@@ -339,6 +447,61 @@ describe('DELETE /api/admin/models — file', () => {
     const body = res.body as { ok: boolean; removed: boolean };
     expect(body.ok).toBe(true);
     expect(body.removed).toBe(true);
+  });
+
+  it('deletes a file only storage knows about', async () => {
+    // The case the listing exists for: imported in a plain session, so no
+    // revision row and no curation asset ever named it. There is nothing to
+    // unreference first, so the guard has to let it through — a 409 here would
+    // make the file the console can now see impossible to remove. The database
+    // is not empty: it simply has nothing pointing at this hash.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      if (url.includes('model_revisions')) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.includes('review_curations')) {
+        return new Response(JSON.stringify(CURATION_ROWS), { status: 200 });
+      }
+      return new Response('[]', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { handler } = await import('../models.ts');
+    const res = createMockRes();
+    await handler(adminReq({
+      method: 'DELETE',
+      query: { type: 'file', hash: HASH_C },
+    }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(mockDelete).toHaveBeenCalledWith(HASH_C);
+  });
+
+  it('still refuses a listed file a design review references', async () => {
+    // The same database state as the listing tests: HASH_B is in storage AND is
+    // the review's current model. Being listed must not weaken the guard.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      if (url.includes('model_revisions')) {
+        return new Response(JSON.stringify(REVISION_ROWS), { status: 200 });
+      }
+      if (url.includes('review_curations')) {
+        return new Response(JSON.stringify(CURATION_ROWS), { status: 200 });
+      }
+      return new Response('[]', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { handler } = await import('../models.ts');
+    const res = createMockRes();
+    await handler(adminReq({
+      method: 'DELETE',
+      query: { type: 'file', hash: HASH_B },
+    }), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid hash', async () => {

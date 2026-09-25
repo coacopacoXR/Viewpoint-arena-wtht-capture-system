@@ -66,6 +66,13 @@ const DESIGN_STAGES = ['DETAILED_DESIGN'] as const;
 // Allowlists, not denylists: a field the model invents is rejected rather than
 // silently passed through into the tracker. These are exactly the keys of
 // InsightCard and InsightDetails in types.ts.
+//
+// `source` and `createdByName` are in CARD_KEYS but are deliberately NOT copied
+// onto a parsed card (see validateCard): they say who wrote a card, and a card
+// this parser produced was written by a model, so it is an AI card whatever it
+// claims. Listing them here keeps the allowlist the same set as the interface —
+// and capture-service/tests/test_typescript_parity.py fails if it is not — while
+// a model that echoes them back is tolerated rather than trusted.
 const ENVELOPE_KEYS = new Set(['cards']);
 const CARD_KEYS = new Set([
   'id',
@@ -77,6 +84,8 @@ const CARD_KEYS = new Set([
   'relatedPoiId',
   'sourceMessageIds',
   'details',
+  'source',
+  'createdByName',
   'affectedRequirementIds',
   'kbRecommendations',
 ]);
@@ -85,6 +94,7 @@ const DETAILS_KEYS = new Set([
   'status',
   'assignee',
   'dueDate',
+  'dueDateText',
   'componentReference',
   'designStage',
   'decisionRole',
@@ -336,6 +346,7 @@ function validateDetails(
   const STRING_DETAIL_KEYS = [
     'assignee',
     'dueDate',
+    'dueDateText',
     'componentReference',
     'impact',
     'mitigationStrategy',

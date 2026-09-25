@@ -9,7 +9,21 @@ import { clsx } from 'clsx';
 import { InsightCard, InsightDetails } from '../../types';
 import AssigneeComboBox from './AssigneeComboBox';
 
-const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, agentColor?: string }> = ({ card, onClose }) => {
+const InsightDetailModal: React.FC<{
+    card: InsightCard,
+    onClose: () => void,
+    agentColor?: string,
+    /**
+     * Whether this person may change the card, i.e. `can('editCard')` from
+     * lib/reviews/roles.ts. Defaults to true so the three callers that are not
+     * the room's Capture panel — the boardroom, the manager workspace and the
+     * meeting summary — keep the form they have always had. A guest in a review
+     * that has accounts gets the same card to READ with every field disabled:
+     * "everyone can meet, point and comment; everyone except guests can add and
+     * edit cards" is a rule about editing, not about looking.
+     */
+    canEdit?: boolean
+}> = ({ card, onClose, canEdit }) => {
     const requirements = useStore(state => state.requirements);
     const updateInsight = useStore(state => state.updateInsight);
     
@@ -63,8 +77,16 @@ const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, age
                     </button>
                 </div>
 
-                {/* Modal Body - Scrollable Form */}
-                <div className="p-6 overflow-y-auto flex-1 flex flex-col gap-6 custom-scrollbar">
+                {/* Modal Body - Scrollable Form.
+                    A <fieldset> rather than a <div> purely for `disabled`: one
+                    attribute then makes every control in the form read-only,
+                    instead of threading a flag through fourteen inputs. The
+                    header's Close and the footer's Done stay outside it, so a
+                    person who may not edit can still get out. */}
+                <fieldset
+                    disabled={canEdit === false}
+                    className="p-6 overflow-y-auto flex-1 flex flex-col gap-6 custom-scrollbar min-w-0 border-0 m-0"
+                >
                     
                     {/* Title Field */}
                     <div className="flex flex-col gap-1">
@@ -261,7 +283,7 @@ const InsightDetailModal: React.FC<{ card: InsightCard, onClose: () => void, age
                         </div>
                     )}
 
-                </div>
+                </fieldset>
 
                 {/* Footer */}
                 <div className="p-3 border-t border-gray-100 bg-gray-50 flex justify-end gap-2 shrink-0">

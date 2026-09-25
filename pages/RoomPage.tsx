@@ -9,11 +9,12 @@ import { usePartyPresence } from '../lib/usePartyPresence';
 import { PresenceContext } from '../lib/PresenceContext';
 import { useWebRTC } from '../lib/useWebRTC';
 import { WebRTCContext } from '../lib/WebRTCContext';
-import { useReviewSetupStore } from '../lib/reviewSetupStore';
+import { useReviewSetupStore, createReviewDraft } from '../lib/reviewSetupStore';
 import type { ReviewDraft } from '../lib/reviewSetupStore';
 import { useActiveReviewStore } from '../lib/activeReviewStore';
 import { consumeLocalEdit } from '../lib/reviewLocalEdit';
-import { loadCuration, saveCuration } from '../lib/curationsRepo';
+import { createReview, loadCuration, saveCuration } from '../lib/curationsRepo';
+import { launchFromArrival } from '../lib/connectors/plm/roomArrival';
 import { supabaseConfigured } from '../lib/supabase';
 import { useIsMobile } from '../lib/useIsMobile';
 import { RecordingProvider } from '../lib/RecordingContext';
@@ -42,14 +43,38 @@ const RoomPage: React.FC = () => {
   // width, so a narrow desktop window never flips into the mobile UI mid-session.
   const isMobile = useIsMobile();
 
+  // The PLM launch this arrival carries, if it carries one (T5.3), and the room it
+  // arrived at — a room can be navigated to from another room without this
+  // component remounting, and a launch belongs to one arrival only. Captured on the
+  // first render rather than read inside an effect: both uses below are about
+  // ARRIVING, and re-reading location later would make the room's own seed depend
+  // on a navigation. See lib/connectors/plm/roomArrival.ts for the two spellings a
+  // launch arrives in.
+  const [arrival] = useState(() => ({
+    roomId: roomId ?? '',
+    launch: launchFromArrival(location.state, location.search),
+  }));
+  const arrivalLaunch = arrival.roomId === roomId ? arrival.launch : null;
+
   // Guard: if arriving directly (not from lobby), redirect to lobby to set identity
   useEffect(() => {
+    // A launch is the third way in, and the one that must not be sent back:
+    // pages/LaunchPage.tsx asked for the name itself, and a bounce to the lobby
+    // would drop the router state carrying the resolved document — the only thing
+    // that says which Onshape document this room was opened for. Recorded as a
+    // deliberate entry the way the lobby and the identity gate record one, so a
+    // reload of the room is let back in too: by then the launch has been handled
+    // and its state cleared, so there is nothing left to say where this came from.
+    if (arrivalLaunch !== null && roomId) {
+      sessionStorage.setItem('vp_enteredRoom', roomId);
+      return;
+    }
     const enteredRoom = sessionStorage.getItem('vp_enteredRoom');
     const fromLobby = (location.state as { fromLobby?: boolean } | null)?.fromLobby;
     if (!fromLobby && enteredRoom !== roomId) {
       navigate('/', { state: { joinRoomId: roomId }, replace: true });
     }
-  }, [roomId]);
+  }, [roomId, arrivalLaunch]);
 
   const presence = usePartyPresence(roomId);
   const joinState = useJoinState();
@@ -109,17 +134,46 @@ const RoomPage: React.FC = () => {
     };
 
     const localDraft = useReviewSetupStore.getState().draft;
-    if (localDraft && localDraft.reviewId === roomId) seed(localDraft);
+    const handedOver = localDraft !== null && localDraft.reviewId === roomId;
+    if (handedOver) seed(localDraft);
 
-    // Skipped where there is no database to read: the handover draft above is the
-    // whole story on such an install, and a request to a client that was built
-    // with placeholder credentials can only fail and log. It is also why the drop
-    // below happens only once a row has actually come back — with no row, that
-    // draft is the only copy of the review this browser has.
-    if (supabaseConfigured) {
+    // A PLM launch (T5.3) arrives for a review nothing has written yet:
+    // pages/LaunchPage.tsx mints the id and navigates, and the setup address that
+    // used to create the review on arrival is a redirect now. So the room brings it
+    // into existence the way the lobby's "New design review" does — and only for an
+    // arrival that says it was launched. An ad-hoc session with no row is still
+    // exactly that: a room with no review in it. A handover draft means the review
+    // was created on the way here, so there is nothing left to make.
+    const launched = handedOver ? null : arrivalLaunch;
+
+    // Where there is no database to read, the read is skipped: the handover draft
+    // above is the whole story on such an install, and a request to a client that
+    // was built with placeholder credentials can only fail and log. It is also why
+    // the drop below happens only once a row has actually come back — with no row,
+    // that draft is the only copy of the review this browser has.
+    if (!supabaseConfigured) {
+      // With no row to read there is nothing else to seed from, and a launch with
+      // no review in the store has nowhere to record its document.
+      if (launched !== null) seed(createReviewDraft(roomId));
+    } else {
       void (async () => {
         const remote = await loadCuration(roomId);
-        if (cancelled || !remote) return;
+        if (cancelled) return;
+        if (!remote) {
+          if (launched === null) return;
+          // Row first, then the room — the lobby's order, for its two reasons.
+          // createReview also claims the owner, which on a deployment with
+          // accounts is what lets this person be GRANTED the Edit their launch
+          // link asked for; without it they are a participant in a review nobody
+          // owns and the document browser would never open. And a write that did
+          // not land still leaves the room with a review to edit, which the
+          // save-on-edit subscriber below upserts later if a database ever
+          // answers.
+          const created = await createReview(roomId);
+          if (cancelled) return;
+          seed(created ?? createReviewDraft(roomId));
+          return;
+        }
         // The row is the truth from here on, so the copy the lobby handed over has
         // finished its job — in this visit and in every later one. Left in
         // localStorage it would seed the next visit with a review that predates
@@ -138,7 +192,7 @@ const RoomPage: React.FC = () => {
     }
 
     return () => { cancelled = true; stopRetrying?.(); };
-  }, [roomId]);
+  }, [roomId, arrivalLaunch]);
 
   // Persist in-room edits to viewpoints / pins / agenda back to the cloud
   // (debounced). Only one screen writes through at a time — everybody else gets

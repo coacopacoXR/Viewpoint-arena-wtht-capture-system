@@ -156,3 +156,29 @@ describe('EXTRACTION_SYSTEM_PROMPT — grounded rules', () => {
     expect(EXTRACTION_SYSTEM_PROMPT).toContain('omit componentReference');
   });
 });
+
+describe('EXTRACTION_SYSTEM_PROMPT — deadlines', () => {
+  // The built-in 7B model gets "by Friday" wrong even with a fortnight of
+  // weekday names in the prompt to look it up in, so the app resolves the phrase
+  // itself (lib/capture/resolveDeadline.ts). That only works if the model is
+  // asked for the WORDS, verbatim, alongside the date it computed.
+  it('asks for the spoken phrase as well as the date', () => {
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('"dueDateText"');
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('exactly as it was spoken');
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('verbatim');
+  });
+
+  it('says which of the two fields the application prefers', () => {
+    expect(EXTRACTION_SYSTEM_PROMPT).toContain('fill BOTH date fields');
+  });
+
+  it('asks only for keys the constrained Ollama decoder also allows', async () => {
+    // additionalProperties is false in the schema, so a field the prompt asks
+    // for and the schema does not allow is a field Ollama can never send — the
+    // prompt would be asking for something structurally impossible.
+    const { default: schema } = await import('./extractionSchema.json');
+    const details = schema.properties.cards.items.properties.details;
+    expect(Object.keys(details.properties)).toContain('dueDateText');
+    expect(details.additionalProperties).toBe(false);
+  });
+});

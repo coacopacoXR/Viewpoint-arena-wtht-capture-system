@@ -81,6 +81,7 @@ const ADMIN_MODELS_RESPONSE = {
       content_type: 'model/gltf-binary',
       uploaded_at: '2026-09-24T09:00:00Z',
       uploaded_by_name: 'Alice',
+      referenced: true,
       revisions: [
         { id: 'rev-row-1', review_id: 'rev-1', review_title: 'Test Review', line: 'bracket', revision: 'Rev A' },
       ],
@@ -88,6 +89,27 @@ const ADMIN_MODELS_RESPONSE = {
     },
   ],
   total_storage: 1024,
+};
+
+// What the endpoint answers when storage also holds a file no design review
+// points at — one imported in a plain session, which nothing else records.
+const LOOSE_HASH = 'c'.repeat(64);
+const ADMIN_MODELS_WITH_LOOSE_FILE = {
+  models: [
+    ...ADMIN_MODELS_RESPONSE.models,
+    {
+      hash: LOOSE_HASH,
+      file_name: 'loose-import.step',
+      size: 4096,
+      content_type: 'model/step',
+      uploaded_at: '2026-09-24T11:00:00Z',
+      uploaded_by_name: '',
+      referenced: false,
+      revisions: [],
+      curation_refs: [],
+    },
+  ],
+  total_storage: 5120,
 };
 
 /**
@@ -239,6 +261,41 @@ describe('AdminPage', () => {
     });
     expect(screen.getAllByText(/1\.0 KB/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Alice/)).toBeTruthy();
+  });
+
+  it('shows a file no design review uses, and lets an admin delete it', async () => {
+    const fetchMock = routeFetch({ modelsResponse: ADMIN_MODELS_WITH_LOOSE_FILE });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAdmin();
+
+    await vi.waitFor(() => {
+      expect(screen.getByText('Test Review')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('Models'));
+    await vi.waitFor(() => {
+      expect(screen.getByText('loose-import.step')).toBeTruthy();
+    });
+
+    // The file storage holds but no review points at says so — and it is the
+    // only one that does, because the other is a review's current model.
+    expect(screen.getAllByText('Not used by any design review')).toHaveLength(1);
+
+    const looseDelete = screen.getByTitle('Delete file');
+    expect((looseDelete as HTMLButtonElement).disabled).toBe(false);
+    const referencedDelete = screen.getByTitle('Still referenced — delete revisions first');
+    expect((referencedDelete as HTMLButtonElement).disabled).toBe(true);
+
+    // Two clicks, like every other destructive action on this page.
+    fireEvent.click(looseDelete);
+    fireEvent.click(screen.getByText('Confirm'));
+
+    await vi.waitFor(() => {
+      const askedToDelete = fetchMock.mock.calls.some(
+        ([url]) => String(url).includes('type=file') && String(url).includes(LOOSE_HASH),
+      );
+      expect(askedToDelete).toBe(true);
+    });
   });
 
   it('mode none hides the owner column and transfer button', async () => {

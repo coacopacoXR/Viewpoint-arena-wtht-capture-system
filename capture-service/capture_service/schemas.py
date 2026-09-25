@@ -33,6 +33,7 @@ whose fields FastAPI validates individually.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -124,6 +125,10 @@ class InsightDetails(WireModel):
     status: Status = Status.OPEN
     assignee: str | None = None
     due_date: str | None = None
+    #: The deadline as it was spoken — "by Friday" — copied verbatim by the
+    #: model. lib/capture/resolveDeadline.ts resolves it in code and prefers its
+    #: answer over `due_date`, because a small model gets the arithmetic wrong.
+    due_date_text: str | None = None
     component_reference: str | None = None
     design_stage: DesignStage | None = None
     decision_role: DecisionRole | None = None
@@ -136,7 +141,14 @@ class InsightDetails(WireModel):
 
 
 class InsightCard(WireModel):
-    """The unit the whole capture pipeline exists to produce."""
+    """The unit the whole capture pipeline exists to produce.
+
+    `source` and `created_by_name` exist on the TypeScript InsightCard for the
+    cards a person typed in the room (docs/plan/14 batch BG), and
+    tests/test_typescript_parity.py holds this model to the same key set — but
+    parse_cards never sets them, and must not: every card this service returns
+    was written by a model, so it is an AI card whatever the model claimed.
+    """
 
     id: str
     type: InsightType
@@ -147,6 +159,8 @@ class InsightCard(WireModel):
     details: InsightDetails
     related_poi_id: str | None = None
     source_message_ids: list[str] | None = None
+    source: Literal["ai", "manual"] | None = None
+    created_by_name: str | None = None
     affected_requirement_ids: list[str] | None = None
     kb_recommendations: list[str] | None = None
 

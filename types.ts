@@ -199,6 +199,18 @@ export interface InsightDetails {
   status: 'Open' | 'In Review' | 'Approved' | 'Rejected';
   assignee?: string;
   dueDate?: string;
+  /**
+   * The deadline as it was SAID — "by Friday", "end of the month" — copied
+   * verbatim out of the transcript (docs/plan/14 batch BG).
+   *
+   * It exists because the built-in 7B model cannot do date arithmetic: given
+   * today's date and a fortnight of weekday names it still answered a Monday's
+   * "by Friday" with the wrong day. lib/capture/resolveDeadline.ts resolves the
+   * phrase in code instead, and where it can, its answer replaces `dueDate`.
+   * The words stay on the card too, so a phrase this code does not know ("before
+   * the freeze") is still visible to a reviewer rather than silently dropped.
+   */
+  dueDateText?: string;
   componentReference?: string; // The name of the component from the tree
   
   // Design Review Metadata

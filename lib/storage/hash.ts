@@ -24,3 +24,16 @@ export function isModelHash(value: unknown): value is string {
 export function sha256Hex(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
+
+/**
+ * Hash order, for a listing.
+ *
+ * Neither a directory read nor a bucket listing has an order of its own, so
+ * `list()` sorts by this and two calls over an unchanged store answer the same
+ * thing. Hex digits compare the same as their characters, so a plain string
+ * comparison is the numeric one.
+ */
+export function compareModelHashes(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}

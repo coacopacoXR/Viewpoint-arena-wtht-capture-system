@@ -30,14 +30,18 @@ vi.mock('../../lib/supabase', () => {
   };
 });
 
-const { curationsMock, myReviewsMock, configHolder } = vi.hoisted(() => ({
+const { curationsMock, myReviewsMock, archivedMock, configHolder } = vi.hoisted(() => ({
   curationsMock: { list: vi.fn() },
   myReviewsMock: { list: vi.fn() },
+  archivedMock: { list: vi.fn() },
   configHolder: { current: null as Record<string, unknown> | null },
 }));
 
 vi.mock('../../lib/curationsRepo', () => ({
   listRecentCurations: () => curationsMock.list(),
+  // Answers "which of these has an admin put away" — empty by default, so the
+  // list below is what a lobby with nothing archived shows.
+  listArchivedIds: (ids: string[]) => archivedMock.list(ids),
   deleteCuration: vi.fn(),
   getCurationSummary: vi.fn(async () => null),
 }));
@@ -106,6 +110,7 @@ beforeEach(() => {
   sessionStorage.clear();
   curationsMock.list.mockReset().mockResolvedValue([]);
   myReviewsMock.list.mockReset().mockResolvedValue([]);
+  archivedMock.list.mockReset().mockResolvedValue(new Set<string>());
   configHolder.current = ACCOUNTS;
 });
 

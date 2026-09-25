@@ -43,6 +43,15 @@ const META = {
   uploadedAt: '2026-09-24T09:00:00.000Z',
 };
 
+// A second file, so a listing has something to order.
+const OTHER_BYTES = new Uint8Array([0x73, 0x68, 0x61, 0x66, 0x74]);
+const OTHER_HASH = sha256Hex(OTHER_BYTES);
+const OTHER_META = {
+  fileName: 'shaft.glb',
+  contentType: 'model/gltf-binary',
+  uploadedAt: '2026-09-24T10:00:00.000Z',
+};
+
 let dir: string;
 let store: LocalModelStore;
 
@@ -204,6 +213,85 @@ describe('LocalModelStore.get / head', () => {
     writeFileSync(join(dir, HASH), Buffer.from(BYTES));
     expect(await store.head(HASH)).toBeNull();
     expect(await isPresent(HASH)).toBe(true);
+  });
+});
+
+describe('LocalModelStore.list', () => {
+  it('lists a file nothing asked about, on the strength of being stored', async () => {
+    // The store knows nothing about design reviews, and that is the point: no
+    // hash goes in. A model imported in a plain session has no revision row and
+    // no curation asset, so before this operation the admin console had nothing
+    // to ask about and no way to reach the file to delete it.
+    await store.put(BYTES, META);
+
+    expect(await store.list()).toEqual([
+      { hash: HASH, ...META, size: BYTES.byteLength },
+    ]);
+  });
+
+  it('orders by hash, so an unchanged store answers the same thing twice', async () => {
+    await store.put(BYTES, META);
+    await store.put(OTHER_BYTES, OTHER_META);
+
+    const listed = await store.list();
+
+    // A directory read has no order of its own, so the listing imposes one.
+    expect(listed.map((e) => e.hash)).toEqual([HASH, OTHER_HASH].sort());
+    expect(listed.find((e) => e.hash === OTHER_HASH)).toEqual({
+      hash: OTHER_HASH,
+      ...OTHER_META,
+      size: OTHER_BYTES.byteLength,
+    });
+    expect(await store.list()).toEqual(listed);
+  });
+
+  it('answers [] for a directory that does not exist yet', async () => {
+    const neverPut = new LocalModelStore(join(dir, 'never-created'));
+    expect(await neverPut.list()).toEqual([]);
+  });
+
+  it('answers [] for a directory that holds nothing', async () => {
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('leaves out the object, a temp file, and a name that is not a hash', async () => {
+    await store.put(BYTES, META);
+    // What else shares the directory: the bytes themselves, the temp of a write
+    // still in flight, and a sidecar-shaped name with no content address in it.
+    writeFileSync(join(dir, 'notes.json'), JSON.stringify({ fileName: 'x.glb' }));
+    writeFileSync(join(dir, `${HASH}.json.${process.pid}.deadbeef.tmp`), 'half a sidecar');
+
+    expect(await store.list()).toEqual([{ hash: HASH, ...META, size: BYTES.byteLength }]);
+  });
+
+  it('leaves out a sidecar it cannot parse', async () => {
+    await store.put(BYTES, META);
+    writeFileSync(join(dir, `${HASH}.json`), 'not json at all');
+
+    // Same answer `head` gives: the store cannot describe this file, so there is
+    // nothing for a listing to show. The bytes are still servable by hash.
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('lists a sidecar whose object never arrived', async () => {
+    // The state a crash between `put`'s two writes leaves. Invisible to every
+    // other operation — `get` answers null — and exactly the kind of thing an
+    // admin needs to be able to see and delete.
+    writeFileSync(join(dir, `${HASH}.json`), JSON.stringify({ ...META, size: BYTES.byteLength }));
+
+    expect(await store.list()).toEqual([
+      { hash: HASH, ...META, size: BYTES.byteLength },
+    ]);
+    expect(await store.get(HASH)).toBeNull();
+  });
+
+  it('stops listing a file that was deleted', async () => {
+    await store.put(BYTES, META);
+    await store.put(OTHER_BYTES, OTHER_META);
+
+    await store.delete(HASH);
+
+    expect((await store.list()).map((e) => e.hash)).toEqual([OTHER_HASH]);
   });
 });
 

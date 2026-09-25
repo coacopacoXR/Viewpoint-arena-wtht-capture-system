@@ -25,7 +25,8 @@
               "tradeoffAnalysis": { "type": "string" },
               "department": { "type": "string" },
               "assignee": { "type": "string" },
-              "dueDate": { "type": "string" }
+              "dueDate": { "type": "string" },
+              "dueDateText": { "type": "string" }
             },
             "required": ["priority"],
             "additionalProperties": false

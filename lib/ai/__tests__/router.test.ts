@@ -885,6 +885,79 @@ describe('router — what each provider is sent', () => {
     expect(result.cards[0].details.componentReference).toBe('node-14');
   });
 
+  // ─── Deadlines: the words win over the date the model computed ────────────
+  //
+  // The built-in 7B model gets relative deadlines wrong even with today's date
+  // and a fortnight of weekday names in the prompt to look them up in, so the
+  // extraction also asks for the phrase verbatim and lib/capture/resolveDeadline
+  // resolves it here — in the router, where all five providers meet.
+
+  it('replaces a due date with the one the spoken phrase resolves to', async () => {
+    const fetchStub = stubFetch(
+      jsonResponse({
+        cards: [
+          {
+            ...VALID_CARD,
+            type: 'ACTION',
+            details: {
+              priority: 'High',
+              // Wrong, and wrong the way the small model is wrong: a date it
+              // computed rather than looked up.
+              dueDate: '1999-01-01',
+              dueDateText: 'tomorrow',
+            },
+          },
+        ],
+      }),
+    );
+    const result = await cards('webhook', { fields: { url: 'https://ai.acme.com/vp' } }, fetchStub.fetchFn);
+    if (result.job !== 'cards') throw new Error('wrong job');
+
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    expect(result.cards[0].details.dueDate).toBe(tomorrow);
+    // The words survive on the card, so the tracker can show what was promised.
+    expect(result.cards[0].details.dueDateText).toBe('tomorrow');
+  });
+
+  it('keeps the model’s due date for a phrase the resolver does not know', async () => {
+    const fetchStub = stubFetch(
+      jsonResponse({
+        cards: [
+          {
+            ...VALID_CARD,
+            type: 'ACTION',
+            details: { priority: 'High', dueDate: '2026-10-01', dueDateText: 'before the freeze' },
+          },
+        ],
+      }),
+    );
+    const result = await cards('webhook', { fields: { url: 'https://ai.acme.com/vp' } }, fetchStub.fetchFn);
+    if (result.job !== 'cards') throw new Error('wrong job');
+    expect(result.cards[0].details.dueDate).toBe('2026-10-01');
+  });
+
+  it('resolves a deadline for a model-text provider too, not only a structured one', async () => {
+    // The webhook and the built-in stack answer with a payload; OpenAI, Anthropic,
+    // Azure, Gemini and anything OpenAI-compatible answer with text. One pass, in
+    // the router, is what makes the two behave the same.
+    const fetchStub = stubFetch(
+      openAiReply(
+        cardsBody({
+          ...VALID_CARD,
+          type: 'ACTION',
+          details: { priority: 'High', dueDateText: 'today' },
+        }),
+      ),
+    );
+    const result = await cards(
+      'openai',
+      { secret: FAKE_KEY, model: 'gpt-4o-mini' },
+      fetchStub.fetchFn,
+    );
+    if (result.job !== 'cards') throw new Error('wrong job');
+    expect(result.cards[0].details.dueDate).toBe(new Date().toISOString().slice(0, 10));
+  });
+
   it('refuses an empty summary string, because "it worked and said nothing" is not a summary', async () => {
     const fetchStub = stubFetch(jsonResponse({ summary: '   ' }));
     const { runJob, AiJobError } = await router();

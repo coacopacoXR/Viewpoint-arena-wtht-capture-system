@@ -1,10 +1,10 @@
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useStore } from '../../store';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useStore, getCurrentSceneTree } from '../../store';
 import {
     MessageSquare, Info, SplitSquareHorizontal,
     CheckCircle2, AlertTriangle, Lightbulb, Activity, BookOpen,
-    HelpCircle, Check, X, ShieldOff, ScanLine, Plus, Scale
+    HelpCircle, Check, X, ShieldOff, ScanLine, Plus, Scale, Pencil
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ViewMode, InsightCard, Requirement } from '../../types';
@@ -12,10 +12,18 @@ import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { usePresence } from '../../lib/PresenceContext';
 import InsightDetailModal from './InsightDetailModal';
 import InsightExplainer from './InsightExplainer';
+import ManualCardForm, {
+    buildManualCard, newManualCardId, pointedPartFor,
+    type ManualCardInput, type PointedPart
+} from './ManualCardForm';
 import RecordingControls from './RecordingControls';
 import RecordingIndicator from './RecordingIndicator';
 import { usePointingTimelineStore } from '../../lib/pointingTimelineStore';
 import { selectSegmentsForLine } from '../../lib/selectSegmentsForLine';
+import { flattenSceneTree } from '../../lib/componentIndex';
+import { getDisplayName } from '../../lib/identity';
+import { isLaserEntryFresh, remoteLaserPartNames, remoteLaserTargets } from '../../lib/laserTargetRef';
+import { useReviewRole } from '../../lib/reviews/useReviewRole';
 
 // --- MAIN PANEL ---
 
@@ -73,15 +81,84 @@ const ConversationPanel: React.FC = () => {
     setSplitScreenTarget,
     requirements,
     isPrivacyMode,
-    updateInsight
+    updateInsight,
+    addInsightCard,
+    objectStates,
+    activeModelType,
+    importedSceneTree,
+    sessionHostId
   } = useStore();
 
-  const { remoteParticipantList, localUserId } = usePresence();
+  const { remoteParticipantList, localUserId, broadcastInsightCard } = usePresence();
   const pointingSegments = usePointingTimelineStore((s) => s.segments);
 
   const [selectedCard, setSelectedCard] = useState<InsightCard | null>(null);
   const [activeTab, setActiveTab] = useState<'LIVE' | 'DOCS'>('LIVE');
   const [showExplainer, setShowExplainer] = useState(false);
+  const [isAddingCard, setIsAddingCard] = useState(false);
+
+  // ─── Cards by hand (batch BG) ─────────────────────────────────────────────
+  // Who I am in this review decides whether the panel offers + Card at all, and
+  // whether an existing card can be changed. Read here rather than passed down
+  // because this panel is mounted from three places (the room's side panel, the
+  // boardroom shell and the manager workspace) and none of them is the other's
+  // parent — components/UI/SceneTree.tsx asks the same question the same way.
+  // Hiding the button is not the enforcement; it is the room server's job to
+  // refuse, and this is the panel not offering a tool that would be refused.
+  const reviewId = useActiveReviewStore((s) => s.config?.reviewId ?? null);
+  const { can } = useReviewRole({ reviewId, sessionHostId, localUserId });
+  const mayAddCard = can('addCard');
+  const mayEditCard = can('editCard');
+
+  // The node the room has selected. The laser selects as it moves
+  // (components/Scene/UserLaser.tsx), so on a desktop this is usually the part
+  // being pointed at; clicking the model tree leaves it here too.
+  const selectedNodeId = useMemo(() => {
+    for (const id of Object.keys(objectStates)) {
+      if (objectStates[id].selected) return id;
+    }
+    return null;
+  }, [objectStates]);
+
+  // Flattened the way the extraction prompt flattens it, so a hand-made card's
+  // componentReference is an id from the same list an AI card's comes from.
+  const flatComponents = useMemo(
+    () => flattenSceneTree(getCurrentSceneTree(activeModelType, importedSceneTree)).components,
+    [activeModelType, importedSceneTree]
+  );
+
+  // Read imperatively, not from a store: the laser target lives in the module
+  // maps lib/laserTargetRef keeps (written every frame by the laser, and by the
+  // socket for everybody else's). Re-read on each render of this panel, which is
+  // often enough — moving the laser selects a node, and a selection change
+  // re-renders the panel through objectStates above.
+  const laserPart = isLaserEntryFresh(localUserId)
+    ? {
+        id: remoteLaserTargets.get(localUserId) ?? null,
+        name: remoteLaserPartNames.get(localUserId) ?? null
+      }
+    : null;
+  const pointedPart = pointedPartFor({ laser: laserPart, selectedNodeId, components: flatComponents });
+
+  // Into the store, then out to the room — the same pair lib/RecordingContext
+  // does for a card an agent extracted, so a hand-made card reaches everybody
+  // else's screen by the same INSIGHT_CARD message and needs no new handling
+  // anywhere. It is not gated on the recording, on capture being paused, or on
+  // an AI provider being configured at all: typing a card is the alternative to
+  // capture, so it has to work in the rooms where capture cannot.
+  const handleSaveManualCard = (input: ManualCardInput, part: PointedPart | null) => {
+    const card = buildManualCard(input, {
+      part,
+      // Read at save time rather than held in state: the name is whatever this
+      // browser's identity says now, which is the name the tracker will show.
+      createdByName: getDisplayName(),
+      now: Date.now(),
+      id: newManualCardId()
+    });
+    addInsightCard(card);
+    broadcastInsightCard(card);
+    setIsAddingCard(false);
+  };
 
   // Resizable panel state
   const [, setPanelWidth] = useState(320);
@@ -224,10 +301,11 @@ const ConversationPanel: React.FC = () => {
         {/* MODAL RENDER */}
         {selectedCard && (
             <div className="relative z-[200]">
-                 <InsightDetailModal 
-                    card={selectedCard} 
+                 <InsightDetailModal
+                    card={selectedCard}
                     onClose={() => setSelectedCard(null)}
                     agentColor={agents.find(a => a.id === selectedCard.agentId)?.color}
+                    canEdit={mayEditCard}
                 />
             </div>
         )}
@@ -292,6 +370,25 @@ const ConversationPanel: React.FC = () => {
                     insightCards={insightCards}
                     onOpenExplainer={() => setShowExplainer(true)}
                 />
+                {mayAddCard && (
+                    <div className="px-2 pt-2 shrink-0">
+                        {isAddingCard ? (
+                            <ManualCardForm
+                                part={pointedPart}
+                                onSave={handleSaveManualCard}
+                                onCancel={() => setIsAddingCard(false)}
+                            />
+                        ) : (
+                            <button
+                                onClick={() => setIsAddingCard(true)}
+                                title="Add a card by hand"
+                                className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded border border-dashed border-gray-300 text-[10px] font-bold uppercase tracking-wide text-gray-500 hover:text-black hover:border-gray-400 transition-colors"
+                            >
+                                <Plus size={11} /> Card
+                            </button>
+                        )}
+                    </div>
+                )}
                 <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2 custom-scrollbar">
                     {insightCards.filter(c => c.details.status !== 'Rejected').length === 0 && (
                         <div className="text-center p-8 text-gray-400 text-xs italic flex flex-col items-center gap-2">
@@ -356,9 +453,20 @@ const ConversationPanel: React.FC = () => {
                                         {card.description}
                                     </div>
 
-                                    {/* Agent + Accept/Reject Footer */}
+                                    {/* Author + Accept/Reject Footer */}
                                     <div className="flex items-center justify-between pt-2 border-t border-gray-100 mt-1">
-                                        {agent && (
+                                        {/* Who wrote it: the agent that read the transcript, or the
+                                            person who typed it. A hand-made card has no agent, so its
+                                            footer names the person instead — the same thing the
+                                            tracker page says about the row this card becomes. */}
+                                        {card.source === 'manual' ? (
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                <Pencil size={9} className="text-gray-400 shrink-0" />
+                                                <span className="text-[9px] text-gray-400 font-mono truncate">
+                                                    Added by {card.createdByName?.trim() || 'hand'}
+                                                </span>
+                                            </div>
+                                        ) : agent && (
                                             <div className="flex items-center gap-1.5">
                                                 <div className="w-1.5 h-1.5 rounded-full" style={{backgroundColor: agent.color}}></div>
                                                 <span className="text-[9px] text-gray-400 font-mono">{agent.name}</span>
@@ -371,7 +479,7 @@ const ConversationPanel: React.FC = () => {
                                                 <span className="text-[9px] text-green-600 font-bold flex items-center gap-1">
                                                     <Check size={10} /> Accepted
                                                 </span>
-                                            ) : (
+                                            ) : mayEditCard ? (
                                                 <>
                                                     <button
                                                         onClick={(e) => handleAcceptInsight(card.id, e)}
@@ -388,7 +496,7 @@ const ConversationPanel: React.FC = () => {
                                                         <X size={12} />
                                                     </button>
                                                 </>
-                                            )}
+                                            ) : null}
                                         </div>
                                     </div>
                                 </div>

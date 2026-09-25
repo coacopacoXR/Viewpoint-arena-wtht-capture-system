@@ -741,6 +741,12 @@ def test_the_published_capture_response_schema_has_no_extra_properties(
         "details",
         "relatedPoiId",
         "sourceMessageIds",
+        # Published because the TypeScript InsightCard has them and the browser
+        # re-validates this service's reply against the same strict allowlist —
+        # but this service never fills them in: a card it parsed was written by a
+        # model, so it is an AI card (see test_parse_cards.FULL_CARD).
+        "source",
+        "createdByName",
         "affectedRequirementIds",
         "kbRecommendations",
     }

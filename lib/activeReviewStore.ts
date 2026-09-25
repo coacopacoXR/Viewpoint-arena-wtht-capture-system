@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AgendaItem, NewAgendaItem, ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore';
+import type { AgendaItem, NewAgendaItem, ReviewAssetReference, ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore';
 import type { SpatialComment, Requirement } from '../types';
 import type { TeamMember } from './people';
 import { useStore } from '../store';
@@ -236,6 +236,15 @@ interface ActiveReviewState {
   addViewpoint: (vp: Omit<ReviewViewpoint, 'id' | 'createdAt'>) => ReviewDraft | null;
   removeViewpoint: (id: string) => ReviewDraft | null;
   removePin: (id: string) => ReviewDraft | null;
+  /**
+   * Record a document under the review's asset, which is where references live.
+   *
+   * Added in batch BG for the PLM launch (T5.3): a room opened from Onshape or
+   * Teamcenter records the document it was opened from, and the room has no other
+   * way to write one — the curate page that had `addReference` is gone. Same
+   * signature lib/reviewSetupStore offers, so both stores write the same shape.
+   */
+  addReference: (ref: Omit<ReviewAssetReference, 'id'>) => ReviewDraft | null;
   addAgendaItem: (item: NewAgendaItem) => ReviewDraft | null;
   removeAgendaItem: (id: string) => ReviewDraft | null;
   reorderAgenda: (fromIdx: number, toIdx: number) => ReviewDraft | null;
@@ -418,6 +427,21 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     });
     applyEdit(set, next);
     syncMainComments(next);
+    return next;
+  },
+
+  // No sync follows this one: a reference is metadata about the review, so neither
+  // the mirrored comments nor the scene nor the requirements change with it.
+  addReference: (ref) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = edited(cfg, {
+      asset: {
+        ...cfg.asset,
+        references: [...cfg.asset.references, { id: newId(), ...ref }],
+      },
+    });
+    applyEdit(set, next);
     return next;
   },
 

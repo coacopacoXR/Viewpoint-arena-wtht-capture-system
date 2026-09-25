@@ -939,6 +939,8 @@ interface AdminModelEntry {
   content_type: string;
   uploaded_at: string;
   uploaded_by_name: string;
+  /** False for a file storage holds that no design review points at. */
+  referenced: boolean;
   revisions: ModelRevisionRef[];
   curation_refs: CurationRef[];
 }
@@ -1010,7 +1012,11 @@ const ModelsSection: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode }
     }
   };
 
-  const hasAnyRef = (m: AdminModelEntry) => m.revisions.length > 0 || m.curation_refs.length > 0;
+  // The endpoint marks each file `referenced`; the two lists it sends are
+  // checked as well, so a delete button only ever comes up enabled when nothing
+  // anywhere in the response points at the file.
+  const hasAnyRef = (m: AdminModelEntry) =>
+    m.referenced || m.revisions.length > 0 || m.curation_refs.length > 0;
 
   return (
     <section>
@@ -1084,6 +1090,11 @@ const ModelsSection: React.FC<{ mode: 'none' | 'accounts' | 'sso' }> = ({ mode }
               </div>
 
               {/* References */}
+              {!hasAnyRef(m) && (
+                <p className="pl-2 text-[10px] font-mono text-gray-600">
+                  Not used by any design review
+                </p>
+              )}
               {m.revisions.length > 0 && (
                 <div className="pl-2 space-y-0.5">
                   {m.revisions.map((rev) => (

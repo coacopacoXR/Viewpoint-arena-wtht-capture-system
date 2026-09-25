@@ -51,6 +51,11 @@ export interface ModelRef {
   size: number;
 }
 
+/** What `list` answers with, per object: its address and everything recorded about it. */
+export interface ModelListEntry extends ModelMeta {
+  hash: string;
+}
+
 export interface ModelStore {
   /**
    * Store `bytes` under their own hash. Idempotent: putting the same bytes
@@ -69,6 +74,23 @@ export interface ModelStore {
 
   /** The recorded metadata, or null when the store has no such object. */
   head(hash: string): Promise<ModelMeta | null>;
+
+  /**
+   * Every object the store holds, described by its sidecar, sorted by hash.
+   *
+   * The database only knows about a file once a design review points at it, so
+   * a model imported in a plain session has no revision row and no curation
+   * asset — and without a listing of storage itself the admin console cannot
+   * show it, which means it cannot be deleted either and the volume only grows.
+   * This is the one operation that answers from storage rather than from a
+   * caller's hash.
+   *
+   * Sorted so two calls over an unchanged store answer the same thing: neither
+   * a directory read nor a bucket listing has an order of its own. An object
+   * whose sidecar is missing or unreadable is left out, exactly as `head`
+   * leaves it out — the store cannot describe it, so there is nothing to show.
+   */
+  list(): Promise<ModelListEntry[]>;
 
   /**
    * Remove the object and its sidecar. Returns true when something was removed,
