@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useStore, getCurrentSceneTree } from '../../store';
+import { useStore, sceneComponents } from '../../store';
 import {
     MessageSquare, Info, SplitSquareHorizontal,
     CheckCircle2, AlertTriangle, Lightbulb, Activity, BookOpen,
@@ -20,7 +20,6 @@ import RecordingControls from './RecordingControls';
 import RecordingIndicator from './RecordingIndicator';
 import { usePointingTimelineStore } from '../../lib/pointingTimelineStore';
 import { selectSegmentsForLine } from '../../lib/selectSegmentsForLine';
-import { flattenSceneTree } from '../../lib/componentIndex';
 import { getDisplayName } from '../../lib/identity';
 import { isLaserEntryFresh, remoteLaserPartNames, remoteLaserTargets } from '../../lib/laserTargetRef';
 import { useReviewRole } from '../../lib/reviews/useReviewRole';
@@ -121,9 +120,11 @@ const ConversationPanel: React.FC = () => {
   }, [objectStates]);
 
   // Flattened the way the extraction prompt flattens it, so a hand-made card's
-  // componentReference is an id from the same list an AI card's comes from.
+  // componentReference is an id from the same list an AI card's comes from — and
+  // empty in a room with no model, which is the one decision the two readers share
+  // (batch BI, store.ts sceneComponents).
   const flatComponents = useMemo(
-    () => flattenSceneTree(getCurrentSceneTree(activeModelType, importedSceneTree)).components,
+    () => sceneComponents(activeModelType, importedSceneTree),
     [activeModelType, importedSceneTree]
   );
 

@@ -3,7 +3,7 @@ import { Html } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Vector3, Vector2, Raycaster, Group } from 'three';
 import { useStore, getCurrentSceneTree } from '../../store';
-import { MessageSquare, Check, GripVertical, Link2, Minimize2, Pencil } from 'lucide-react';
+import { MessageSquare, Check, GripVertical, Link2, Minimize2, Pencil, MapPin } from 'lucide-react';
 import { SceneNode, SpatialComment } from '../../types';
 
 // Helper to find node name
@@ -225,8 +225,9 @@ const CommentMarker: React.FC<{
     );
 };
 
-// Comment placement preview (shown when placing a new comment or drawing)
-const CommentPlacementPreview: React.FC = () => {
+// Placement preview, shown while the next click on the model means something: a
+// comment, a drawing anchor, or a review pin.
+const PlacementPreview: React.FC = () => {
     const { camera, scene, gl } = useThree();
     const commentMode = useStore(state => state.commentMode);
     const setPendingComment = useStore(state => state.setPendingComment);
@@ -239,7 +240,14 @@ const CommentPlacementPreview: React.FC = () => {
     const previewRef = useRef<Group>(null);
     const currentTree = getCurrentSceneTree(activeModelType, importedSceneTree);
 
-    const isPlacingMode = commentMode === 'placing-comment' || commentMode === 'placing-drawing';
+    // Every mode in which the next click on the model means something. 'placing-pin'
+    // is batch BI's and shares this raycast on purpose: it is the one place in the
+    // room that turns a click into a point AND the part it landed on, and a pin
+    // added in Edit mode has to name the same part a comment would have named.
+    const isPlacingMode =
+        commentMode === 'placing-comment' ||
+        commentMode === 'placing-drawing' ||
+        commentMode === 'placing-pin';
 
     useFrame((state) => {
         if (!isPlacingMode) return;
@@ -350,17 +358,20 @@ const CommentPlacementPreview: React.FC = () => {
 
     if (!isPlacingMode) return null;
 
-    const isDrawingMode = commentMode === 'placing-drawing';
+    // Amber for a pin, because amber is this room's colour for "you are editing the
+    // review" — the strip at the top and the tree's + Revision are the same amber.
+    // Purple for a drawing and blue for a comment, unchanged.
+    const marker = commentMode === 'placing-drawing'
+        ? { ring: 'border-purple-400 bg-purple-500/20', icon: <Pencil size={16} className="text-purple-400" /> }
+        : commentMode === 'placing-pin'
+            ? { ring: 'border-amber-400 bg-amber-500/20', icon: <MapPin size={16} className="text-amber-500" /> }
+            : { ring: 'border-blue-400 bg-blue-500/20', icon: <MessageSquare size={16} className="text-blue-400" /> };
 
     return (
         <group ref={previewRef}>
             <Html center distanceFactor={3}>
-                <div className={`w-10 h-10 rounded-full border-4 border-dashed flex items-center justify-center animate-pulse ${isDrawingMode ? 'border-purple-400 bg-purple-500/20' : 'border-blue-400 bg-blue-500/20'}`}>
-                    {isDrawingMode ? (
-                        <Pencil size={16} className="text-purple-400" />
-                    ) : (
-                        <MessageSquare size={16} className="text-blue-400" />
-                    )}
+                <div className={`w-10 h-10 rounded-full border-4 border-dashed flex items-center justify-center animate-pulse ${marker.ring}`}>
+                    {marker.icon}
                 </div>
             </Html>
         </group>
@@ -399,7 +410,7 @@ const SpatialComments: React.FC = () => {
             ))}
 
             {/* Placement preview */}
-            <CommentPlacementPreview />
+            <PlacementPreview />
         </group>
     );
 };

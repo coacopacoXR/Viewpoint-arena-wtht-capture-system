@@ -35,6 +35,14 @@ export interface ReviewDraftActions {
   removeViewpoint(id: string): void;
 
   updatePin(id: string, updates: Partial<ReviewPin>): void;
+  /**
+   * Add a pin. Batch BI: the room grew a way to place one on the model, so the tab
+   * that lists pins had to be able to write one. Same shape lib/reviewSetupStore
+   * has always offered, minus the returned id — a tab does not need it, and the
+   * caller that does (the room's Edit panel, which selects the pin it just added)
+   * reads it back from its own store.
+   */
+  addPin(pin: Omit<ReviewPin, 'id' | 'createdAt'>): void;
   removePin(id: string): void;
 
   addAgendaItem(item: NewAgendaItem): void;

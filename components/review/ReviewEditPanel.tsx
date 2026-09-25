@@ -22,9 +22,10 @@
 //
 // There is no Asset tab and no People tab on a deployment without accounts.
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Camera, ListOrdered, MapPin, Scale, Tags, Users } from 'lucide-react';
 import { clsx } from 'clsx';
+import { useStore } from '../../store';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { identityRequired, publicIdentityOf } from '../../lib/auth/authRules';
 import { useConnectorConfig } from '../../lib/config/ConfigContext';
@@ -37,6 +38,15 @@ import { ViewsTab } from './ViewsTab';
 import { useActiveReviewActions } from './useActiveReviewActions';
 
 type EditTabId = 'agenda' | 'views' | 'pins' | 'requirements' | 'labels' | 'people';
+
+/**
+ * The label a pin dropped in the room starts with.
+ *
+ * A placeholder to rename, in the row's own label box. Empty would have worked —
+ * pinToLiveComment falls back to 'Pinned comment' — but a blank input in a list of
+ * named pins reads as a pin that failed to load rather than one to name.
+ */
+const NEW_PIN_LABEL = 'New pin';
 
 /**
  * The tabs, in the order they are shown.
@@ -77,6 +87,59 @@ const ReviewEditPanel: React.FC<{
   // Which pin's notes are open. Local to the panel and not to the review: it is
   // where this person's eye is, not a fact anybody else needs.
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
+
+  // ─── Placing a pin (batch BI) ───────────────────────────────────────────────
+  // The click belongs to the room's ONE raycast, inside the canvas
+  // (components/Scene/SpatialComments, in its 'placing-pin' mode), and it answers
+  // through the main store's pending triple: a point, the node id under it, and
+  // that node's name. Turning the three into a review pin happens here, because a
+  // pin is a fact about the REVIEW — so it goes through `actions`, which marks the
+  // edit, broadcasts it to the room and lets RoomPage's subscriber save it (batch
+  // BH3). Two stores and one click, and neither grows a second raycast that could
+  // resolve a part name differently from the first.
+  const commentMode = useStore((s) => s.commentMode);
+  const setCommentMode = useStore((s) => s.setCommentMode);
+  const setPendingComment = useStore((s) => s.setPendingComment);
+  const pendingPoint = useStore((s) => s.pendingCommentPosition);
+  const pendingNodeId = useStore((s) => s.pendingCommentNodeId);
+  const pendingNodeName = useStore((s) => s.pendingCommentNodeName);
+  const pinDropActive = commentMode === 'placing-pin';
+
+  const cancelPinMode = () => {
+    setCommentMode('none');
+    setPendingComment(null, null, null);
+  };
+
+  useEffect(() => {
+    if (!pinDropActive || !pendingPoint) return;
+    actions.addPin({
+      label: NEW_PIN_LABEL,
+      worldPos: [pendingPoint.x, pendingPoint.y, pendingPoint.z],
+      modelId: null,
+      meshIndex: pendingNodeId,
+      partName: pendingNodeName,
+      severity: 'info',
+    });
+    // Open the pin just added, so its notes are showing and the new row is the one
+    // the eye lands on rather than one to hunt for in a list. Read back from the
+    // store rather than returned by the write: every ReviewDraftActions write
+    // answers void, and addPin appends, so the last pin is the new one.
+    const pins = useActiveReviewStore.getState().config?.pins ?? [];
+    setSelectedPinId(pins.length > 0 ? pins[pins.length - 1].id : null);
+    setTab('pins');
+    setCommentMode('none');
+    setPendingComment(null, null, null);
+  }, [pinDropActive, pendingPoint, pendingNodeId, pendingNodeName, actions, setCommentMode, setPendingComment]);
+
+  // Leaving Edit while the drop is still armed would leave the canvas banner up and
+  // the next click on the model placing a pin nobody is watching for.
+  useEffect(() => () => {
+    const state = useStore.getState();
+    if (state.commentMode === 'placing-pin') {
+      state.setCommentMode('none');
+      state.setPendingComment(null, null, null);
+    }
+  }, []);
 
   // The panel is only rendered while Edit is on, and the tabs cannot exist without
   // it. Losing the review mid-edit — a delete from another screen, a load that
@@ -149,6 +212,9 @@ const ReviewEditPanel: React.FC<{
             pins={config.pins}
             selectedId={selectedPinId}
             onSelect={setSelectedPinId}
+            onEnterPinMode={() => setCommentMode('placing-pin')}
+            pinDropActive={pinDropActive}
+            onCancelPinMode={cancelPinMode}
             actions={actions}
           />
         )}

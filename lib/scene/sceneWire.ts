@@ -81,6 +81,19 @@ export function asSceneModel(value: unknown): SceneModel | null {
   const line = typeof record.line === 'string' && record.line !== '' ? record.line : lineFromFileName(fileName);
   const revision = typeof record.revision === 'string' && record.revision !== '' ? record.revision : FIRST_REVISION;
   const offset = asOffset(record.offset) ?? [0, 0, 0];
+  // Rotation and scale, which batch BI found being DROPPED here. asSceneUpdate's
+  // setTransform carries both, the room server applies and persists both, and this
+  // is the function that reads a scene back off the wire — so a model somebody
+  // turned round or resized in Edit mode reached every other participant unturned,
+  // and came back unturned to everybody after a room reload from storage. Read the
+  // way setTransform reads them: a rotation that is not three finite numbers, or a
+  // scale that is not a positive finite one, is left OUT rather than rescued, so
+  // "absent means identity" stays the single rule (see sceneModelTransform).
+  const rotation = asOffset(record.rotation);
+  const rawScale = record.scale;
+  const scale = typeof rawScale === 'number' && Number.isFinite(rawScale) && rawScale > 0
+    ? rawScale
+    : null;
 
   return {
     id,
@@ -90,6 +103,8 @@ export function asSceneModel(value: unknown): SceneModel | null {
     revision,
     visible: record.visible === undefined ? true : record.visible === true,
     offset,
+    ...(rotation ? { rotation } : {}),
+    ...(scale === null ? {} : { scale }),
   };
 }
 

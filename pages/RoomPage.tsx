@@ -388,7 +388,7 @@ const DesktopRoomLayout: React.FC<{ isMeetingEnded: boolean }> = ({ isMeetingEnd
           {/* Drag handle */}
           <div
             onMouseDown={onDragStart}
-            className="w-1.5 bg-[#0a0a0b] hover:bg-emerald-500 cursor-col-resize shrink-0 transition-colors"
+            className="w-1.5 bg-gray-200 hover:bg-gray-400 cursor-col-resize shrink-0 transition-colors"
             title="Drag to resize"
           />
           {/* Right: Manager workspace */}

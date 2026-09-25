@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import {
   Eye, EyeOff,
   User, Sparkles, Users,
@@ -35,12 +35,24 @@ import FollowersBadge, { FollowingBadge } from './FollowersBadge';
 import TopBar from './room/TopBar';
 import CallBar from './room/CallBar';
 import ManageButton from './room/ManageButton';
+import EmptyScenePrompt from './room/EmptyScenePrompt';
 import EditingStrip from '../review/EditingStrip';
 import PlmLaunch from '../review/PlmLaunch';
-import ReviewEditPanel from '../review/ReviewEditPanel';
 import ReviewEditingNotice from '../review/ReviewEditingNotice';
 import { useReviewRole } from '../../lib/reviews/useReviewRole';
 import { useLeaderAutoRelease } from '../../lib/useLeaderAutoRelease';
+
+/**
+ * The review's editing tools, fetched when somebody actually turns Edit on.
+ *
+ * Batch BI. Only an owner or an editor with Edit on ever sees these tabs, but the
+ * panel and the six tabs it renders were in the main chunk — the one every
+ * participant downloads in order to look at a model. React.lazy rather than a
+ * hand-rolled dynamic import because this is a component in a fixed place in the
+ * tree, which is exactly what lazy is for; the tabs come with it, since they are
+ * what it statically imports.
+ */
+const ReviewEditPanel = React.lazy(() => import('../review/ReviewEditPanel'));
 
 // The side panel owns the right edge, so every bar that centres on the *free*
 // canvas has to stop short of it. Collapsed rail is 48px, the open panel 340px,
@@ -677,7 +689,17 @@ const Interface: React.FC = () => {
             panel holds, not of what the room is doing. */}
         {!isRightPanelCollapsed && iAmEditing && (
           <div className="flex-1 min-h-0 flex flex-col px-2 pb-2 pointer-events-auto">
-            <ReviewEditPanel reviewId={roomId ?? ''} onRosterChanged={refreshRole} />
+            {/* The placeholder is the panel's own dark surface with nothing in it,
+                so the side panel does not change size or colour while the chunk
+                arrives. Neutral on purpose: it stands in for six tabs and should
+                not look like one of them. */}
+            <Suspense fallback={
+              <div className="flex-1 min-h-0 rounded-lg border border-white/10 bg-[#111] p-5">
+                <p className="text-[11px] text-gray-500">Loading the editing tools…</p>
+              </div>
+            }>
+              <ReviewEditPanel reviewId={roomId ?? ''} onRosterChanged={refreshRole} />
+            </Suspense>
           </div>
         )}
         {!isRightPanelCollapsed && !iAmEditing && (
@@ -797,12 +819,13 @@ const Interface: React.FC = () => {
       )}
 
       {/* Comment Mode Indicator */}
-      {(commentMode === 'placing-comment' || commentMode === 'placing-drawing') && (
+      {(commentMode === 'placing-comment' || commentMode === 'placing-drawing' || commentMode === 'placing-pin') && (
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[50] pointer-events-none">
-          <div className={`px-6 py-3 rounded-lg shadow-lg animate-pulse ${commentMode === 'placing-drawing' ? 'bg-purple-500/90' : 'bg-blue-500/90'} text-white`}>
+          <div className={`px-6 py-3 rounded-lg shadow-lg animate-pulse ${commentMode === 'placing-drawing' ? 'bg-purple-500/90' : commentMode === 'placing-pin' ? 'bg-amber-500/90' : 'bg-blue-500/90'} text-white`}>
             <div className="text-sm font-bold text-center">
               {commentMode === 'placing-comment' && 'Click on the 3D model to place comment'}
               {commentMode === 'placing-drawing' && 'Click on the 3D model to anchor your drawing'}
+              {commentMode === 'placing-pin' && 'Click the model to place the pin'}
             </div>
           </div>
         </div>
@@ -919,6 +942,18 @@ const Interface: React.FC = () => {
             produced anything. */}
         <ManageButton />
 
+      </div>
+
+      {/* What an empty room says about itself, centred on the free canvas like
+          every other overlay here. Inside the !isBoardroomMode branch: a
+          boardroom session has its own overlay covering this one. Under the bars
+          (z-20 against their 30 and 45) so it can never sit on top of the call
+          controls or the amber strip. */}
+      <div className={clsx(
+        "absolute inset-y-0 left-[300px] flex items-center justify-center pointer-events-none z-[20]",
+        canvasRightClass
+      )}>
+        <EmptyScenePrompt />
       </div>
 
       </> /* end !isBoardroomMode */}

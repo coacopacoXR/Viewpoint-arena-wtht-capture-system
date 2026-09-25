@@ -217,7 +217,7 @@ describe('Interface — the room while a review is being edited', () => {
 
   // ─── The swap, for the person editing ─────────────────────────────────────
 
-  it('replaces the top bar with the amber strip and the panel with the review’s tabs', () => {
+  it('replaces the top bar with the amber strip and the panel with the review’s tabs', async () => {
     roleAnswer.allowed = ['editReview'];
     useStore.getState().setReviewEditing({ userId: 'user-me', name: 'Me' });
     // A model to transform. The strip's three tools are disabled without one, and
@@ -233,8 +233,11 @@ describe('Interface — the room while a review is being edited', () => {
     // The meeting's bar is GONE, not joined: its controls would change the meeting
     // for five other people, and none of them is what this person is here to use.
     expect(screen.queryByTitle('Participants')).toBeNull();
-    // The panel holds the review's tabs, in the approved order.
-    expect(screen.getByRole('tablist', { name: 'Review sections' })).toBeTruthy();
+    // The panel holds the review's tabs, in the approved order. Awaited, because
+    // batch BI moved the panel into its own React.lazy chunk: the strip is in the
+    // main bundle and the tabs arrive a tick later, with the placeholder on screen
+    // until they do.
+    expect(await screen.findByRole('tablist', { name: 'Review sections' })).toBeTruthy();
     const labels = screen.getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'));
     expect(labels).toEqual(['Agenda', 'Viewpoints', 'Pins', 'Requirements', 'Labels', 'People']);
   });

@@ -29,15 +29,14 @@ vi.mock('../../../store', () => ({
   // ConversationPanel is one of the few components that reads the whole store
   // (`const { ... } = useStore()`), so no selector handling is needed.
   useStore: () => h.state,
-  getCurrentSceneTree: () => ({
-    id: 'root',
-    name: 'Momentum 4',
-    type: 'GROUP',
-    children: [
-      { id: 'node-14', name: 'Left Ear Cup', type: 'MESH' },
-      { id: 'node-22', name: 'Headband', type: 'MESH' },
-    ],
-  }),
+  // What the panel used to build itself, out of getCurrentSceneTree +
+  // flattenSceneTree: the same parts, already flattened, because batch BI put the
+  // "a room with no model has no parts" decision inside the store's one helper.
+  sceneComponents: () => [
+    { id: 'root', name: 'Momentum 4', path: 'Momentum 4' },
+    { id: 'node-14', name: 'Left Ear Cup', path: 'Momentum 4 / Left Ear Cup' },
+    { id: 'node-22', name: 'Headband', path: 'Momentum 4 / Headband' },
+  ],
 }));
 
 vi.mock('../../../lib/PresenceContext', () => ({

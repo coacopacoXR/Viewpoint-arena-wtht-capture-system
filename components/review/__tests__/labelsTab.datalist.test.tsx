@@ -40,6 +40,7 @@ const noopActions: ReviewDraftActions = {
   updateViewpoint: () => {},
   removeViewpoint: () => {},
   updatePin: () => {},
+  addPin: () => {},
   removePin: () => {},
   addAgendaItem: () => {},
   updateAgendaItem: () => {},

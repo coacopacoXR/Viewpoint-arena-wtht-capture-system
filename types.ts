@@ -326,7 +326,17 @@ export interface SpatialComment {
     preReviewSourceKind?: 'viewpoint' | 'pin';
 }
 
-export type CommentMode = 'none' | 'placing-comment' | 'placing-drawing' | 'positioning-drawing' | 'drawing';
+/**
+ * What the next click on the model means.
+ *
+ * 'placing-pin' is batch BI's: the review's Pins tab could list, jump to and edit
+ * a pin but not add one, because the only raycast in the room is this one and it
+ * belonged to the comment panel. Reusing it — rather than growing a second
+ * listener that finds the point and the part its own way — is what makes a pin
+ * added in Edit mode land on the same part a comment would have, on everybody's
+ * screen.
+ */
+export type CommentMode = 'none' | 'placing-comment' | 'placing-drawing' | 'placing-pin' | 'positioning-drawing' | 'drawing';
 
 // --- MODEL IMPORT TYPES ---
 
@@ -338,7 +348,19 @@ export interface ImportedModel {
     sceneTree: SceneNode;
 }
 
-export type ModelType = 'synth' | 'bicycle' | 'imported' | 'headphones';
+/**
+ * What the renderer is showing.
+ *
+ * 'none' is batch BI's, and it is the DEFAULT: a room and a new design review both
+ * start with nothing on screen, and the three models that ship with the app are
+ * samples somebody chooses rather than a product every meeting opens on. Every
+ * reader has to cope with it — there is no part list, nothing to raycast against
+ * and no product name to put in a tracker row.
+ *
+ * 'imported' is not chosen either: it is what the scene reads as while it holds
+ * models of its own.
+ */
+export type ModelType = 'none' | 'synth' | 'bicycle' | 'imported' | 'headphones';
 
 // --- XR TYPES ---
 

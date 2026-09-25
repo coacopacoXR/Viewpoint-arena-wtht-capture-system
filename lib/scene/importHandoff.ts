@@ -47,3 +47,46 @@ export function handSceneImportFile(file: File): boolean {
   taker(file);
   return true;
 }
+
+// ─── Asking the panel to open its picker ────────────────────────────────────
+//
+// Batch BI gave the import pipeline a third caller, and this one has no file yet:
+// an empty room says "No model yet" in the middle of the canvas with an "Import a
+// model" button on it, and pressing it has to do exactly what the model tree's
+// button does. That button is a hidden <input type="file"> inside SceneTree, which
+// owns the validate / share / parse / place pipeline — so the canvas prompt asks
+// the tree to open it rather than growing a second picker and a second pipeline.
+//
+// Same mechanism as the file slot above, for the same reason: the two are not
+// parent and child, and module state is how this repo already crosses that gap.
+
+type ImportPickerOpener = () => void;
+
+let opener: ImportPickerOpener | null = null;
+
+/**
+ * Claim the right to open the file picker, for as long as the caller is mounted.
+ *
+ * One opener, exactly as with the file taker: one scene panel is on screen at a
+ * time, and two pickers opening for one click would ask the same person to choose
+ * a file twice. The unregister clears the slot only while it is still this
+ * caller's, so a panel handing over to its replacement cannot leave the room with
+ * nothing to open.
+ */
+export function claimImportPicker(claim: ImportPickerOpener): () => void {
+  opener = claim;
+  return () => {
+    if (opener === claim) opener = null;
+  };
+}
+
+/**
+ * Ask the room's scene panel to open its file picker, and say whether anything
+ * heard. False means no panel is mounted, so the caller owes the person a reason
+ * the button did nothing rather than silence.
+ */
+export function requestSceneImportPicker(): boolean {
+  if (opener === null) return false;
+  opener();
+  return true;
+}

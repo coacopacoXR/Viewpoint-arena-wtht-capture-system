@@ -13,12 +13,19 @@
 // its single copy and relays the result to everybody. That is the difference
 // between "I moved the model" and "the model moved": a drag here is a change to
 // the meeting, not to this browser.
+//
+// Batch BI added a second copy of the answer, written when the drag ENDS: the
+// review keeps every model's placement too, because the room server's storage is
+// the room's and a review is opened again long after that room is gone. See
+// keepPlacements below and lib/scene/placement.ts.
 
 import React, { useCallback, useEffect, useRef } from 'react';
 import { TransformControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
+import { useActiveReviewStore } from '../../lib/activeReviewStore';
+import { placementsFromScene } from '../../lib/scene/placement';
 import { sceneModelTransform } from '../../lib/scene/roomScene';
 
 /** How often a drag may put a message on the socket. See flush. */
@@ -42,7 +49,7 @@ const ReviewModelGizmo: React.FC<{
   const editing = useStore((state) => state.reviewEditing);
   const activeSceneModelId = useStore((state) => state.activeSceneModelId);
   const groups = useStore((state) => state.sceneModelGroups);
-  const { localUserId, broadcastSceneUpdate } = usePresence();
+  const { localUserId, broadcastSceneUpdate, broadcastReviewConfig } = usePresence();
 
   const object = activeSceneModelId ? groups[activeSceneModelId] : undefined;
   // The gizmo is a tool of edit mode, and edit mode belongs to one person. A
@@ -104,6 +111,28 @@ const ReviewModelGizmo: React.FC<{
     timer.current = null;
   }, []);
 
+  /**
+   * Remember where the drag ended with the REVIEW as well as with the room.
+   *
+   * `send` puts the transform in the scene, which the room server persists — and
+   * room storage is the room's, so a review opened next month, from the lobby, on
+   * an install whose server hibernated, gets its models back standing the way they
+   * arrived rather than the way they were left (batch BI).
+   *
+   * Once per drag and not per frame: onObjectChange fires on every pointer move,
+   * and each of these is a whole review broadcast to everybody in the room and a
+   * row written a second later. By drag end `send` has already applied the final
+   * transform locally, so the scene this reads is the scene the person is looking
+   * at. Null back from the store means there was nothing to remember — no review
+   * open, or every model ended where it started — and then nothing is broadcast.
+   */
+  const keepPlacements = useCallback(() => {
+    const next = useActiveReviewStore.getState().setScenePlacements(
+      placementsFromScene(useStore.getState().scene.models),
+    );
+    if (next) broadcastReviewConfig(next);
+  }, [broadcastReviewConfig]);
+
   if (!mine || !mode || !object) return null;
 
   return (
@@ -125,6 +154,7 @@ const ReviewModelGizmo: React.FC<{
           timer.current = null;
         }
         send(object);
+        keepPlacements();
       }}
       onObjectChange={() => flush(object)}
     />

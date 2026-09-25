@@ -2,6 +2,10 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ModelType, Requirement } from '../types';
 import type { TeamMember } from './people';
+// Type-only, so it is erased at runtime: lib/scene/placement is pure and imports
+// nothing from here, and a value import would have made the review's own store
+// depend on the scene module that reads it back.
+import type { StoredPlacement } from './scene/placement';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -107,6 +111,14 @@ export interface ReviewAsset {
   importedFileBase64?: string;
   references: ReviewAssetReference[];
   transform?: ModelTransform;
+  /**
+   * Where each of the review's models was left, per revision — the room's Move /
+   * Rotate / Scale, kept with the review rather than only in the room server's
+   * storage. Absent, or absent for one revision, means that model stands where the
+   * scene put it. Batch BI; see lib/scene/placement.ts for why it lives here and
+   * not in a column on model_revisions.
+   */
+  placements?: StoredPlacement[];
 }
 
 export interface ReviewDraft {
@@ -216,7 +228,11 @@ export function createReviewDraft(reviewId: string, title: string = NEW_REVIEW_T
     title,
     description: '',
     asset: {
-      modelType: 'headphones',
+      // No model, rather than one of the samples: a review is about somebody's
+      // product, and opening every one of them on a pair of headphones meant the
+      // room was showing a product nobody had chosen (batch BI). The samples are
+      // still one click away, in the room and in the model tree.
+      modelType: 'none',
       references: [],
     },
     viewpoints: [],
@@ -308,7 +324,10 @@ export const useReviewSetupStore = create<ReviewSetupState>()(
         const next: ReviewDraft = {
           ...s.draft,
           asset: {
-            modelType: s.draft.asset.modelType === 'imported' ? 'headphones' : s.draft.asset.modelType,
+            // Back to no model, not back to a sample: removing the file somebody
+            // uploaded leaves the review with nothing on screen, which is what it
+            // started with (batch BI).
+            modelType: s.draft.asset.modelType === 'imported' ? 'none' : s.draft.asset.modelType,
             references: s.draft.asset.references,
           },
         };

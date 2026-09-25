@@ -104,9 +104,11 @@ vi.mock('../usePartyPresence', () => ({
 
 vi.mock('../../store', () => ({
   useStore: (selector: (s: FakeStoreState) => unknown) => selector(fakes.store.current),
-  // summarise() builds its grounded context from the scene tree; an empty one is
-  // the honest answer for a room with nothing loaded.
-  getCurrentSceneTree: () => ({ id: 'root', name: 'root', type: 'assembly', children: [] }),
+  // summarise() builds its grounded context from the room's parts; none is the
+  // honest answer for a room with nothing loaded, and since batch BI it is the
+  // answer the store's own helper gives rather than one this file has to build out
+  // of a tree and a flattener.
+  sceneComponents: () => [],
 }));
 
 vi.mock('../activeReviewStore', () => ({

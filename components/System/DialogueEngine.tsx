@@ -122,6 +122,13 @@ const DialogueEngine: React.FC = () => {
         if (!simulate) return;
         // Don't generate dialogue when paused, in privacy mode, or agents hidden
         if (!isPlaying || isPrivacyMode || hideAgents) return;
+        // Or when there is nothing in the room to talk about. EMPTY_SCENE_TREE is a
+        // childless leaf, so the round-robin below does not come to a halt in an
+        // empty room — it cycles through its one node and has the agents discuss a
+        // component called "No model", which becomes chat lines and insight cards,
+        // and a card is tracker data. Findings on a part that does not exist are
+        // worse than no findings (batch BI).
+        if (activeModelType === 'none') return;
 
         agents.forEach(agent => {
             const now = Date.now();

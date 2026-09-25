@@ -13,6 +13,7 @@ import { modelFileMime } from '../../utils/modelFormats';
 import { curationScene, curationSceneModel, legacyCurationModel } from './curationScene';
 import { sceneModelPrefix } from './roomScene';
 import { sceneModelEntry } from './sceneEntries';
+import { applyStoredPlacements, type StoredPlacement } from './placement';
 import { listModelRevisions, sceneFromRevisions } from '../reviews/revisionsRepo';
 
 /** The part of a curation's asset that decides what to show. */
@@ -21,6 +22,16 @@ export interface CurationAssetModel {
   modelHash?: string;
   importedFileName?: string;
   importedFileBase64?: string;
+  /**
+   * Where the review left each of its models, per revision.
+   *
+   * Batch BI. The room's Move / Rotate / Scale used to live only in the room
+   * server's storage, so a review reopened outside that room — later, from the
+   * lobby, on an install whose server had hibernated — put every model back where
+   * it had arrived. Optional, and absent on every review written before then,
+   * which means "nobody moved anything".
+   */
+  placements?: readonly StoredPlacement[] | null;
 }
 
 /**
@@ -40,7 +51,10 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
     // and immutable, so a browser that has this revision already pays a cache
     // lookup rather than a download — and a late joiner in a room goes down
     // exactly the same path, which is the point of having one.
-    setRoomScene(curationScene(asset.modelHash, asset.importedFileName));
+    setRoomScene(applyStoredPlacements(
+      curationScene(asset.modelHash, asset.importedFileName),
+      asset.placements,
+    ));
     return true;
   }
 
@@ -59,7 +73,7 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
     );
     parseModelFile(file, { treePrefix: sceneModelPrefix(model.hash) })
       .then((parsed) => {
-        setRoomScene({ models: [model], builtIn: null });
+        setRoomScene(applyStoredPlacements({ models: [model], builtIn: null }, asset.placements));
         upsertSceneModel(sceneModelEntry(model, parsed));
       })
       .catch((err) => console.error(`[${logAs}] failed to parse imported model:`, err));
@@ -152,6 +166,14 @@ export async function showReviewScene(
     asset?.modelHash && asset.importedFileName
       ? curationSceneModel(asset.modelHash, asset.importedFileName)
       : null;
-  state.setRoomScene(sceneFromRevisions(revisions, unrecorded));
+  // History decides WHICH models are in the scene and which of them is visible;
+  // the review's own placements then decide where each one stands. The stored
+  // placement wins over the beside-each-other default sceneFromRevisions computes,
+  // because that default is a guess about a room nobody has been in since, and the
+  // placement is where somebody actually left it (batch BI).
+  state.setRoomScene(applyStoredPlacements(
+    sceneFromRevisions(revisions, unrecorded),
+    asset?.placements,
+  ));
   return true;
 }

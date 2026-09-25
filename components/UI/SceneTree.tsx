@@ -8,7 +8,7 @@ import {
     useStore,
 } from '../../store';
 import { SceneNode } from '../../types';
-import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle, CheckCircle2, X, GitCompare, Trash2, Users, Lock, Globe } from 'lucide-react';
+import { ChevronRight, ChevronDown, Eye, EyeOff, Box, Layers, CircleDot, Upload, FileBox, Loader2, AlertCircle, CheckCircle2, X, GitCompare, Trash2, Users, Lock, Globe, Sparkles } from 'lucide-react';
 import { clsx } from 'clsx';
 import { parseModelFile, validateModelFile, type ModelImportResult } from '../../utils/modelLoader';
 import { MODEL_FILE_ACCEPT } from '../../utils/modelFormats';
@@ -16,14 +16,11 @@ import { MODEL_UPLOAD_NETWORK_MESSAGE, uploadModelFile } from '../../lib/modelsC
 import { usePresence } from '../../lib/PresenceContext';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { useReviewSetupStore } from '../../lib/reviewSetupStore';
-import { useReviewRole } from '../../lib/reviews/useReviewRole';
 import { recordModelRevision } from '../../lib/reviews/revisionsRepo';
 import {
-    describeSceneRefusal,
     FIRST_REVISION,
     lineFromFileName,
     revisionTargets,
-    scenePermissions,
     nextRevisionFor,
     sceneModelId,
     sceneModelLabel,
@@ -32,7 +29,9 @@ import {
     type SceneModel,
     type SceneUpdate,
 } from '../../lib/scene/roomScene';
-import { claimSceneImports } from '../../lib/scene/importHandoff';
+import { useScenePermissions } from '../../lib/scene/useScenePermissions';
+import { useSampleModels } from '../../lib/scene/useSampleModels';
+import { claimImportPicker, claimSceneImports } from '../../lib/scene/importHandoff';
 import { compareOffsets, nextToOffset, type SceneExtent } from '../../lib/scene/placement';
 import { sceneModelEntry } from '../../lib/scene/sceneEntries';
 
@@ -55,52 +54,6 @@ function findAncestorIds(root: SceneNode, targetId: string): string[] {
 
   search(root, []);
   return ancestors;
-}
-
-/**
- * What this participant is allowed to do to the scene, and why not if not.
- *
- * The room server enforces this and answers SCENE_REFUSED when it disagrees;
- * reading the same setting here is what lets the button say so BEFORE the click
- * rather than after it. A disabled control with a reason beats one that appears
- * to do nothing.
- *
- * "The same" is literal. lib/scene/roomScene.scenePermissions is ONE function and
- * party/room.server.ts calls it too, out of the four facts gathered here — the
- * review's roster via lib/reviews/useReviewRole, the "who may change models"
- * setting, this person, and the meeting host. It used to be two rules: batch BC
- * moved the server to deciding by ROLE when identities are on, and this hook went
- * on asking only "am I the meeting host", so an owner who made a colleague an
- * editor, reloaded, and let that colleague arrive first was shown "Import locked"
- * in their own review while the server would have allowed the import.
- */
-function useScenePermissions() {
-    const modelEditors = useStore(state => state.modelEditors);
-    const sessionHostId = useStore(state => state.sessionHostId);
-    // The room's review, which is the room's own id — the same string the room
-    // server passes to party/reviewRoles. Null in an ad-hoc session, where there
-    // is no roster and a signed-in person is a participant, which is what the
-    // server resolves for that room too.
-    const reviewId = useActiveReviewStore(state => state.config?.reviewId ?? null);
-    const { localUserId } = usePresence();
-    const { role, rolesApply } = useReviewRole({ reviewId, sessionHostId, localUserId });
-    const permissions = scenePermissions({
-        // Null on identity.mode 'none' — the room server's own spelling of "this
-        // deployment resolves no roles". There the meeting host is the authority
-        // and the "who may change models" setting widens it, exactly as before.
-        role: rolesApply ? role : null,
-        modelEditors,
-        userId: localUserId || null,
-        hostId: sessionHostId,
-    });
-    return {
-        canChangeModels: permissions.mayChangeModels,
-        maySetModelEditors: permissions.maySetModelEditors,
-        modelEditors,
-        reason: permissions.changeRefusal === null
-            ? null
-            : describeSceneRefusal(permissions.changeRefusal),
-    };
 }
 
 /** The newest revision of a line, which is the one a new revision follows and hides. */
@@ -618,6 +571,7 @@ const SceneTree: React.FC = () => {
 
     const { broadcastSceneUpdate, localUserId } = usePresence();
     const { canChangeModels, maySetModelEditors, reason: cannotChangeReason } = useScenePermissions();
+    const { samples, chooseSample } = useSampleModels();
 
     const [importError, setImportError] = useState<string | null>(null);
     const [pending, setPending] = useState<PendingImport | null>(null);
@@ -828,6 +782,17 @@ const SceneTree: React.FC = () => {
     });
     useEffect(() => claimSceneImports((file) => { void importPickedFileRef.current(file); }), []);
 
+    // The prompt an empty room shows in the middle of the canvas has an "Import a
+    // model" button on it, and it has to open THIS picker: the file input, the
+    // pipeline behind it and the "+ Revision" intent all live here, and a second
+    // picker would be a second place to get them wrong (batch BI). Same module
+    // slot, same reason, and read through a ref for the same reason again.
+    const openImportPickerRef = useRef(() => handleImportClick(false));
+    useEffect(() => {
+        openImportPickerRef.current = () => handleImportClick(false);
+    });
+    useEffect(() => claimImportPicker(() => openImportPickerRef.current()), []);
+
     /**
      * Put an uploaded, parsed file into the scene, the way the user just asked.
      *
@@ -1004,6 +969,42 @@ const SceneTree: React.FC = () => {
                     </button>
                 )}
 
+                {/* Samples — the three models that ship with the app, which batch
+                    BI stopped being the default and became a choice. Offered only
+                    while the scene holds nothing of its own: activeModelTypeFor
+                    reads 'imported' whenever the list is non-empty, so a sample
+                    chosen underneath an import would be recorded and stay
+                    invisible, and a button that appears to do nothing is worse
+                    than no button. */}
+                {scene.models.length === 0 && (
+                    <div className="mt-2">
+                        <div className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wide text-gray-400 mb-1">
+                            <Sparkles size={9} />
+                            <span>or try a sample</span>
+                        </div>
+                        <div className="flex gap-1">
+                            {samples.map(sample => (
+                                <button
+                                    key={sample.builtIn}
+                                    onClick={() => chooseSample(sample.builtIn)}
+                                    disabled={isImporting || !canChangeModels}
+                                    title={cannotChangeReason ?? `Put the ${sample.label} sample in the room`}
+                                    className={clsx(
+                                        "flex-1 min-w-0 px-1 py-1 rounded text-[8px] font-bold border truncate transition-colors",
+                                        isImporting || !canChangeModels
+                                            ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                                            : activeModelType === sample.builtIn
+                                                ? "bg-blue-500 text-white border-blue-500"
+                                                : "bg-white text-gray-600 border-gray-200 hover:bg-blue-50 hover:border-blue-300"
+                                    )}
+                                >
+                                    {sample.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 <input
                     ref={fileInputRef}
                     type="file"
@@ -1080,11 +1081,16 @@ const SceneTree: React.FC = () => {
                     </div>
                 )}
 
-                {/* Current Model Info */}
-                <div className="mt-2 text-[9px] text-gray-400 flex items-center gap-1">
-                    <FileBox size={10} />
-                    <span className="truncate">{getModelFileName()}</span>
-                </div>
+                {/* Current Model Info. Hidden in an empty room rather than
+                    answering with a file name: the fallback below is
+                    'synth_assembly.step', and naming a file nobody put there is
+                    the same lie as naming a product (batch BI). */}
+                {activeModelType !== 'none' && (
+                    <div className="mt-2 text-[9px] text-gray-400 flex items-center gap-1">
+                        <FileBox size={10} />
+                        <span className="truncate">{getModelFileName()}</span>
+                    </div>
+                )}
 
                 {activeEntry && activeModel && (
                     <div className="mt-2 text-[9px] text-gray-500">
@@ -1159,6 +1165,14 @@ const SceneTree: React.FC = () => {
                     scene.models.map(model => (
                         <SceneModelRow key={model.id} model={model} onCompare={setCompareLine} />
                     ))
+                ) : activeModelType === 'none' ? (
+                    // EMPTY_SCENE_TREE is a childless leaf, and TreeNode renders a
+                    // leaf as a row with an eye on it — so an empty room would list
+                    // one part called "No model" that hides nothing. Say it in
+                    // words instead; the canvas prompt is the one with the buttons.
+                    <div className="px-3 py-4 text-center text-[9px] text-gray-400">
+                        No model yet
+                    </div>
                 ) : (
                     <TreeNode node={currentTree} depth={0} />
                 )}

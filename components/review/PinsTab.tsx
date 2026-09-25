@@ -23,28 +23,52 @@ export const PinsTab: React.FC<{
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   /**
-   * Enters the canvas's pin-drop mode. OPTIONAL, and absent in the room: dropping
-   * a pin needs a raycast against the model that only the curate canvas had, and
-   * the room's own way of putting a mark on a part is its comment mode. A caller
-   * that has no pin-drop mode to offer leaves this out and the tab lists and edits
-   * the pins the review already has, rather than offering a button that cannot do
-   * what it says.
+   * Arms the room's pin drop: the next click on the model becomes a pin on the
+   * part it landed on. OPTIONAL because a caller with no canvas to click has
+   * nothing to arm — the tab then lists and edits the pins the review already has
+   * rather than offering a button that cannot do what it says.
+   *
+   * The raycast is the room's own (components/Scene/SpatialComments, in its
+   * 'placing-pin' mode), so a pin added here names the same part a comment placed
+   * on the same spot would. This tab does not do the raycasting and does not know
+   * where the click landed; the caller that armed it owns that, which is what keeps
+   * the tab renderable with no canvas in sight.
    */
   onEnterPinMode?: () => void;
+  /** True while the room is waiting for that click. Turns + Pin into the prompt and the way out of it. */
+  pinDropActive?: boolean;
+  onCancelPinMode?: () => void;
   actions: ReviewDraftActions;
-}> = ({ pins, selectedId, onSelect, onEnterPinMode, actions }) => {
+}> = ({ pins, selectedId, onSelect, onEnterPinMode, pinDropActive, onCancelPinMode, actions }) => {
   return (
     <div className="p-5 flex flex-col gap-3">
       <p className="text-[11px] text-gray-500 leading-relaxed">
         Pins flag talking points on a specific part of the model. Each one carries the part name it was placed on and a severity.
       </p>
-      {onEnterPinMode && (
+      {onEnterPinMode && !pinDropActive && (
         <button
           onClick={onEnterPinMode}
           className="w-full flex items-center justify-center gap-2 p-2 rounded border border-dashed border-white/20 text-xs font-bold uppercase text-amber-300 hover:bg-amber-500/10 hover:border-amber-400/50 transition-colors"
         >
-          <MapPin size={14} /> Enter pin-drop mode
+          <MapPin size={14} /> + Pin
         </button>
+      )}
+      {pinDropActive && (
+        <div className="w-full rounded border border-amber-400/50 bg-amber-500/10 p-2.5 flex flex-col gap-2">
+          <p className="text-[11px] text-amber-200 leading-relaxed flex items-start gap-1.5">
+            <MapPin size={13} className="mt-0.5 shrink-0" />
+            Click the model to place the pin. It lands on the part you click, and
+            you can name it and set its severity below.
+          </p>
+          {onCancelPinMode && (
+            <button
+              onClick={onCancelPinMode}
+              className="self-end px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-gray-400 hover:text-gray-200 hover:bg-white/5 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       )}
       {pins.length === 0 && (
         <div className="text-center py-10 text-gray-500 text-xs italic">

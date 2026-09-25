@@ -73,6 +73,7 @@ export function useActiveReviewActions(): ReviewDraftActions & ReviewLaunchActio
       updateViewpoint: (id: string, updates: Partial<ReviewViewpoint>) => publish(store().updateViewpoint(id, updates)),
       removeViewpoint: (id: string) => publish(store().removeViewpoint(id)),
       updatePin: (id: string, updates: Partial<ReviewPin>) => publish(store().updatePin(id, updates)),
+      addPin: (pin: Omit<ReviewPin, 'id' | 'createdAt'>) => publish(store().addPin(pin)),
       removePin: (id: string) => publish(store().removePin(id)),
       addAgendaItem: (item: NewAgendaItem) => publish(store().addAgendaItem(item)),
       updateAgendaItem: (id: string, updates: Partial<NewAgendaItem>) => publish(store().updateAgendaItem(id, updates)),

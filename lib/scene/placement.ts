@@ -17,7 +17,13 @@
 // Pure and three-free on purpose: the caller measures the geometry and passes
 // widths in, which is what makes these testable without a WebGL context.
 
-import type { SceneModel } from './roomScene';
+import {
+  IDENTITY_SCENE_TRANSFORM,
+  sceneModelTransform,
+  type RoomScene,
+  type SceneModel,
+  type SceneModelTransform,
+} from './roomScene';
 
 /** How much of the existing models' combined width to leave as a gap. */
 export const PLACEMENT_GAP_FRACTION = 0.2;
@@ -109,4 +115,172 @@ export function sceneExtents(
   widthOf: (model: SceneModel) => number,
 ): SceneExtent[] {
   return models.map((model) => ({ offset: model.offset, width: widthOf(model) }));
+}
+
+// ─── Placement the review keeps ───────────────────────────────────────────────
+//
+// Batch BI. Move / Rotate / Scale in the room's Edit mode write a SceneModel's
+// offset, rotation and scale, and the room server persists that with its scene —
+// but room storage is the ROOM's, and a review outlives its room: it is opened
+// again next month, from the lobby, on an install whose room server hibernated and
+// lost it, or by somebody who was not in the meeting where the model was turned
+// round to face the camera. So the placement travels with the review as well.
+//
+// WHERE it travels is the question the batch asked, and the answer is the review's
+// own `asset` jsonb (ReviewAsset.placements) rather than a column on
+// model_revisions. Three reasons, in order of weight:
+//
+//   1. It is per REVISION either way, which is the requirement — a placement is
+//      keyed by (line, revision) below, exactly the pair model_revisions is unique
+//      on, so a Rev B moved to the left does not move Rev A with it.
+//   2. It rides the REVIEW_CONFIG the room already broadcasts. A placement stored
+//      only in the database reaches the person who opened the review; one inside
+//      the review reaches everybody in the room the moment it is written, and
+//      works on an install with no database at all, where the draft in
+//      localStorage is the only copy of the review there is.
+//   3. It is written by the save the review already makes. `draftToRow` stores the
+//      whole asset, so there is no second writer, no second failure mode and no
+//      migration — a column would have needed one, in a schema this batch was not
+//      allowed to touch.
+//
+// `asset.transform` — the single ModelTransform a curator used to fix one model's
+// scale and orientation — is deliberately NOT reused for this. It is one transform
+// for whatever model is loaded, and a scene holds up to MAX_SCENE_MODELS of them;
+// it still does its own job, which is the preset-and-curation case World.tsx wraps
+// the whole model group in.
+
+/**
+ * One model's placement, as the review row stores it.
+ *
+ * Keyed by the same (line, revision) pair the model_revisions table is unique on,
+ * and matched the way revisionsOnScreen matches — case-insensitively on the letter,
+ * because a hand-edited row and a scene built by two different clients have to
+ * agree. The transform is the FILLED-IN one (see sceneModelTransform), so a reader
+ * never has to re-derive "absent means identity" from a stored record.
+ */
+export interface StoredPlacement {
+  line: string;
+  revision: string;
+  offset: [number, number, number];
+  rotation: [number, number, number];
+  scale: number;
+}
+
+/** Whether a transform is the one a model nobody touched has. */
+function isIdentity(transform: SceneModelTransform): boolean {
+  const identity = IDENTITY_SCENE_TRANSFORM;
+  return (
+    transform.offset[0] === identity.offset[0] &&
+    transform.offset[1] === identity.offset[1] &&
+    transform.offset[2] === identity.offset[2] &&
+    transform.rotation[0] === identity.rotation[0] &&
+    transform.rotation[1] === identity.rotation[1] &&
+    transform.rotation[2] === identity.rotation[2] &&
+    transform.scale === identity.scale
+  );
+}
+
+/**
+ * Every placement in a scene worth remembering.
+ *
+ * Models nobody has moved are left out, so a review that has only ever imported
+ * files stores nothing at all and a scene of twenty untouched models stores an
+ * empty list rather than twenty identities. "Absent means where the room put it"
+ * is the same rule SceneModel's optional rotation and scale already follow.
+ */
+export function placementsFromScene(models: readonly SceneModel[]): StoredPlacement[] {
+  const stored: StoredPlacement[] = [];
+  for (const model of models) {
+    const transform = sceneModelTransform(model);
+    if (isIdentity(transform)) continue;
+    stored.push({ line: model.line, revision: model.revision, ...transform });
+  }
+  return stored;
+}
+
+/**
+ * Put the placements a review stored back onto the scene it means.
+ *
+ * Returns the SAME scene object when nothing in it changes, which is the contract
+ * applySceneUpdate has and the one the room server and the store both rely on to
+ * decide whether there is anything to adopt, relay or persist.
+ *
+ * A placement with no model to match is dropped rather than added: it describes a
+ * revision this scene does not hold — one that fell off MAX_SCENE_MODELS, or a
+ * review whose history and whose room have diverged — and inventing a model for it
+ * would put a file on screen nobody asked to fetch.
+ */
+export function applyStoredPlacements(
+  scene: RoomScene,
+  placements: readonly StoredPlacement[] | undefined | null,
+): RoomScene {
+  if (!placements || placements.length === 0 || scene.models.length === 0) return scene;
+
+  let changed = false;
+  const models = scene.models.map((model) => {
+    const wanted = model.revision.trim().toUpperCase();
+    const stored = placements.find((placement) =>
+      placement.line === model.line && placement.revision.trim().toUpperCase() === wanted,
+    );
+    if (!stored) return model;
+    const next: SceneModelTransform = {
+      offset: stored.offset,
+      rotation: stored.rotation,
+      scale: stored.scale,
+    };
+    // Compared against the FILLED-IN current value, not the stored optionals, for
+    // the reason applySceneUpdate's setTransform gives: a model that has never
+    // been turned has no rotation field at all, and restoring [0,0,0] onto it is
+    // not a change worth a new scene object.
+    const current = sceneModelTransform(model);
+    if (
+      current.offset[0] === next.offset[0] &&
+      current.offset[1] === next.offset[1] &&
+      current.offset[2] === next.offset[2] &&
+      current.rotation[0] === next.rotation[0] &&
+      current.rotation[1] === next.rotation[1] &&
+      current.rotation[2] === next.rotation[2] &&
+      current.scale === next.scale
+    ) {
+      return model;
+    }
+    changed = true;
+    return { ...model, offset: next.offset, rotation: next.rotation, scale: next.scale };
+  });
+
+  return changed ? { ...scene, models } : scene;
+}
+
+/**
+ * Whether two placement lists say the same thing.
+ *
+ * Order-insensitive and key-based, because the list is rebuilt from a scene every
+ * time and a scene's model order is the order additions arrived in — which a
+ * Compare, a removal and a re-import can all change without anybody moving
+ * anything. Without this, writing the placements back after a drag would mark the
+ * review edited, broadcast it and save it for a change that was not one.
+ */
+export function samePlacements(
+  a: readonly StoredPlacement[] | undefined | null,
+  b: readonly StoredPlacement[] | undefined | null,
+): boolean {
+  const left = a ?? [];
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  return left.every((placement) => {
+    const match = right.find((other) =>
+      other.line === placement.line &&
+      other.revision.trim().toUpperCase() === placement.revision.trim().toUpperCase(),
+    );
+    if (!match) return false;
+    return (
+      match.offset[0] === placement.offset[0] &&
+      match.offset[1] === placement.offset[1] &&
+      match.offset[2] === placement.offset[2] &&
+      match.rotation[0] === placement.rotation[0] &&
+      match.rotation[1] === placement.rotation[1] &&
+      match.rotation[2] === placement.rotation[2] &&
+      match.scale === placement.scale
+    );
+  });
 }

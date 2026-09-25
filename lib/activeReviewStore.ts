@@ -4,6 +4,7 @@ import type { SpatialComment, Requirement } from '../types';
 import type { TeamMember } from './people';
 import { useStore } from '../store';
 import { forgetReviewScene, showReviewScene } from './scene/showCurationModel';
+import { samePlacements, type StoredPlacement } from './scene/placement';
 import { forgetLocalEdit, markLocalEdit } from './reviewLocalEdit';
 
 // Build a live SpatialComment from a curated pin at commit time. The comment
@@ -176,9 +177,9 @@ function syncMainRequirements(config: ReviewDraft | null) {
 // Make sure the World renders the curation's model. World reads
 // `activeModelType` from the main store, so loading a curation that
 // specifies e.g. 'bicycle' has to push that onto the main store too —
-// otherwise the room loads with whatever default (`headphones`) was
-// already there. An imported file becomes a scene holding the review's
-// models; see lib/scene/showCurationModel, which the review setup page also
+// otherwise the room loads with whatever was already on screen. An
+// imported file becomes a scene holding the review's models; see
+// lib/scene/showCurationModel, which the review setup page also
 // calls so that both paths build the same scene.
 function syncMainModel(config: ReviewDraft | null) {
   if (!config) return;
@@ -199,6 +200,14 @@ function syncMainModel(config: ReviewDraft | null) {
     void showReviewScene(config.reviewId, a, 'activeReviewStore');
     return;
   }
+  // 'none' names no model, so it has nothing to put on screen — and it must not
+  // take anything OFF it either. Every review created since batch BI carries
+  // 'none', including one whose room is holding models the room server relayed or
+  // somebody imported after opening it; setActiveModelType('none') would adopt an
+  // empty scene, and `fresh` takes the meeting's comments, chat and cards with it.
+  // The scene is the room server's (batch BB's rule); a review that names no model
+  // simply has no opinion about what is in it.
+  if (a.modelType === 'none') return;
   setActiveModelType(a.modelType);
 }
 
@@ -235,6 +244,16 @@ interface ActiveReviewState {
    */
   addViewpoint: (vp: Omit<ReviewViewpoint, 'id' | 'createdAt'>) => ReviewDraft | null;
   removeViewpoint: (id: string) => ReviewDraft | null;
+  /**
+   * Add a pin, which batch BI made possible from inside the room.
+   *
+   * The Pins tab could list a pin, jump to it and edit it, but not add one:
+   * `addPin` existed only in lib/reviewSetupStore, which holds the lobby's draft
+   * and not the review a room is presenting. It is here for the reason the other
+   * eleven writes are — the tab is here now — and it answers with the draft so the
+   * caller broadcasts exactly that.
+   */
+  addPin: (pin: Omit<ReviewPin, 'id' | 'createdAt'>) => ReviewDraft | null;
   removePin: (id: string) => ReviewDraft | null;
   /**
    * Record a document under the review's asset, which is where references live.
@@ -245,6 +264,17 @@ interface ActiveReviewState {
    * signature lib/reviewSetupStore offers, so both stores write the same shape.
    */
   addReference: (ref: Omit<ReviewAssetReference, 'id'>) => ReviewDraft | null;
+  /**
+   * Where the room's models are standing, kept with the review.
+   *
+   * Batch BI. The room's Move / Rotate / Scale write a SceneModel's transform,
+   * which the room server persists with its scene — and room storage does not
+   * outlive the room. This is the review's copy, written when a drag ends rather
+   * than on every frame of it, so opening the review later puts every revision
+   * back where it was left. Answering null is how "nothing moved" is spelled: no
+   * mark, no broadcast, no write.
+   */
+  setScenePlacements: (placements: StoredPlacement[]) => ReviewDraft | null;
   addAgendaItem: (item: NewAgendaItem) => ReviewDraft | null;
   removeAgendaItem: (id: string) => ReviewDraft | null;
   reorderAgenda: (fromIdx: number, toIdx: number) => ReviewDraft | null;
@@ -414,6 +444,20 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     return next;
   },
 
+  addPin: (pin) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    const next = edited(cfg, {
+      pins: [...cfg.pins, { ...pin, id: newId(), createdAt: Date.now() }],
+    });
+    applyEdit(set, next);
+    // Mirrored into the room's comment list, exactly as a pin curated in the lobby
+    // is: that mirror is what puts the marker on the canvas for everybody, and a
+    // pin added live in the room is the same kind of thing as one added before it.
+    syncMainComments(next);
+    return next;
+  },
+
   removePin: (id) => {
     const cfg = get().config;
     if (!cfg) return null;
@@ -442,6 +486,22 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
       },
     });
     applyEdit(set, next);
+    return next;
+  },
+
+  setScenePlacements: (placements) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    // A drag that ended where it started is not an edit. Treating it as one would
+    // mark the review, broadcast the whole of it to everybody in the room and write
+    // the row, for a change nobody can see. The list is rebuilt from the scene
+    // every time and the scene's order is the order additions arrived in, so the
+    // comparison is by (line, revision) and not by position.
+    if (samePlacements(cfg.asset.placements, placements)) return null;
+    const next = edited(cfg, { asset: { ...cfg.asset, placements } });
+    applyEdit(set, next);
+    // No sync follows: the scene this was read from is already the truth on this
+    // screen, and placements say nothing about comments or requirements.
     return next;
   },
 

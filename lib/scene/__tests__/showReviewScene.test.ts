@@ -200,3 +200,70 @@ describe('showReviewScene — a review with a history', () => {
     expect(state.scene).toBe(changed);
   });
 });
+
+// ─── The placement the review kept (batch BI) ───────────────────────────────
+//
+// The room's Move / Rotate / Scale used to live only in the room server's
+// storage, so a review reopened outside that room put every model back where it
+// had arrived. The review now carries each revision's placement with it, and
+// opening the review is where that copy is allowed to win — over the
+// beside-each-other default sceneFromRevisions computes, which is a guess about
+// a room nobody has been in since.
+
+describe('showReviewScene — the placement the review kept', () => {
+  beforeEach(() => {
+    state.stored = [
+      revision({ id: 'rev-1', revision: 'A', hash: HASH_A }),
+      revision({ id: 'rev-2', revision: 'B', hash: HASH_B, fileName: 'bracket-v2.step' }),
+    ];
+  });
+
+  it('puts the revision it was written for back where it was left', async () => {
+    await showReviewScene('review-1', {
+      ...ASSET,
+      placements: [{ line: 'bracket', revision: 'B', offset: [5, 0, 0], rotation: [0, 1.5, 0], scale: 2 }],
+    }, 'test');
+
+    const b = state.scene.models.find((model) => model.revision === 'B');
+    expect(b?.offset).toEqual([5, 0, 0]);
+    expect(b?.rotation).toEqual([0, 1.5, 0]);
+    expect(b?.scale).toBe(2);
+  });
+
+  it('leaves the revision it superseded where the scene put it', async () => {
+    // Per REVISION, not per review. Rev A is still in the scene and hidden, so
+    // Compare can reach it; a placement written for the model under discussion
+    // must not drag the older one along with it.
+    await showReviewScene('review-1', {
+      ...ASSET,
+      placements: [{ line: 'bracket', revision: 'B', offset: [5, 0, 0], rotation: [0, 1.5, 0], scale: 2 }],
+    }, 'test');
+
+    const a = state.scene.models.find((model) => model.revision === 'A');
+    expect(a?.offset).not.toEqual([5, 0, 0]);
+    expect(a?.rotation).toBeUndefined();
+    expect(a?.scale).toBeUndefined();
+  });
+
+  it('applies the placement to the one-model fallback too, before any read answers', async () => {
+    const promise = showReviewScene('review-1', {
+      ...ASSET,
+      placements: [{ line: 'bracket', revision: 'A', offset: [1, 2, 3], rotation: [0, 0, 0], scale: 1 }],
+    }, 'test');
+
+    // Synchronously, for the reason the fallback exists at all: the product is on
+    // screen immediately and a slow query never leaves anybody looking at a model
+    // standing somewhere it was not left.
+    expect(state.scene.models[0].offset).toEqual([1, 2, 3]);
+    await promise;
+  });
+
+  it('leaves a review that never moved anything with no rotation and no scale at all', async () => {
+    await showReviewScene('review-1', ASSET, 'test');
+
+    for (const model of state.scene.models) {
+      expect(model.rotation).toBeUndefined();
+      expect(model.scale).toBeUndefined();
+    }
+  });
+});

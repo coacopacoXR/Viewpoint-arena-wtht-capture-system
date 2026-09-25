@@ -26,7 +26,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useWebRTCContext } from './WebRTCContext';
 import { usePresence } from './PresenceContext';
-import { useStore, getCurrentSceneTree } from '../store';
+import { useStore, sceneComponents } from '../store';
 import { useActiveReviewStore } from './activeReviewStore';
 import { useConnectorConfig } from './config/ConfigContext';
 import { useMeetingRecorder } from './useMeetingRecorder';
@@ -39,7 +39,6 @@ import {
 } from './usePartyPresence';
 import { usePointingTimeline } from './usePointingTimeline';
 import { usePointingTimelineStore } from './pointingTimelineStore';
-import { flattenSceneTree } from './componentIndex';
 import { LocalCaptureProvider, meetingSlideContext } from './connectors/capture/local';
 import { capturePauseReason, isCapturePaused, setCapturePausedBy } from './capture/captureGate';
 import type { ChatMessage } from '../types';
@@ -219,8 +218,11 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       // Build the grounded context: component tree, pointing segments, and
       // the speaker-labelled live transcript. All three are optional — when
       // nothing is available the capture is exactly what it was before D.
-      const sceneTree = getCurrentSceneTree(activeModelType, importedSceneTree);
-      const { components } = flattenSceneTree(sceneTree);
+      //
+      // sceneComponents rather than flatten(getCurrentSceneTree(...)): a room with
+      // no model in it has no parts to ground on, and that is decided in one place
+      // rather than at each of the two readers (batch BI).
+      const components = sceneComponents(activeModelType, importedSceneTree);
 
       const allSegments = usePointingTimelineStore.getState().segments;
       const pointingSegments = allSegments.map((seg) => ({

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, ReviewGizmoMode, BoardroomLayout, LiveChatMessage, ViewCapture } from './types';
 import { Vector3, type Group } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
+import { flattenSceneTree, type FlatComponent } from './lib/componentIndex';
 import { useReviewSetupStore } from './lib/reviewSetupStore';
 // Read inside endMeeting only, and lib/activeReviewStore reads this store inside
 // its own actions only — so the two never touch each other while a module is
@@ -13,6 +14,7 @@ import {
   applySceneUpdate,
   emptyScene,
   sceneModelLabel,
+  type BuiltInModel,
   type ModelEditors,
   type RoomScene,
   type SceneModel,
@@ -178,6 +180,23 @@ export const HEADPHONES_SCENE_TREE: SceneNode = {
 // For backwards compatibility
 export const SCENE_TREE = SYNTH_SCENE_TREE;
 
+/**
+ * The tree of a room with nothing in it.
+ *
+ * Batch BI made that the DEFAULT rather than a state the app could only reach by
+ * removing everything, so `getCurrentSceneTree` has to answer for it. A real node
+ * with no children rather than null: every reader takes a `SceneNode` and would
+ * otherwise need a null branch it has never had, and an empty tree already gives
+ * them the empty answer — no parts to list, nothing to resolve a node id against.
+ *
+ * It is deliberately NOT a POI source: see derivedFromScene, which answers with no
+ * points of interest at all when the scene is empty rather than one point named
+ * after the absence of a model.
+ */
+export const EMPTY_SCENE_TREE: SceneNode = {
+  id: 'empty_scene', name: 'No model', type: 'GROUP', children: [],
+};
+
 // Helper to init object states
 const initObjectStates = (node: SceneNode, states: Record<string, ObjectState> = {}) => {
     states[node.id] = { id: node.id, visible: true, selected: false, expanded: true };
@@ -339,13 +358,18 @@ const FRESH_SCENE_RESET: Partial<AppState> = {
     localModelVisibility: {},
 };
 
-/** Which built-in shows when the scene holds no models of its own. */
-const DEFAULT_BUILT_IN: ModelType = 'headphones';
-
-/** The model type the rest of the app reads, derived from the scene. */
+/**
+ * The model type the rest of the app reads, derived from the scene.
+ *
+ * 'none' when the scene holds neither models of its own nor a chosen sample, which
+ * is what a fresh room and a fresh design review both are since batch BI. There
+ * used to be a DEFAULT_BUILT_IN here — every room opened on a pair of headphones
+ * whether the meeting was about them or not, and every screen that names the
+ * product named "Sennheiser Momentum 4".
+ */
 function activeModelTypeFor(scene: RoomScene): ModelType {
     if (scene.models.length > 0) return 'imported';
-    return scene.builtIn ?? DEFAULT_BUILT_IN;
+    return scene.builtIn ?? 'none';
 }
 
 /** Drop the records for models the scene no longer holds. */
@@ -380,7 +404,11 @@ function derivedFromScene(
         activeModelType,
         importedSceneTree,
         objectStates: fresh ? initObjectStates(tree) : mergeObjectStates(state.objectStates, tree),
-        pois: derivePoisFromSceneTree(tree),
+        // No points of interest in a room with nothing to inspect. EMPTY_SCENE_TREE
+        // is a childless leaf, and derivePoisFromSceneTree turns every leaf into a
+        // POI — so without this an empty room would offer its agents one target
+        // called "No model", at the origin, where nothing is.
+        pois: activeModelType === 'none' ? [] : derivePoisFromSceneTree(tree),
     };
 }
 
@@ -795,7 +823,7 @@ export const useStore = create<AppState>((set, get) => ({
   agents: INITIAL_AGENTS,
   agentStyle: AgentStyle.BOX,
   agentWeights: INITIAL_WEIGHTS,
-  pois: derivePoisFromSceneTree(HEADPHONES_SCENE_TREE),
+  pois: [],
   activeAgentId: null,
   leaderId: null,
   followingRemoteUserId: null,
@@ -820,10 +848,12 @@ export const useStore = create<AppState>((set, get) => ({
   insightCards: [],
   requirements: [],
   knowledgeBase: KB_DB,
-  objectStates: initObjectStates(HEADPHONES_SCENE_TREE),
+  objectStates: initObjectStates(EMPTY_SCENE_TREE),
 
   // --- Models: the room's scene ---
-  activeModelType: 'headphones',
+  // Empty, and not a preset: a room opens with nothing on screen until somebody
+  // imports a model or picks one of the samples (batch BI).
+  activeModelType: 'none',
   modelTransform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: 1 },
   isImporting: false,
   scene: emptyScene(),
@@ -902,7 +932,10 @@ export const useStore = create<AppState>((set, get) => ({
         // attendees of every meeting; with agents hidden it would have
         // recorded four people who were never there.
         participantCount: participantCount ?? (hideAgents ? 1 : agents.length),
-        modelName: activeModelType ?? null,
+        // The product this meeting was held on, or null when it was held on
+        // nothing — an empty room. 'none' is the app's own spelling of "no model"
+        // and is not a product name, so it is not what the tracker row should say.
+        modelName: activeModelType === 'none' ? null : activeModelType,
         labels,
         // The design review this room is holding, or null for an ad-hoc session.
         // Deliberately NOT the draft's reviewId: the draft is persisted, so a
@@ -1041,8 +1074,10 @@ export const useStore = create<AppState>((set, get) => ({
       // 'imported' is not something a caller picks: it is what the scene reads
       // as when it holds models, and there is nothing to show when it does not.
       // Choosing a built-in clears the list, which is what switching models has
-      // always meant — the preset replaces what was there.
+      // always meant — the preset replaces what was there. 'none' clears it and
+      // leaves no preset behind: the empty room batch BI made the starting point.
       if (type === 'imported') return state;
+      const builtIn: BuiltInModel | null = type === 'none' ? null : type;
       // Only a REAL model change wipes the meeting's content. This used to
       // clear unconditionally, and the room re-applies the model on every
       // REVIEW_CONFIG sync — so committing a pin (which updates the review)
@@ -1050,7 +1085,7 @@ export const useStore = create<AppState>((set, get) => ({
       // participants' screens moments after they arrived. Found live
       // 2026-09-23 while testing commit-as-comment.
       const sameModel = state.activeModelType === type;
-      return adoptScene({ models: [], builtIn: type }, state, !sameModel);
+      return adoptScene({ models: [], builtIn }, state, !sameModel);
   }),
 
   setIsImporting: (importing) => set({ isImporting: importing }),
@@ -1288,8 +1323,14 @@ export const getCurrentSceneTree = (
   bicycleTree?: SceneNode | null,
   headphonesTree?: SceneNode | null
 ): SceneNode => {
-  if (modelType === 'imported' && importedTree) {
-    return importedTree;
+  // A room with nothing in it, which is where every room starts (batch BI). The
+  // fallback at the bottom is SYNTH_SCENE_TREE, so without this an empty room
+  // would list a synth's parts next to an empty canvas.
+  if (modelType === 'none') return EMPTY_SCENE_TREE;
+  // An import whose file is still parsing has no tree yet: show nothing rather
+  // than falling through to the synth's parts at the bottom.
+  if (modelType === 'imported') {
+    return importedTree ?? EMPTY_SCENE_TREE;
   }
   if (modelType === 'bicycle' && bicycleTree) {
     return bicycleTree;
@@ -1299,3 +1340,20 @@ export const getCurrentSceneTree = (
   }
   return modelType === 'bicycle' ? BICYCLE_SCENE_TREE : modelType === 'headphones' ? HEADPHONES_SCENE_TREE : SYNTH_SCENE_TREE;
 };
+
+/**
+ * The parts of the room's model that something can be attributed to.
+ *
+ * Empty in a room with no model, which is NOT the same as flattening the empty
+ * tree: EMPTY_SCENE_TREE is a childless leaf, and flattenSceneTree turns every
+ * leaf into a component, so an empty room would otherwise offer one part called
+ * "No model" — for a grounded capture to attribute an insight to, and for the chat
+ * panel to suggest as a part name. Both readers ask this one question rather than
+ * composing the two calls themselves, so the answer to it is written down once
+ * (batch BI).
+ */
+export const sceneComponents = (
+  modelType: ModelType,
+  importedTree?: SceneNode | null,
+): FlatComponent[] =>
+  modelType === 'none' ? [] : flattenSceneTree(getCurrentSceneTree(modelType, importedTree)).components;
