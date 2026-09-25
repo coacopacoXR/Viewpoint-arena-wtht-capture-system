@@ -20,6 +20,7 @@ import {
 import { clsx } from 'clsx';
 import { useStore } from '../../../store';
 import { usePresence } from '../../../lib/PresenceContext';
+import { useCompactLevel } from '../../../lib/useCompactLevel';
 import SharePanel from '../SharePanel';
 import XRButton from '../XRButton';
 import StartVariant from '../../review/StartVariant';
@@ -62,62 +63,9 @@ export function dropLevelOf(control: TopBarButton): number {
 /** The level at which there is nothing left to shed. */
 export const TOP_BAR_MAX_COMPACT = TOP_BAR_DROP_ORDER.length;
 
-/**
- * How compact the bar has to be to fit the box it was given.
- *
- * Measured rather than breakpointed, and climbing ONE level per layout pass: there is no
- * table of widths to keep in step with the labels, the icons and the review's name, and
- * none to get wrong when somebody adds a control. The pass runs in a layout effect, so a
- * bar that overflows on the frame it is laid out in is already shorter by the time that
- * frame is painted — and it re-runs on `level`, which is what makes the climb converge, and
- * on `contentKey`, which is what makes it notice that the bar itself changed.
- *
- * The box is measured, not the bar: the bar is a flex item that shrinks to the box while
- * its own children (all `shrink-0`) overflow it, which is exactly what `scrollWidth`
- * reports and what `clientWidth` does not. Watching the box for a change in WIDTH resets
- * to level 0 and lets the climb start again — the panel opening, a window resize, a
- * review being named. Height is deliberately ignored: a dropdown opening inside the bar
- * must not cost anybody their labels.
- */
-function useCompactLevel(
-  boxRef: React.RefObject<HTMLDivElement | null>,
-  barRef: React.RefObject<HTMLDivElement | null>,
-  contentKey: string,
-): number {
-  const [level, setLevel] = React.useState(0);
-  // Bumped by a resize, so the measuring pass runs again even when the level it would set
-  // is the one already there. "The box got narrower while the bar was comfortable" has to
-  // be measured from the top, and a setState to the value it already has neither
-  // re-renders nor re-measures anything.
-  const [pass, setPass] = React.useState(0);
-
-  React.useLayoutEffect(() => {
-    const box = boxRef.current;
-    const bar = barRef.current;
-    if (!box || !bar) return;
-    if (bar.scrollWidth <= box.clientWidth + 1) return;
-    // Clamped, so a bar that cannot fit even icon-only stops asking instead of
-    // re-rendering for ever.
-    setLevel((current) => Math.min(current + 1, TOP_BAR_MAX_COMPACT));
-  }, [level, pass, contentKey, boxRef, barRef]);
-
-  React.useEffect(() => {
-    const box = boxRef.current;
-    if (!box || typeof ResizeObserver === 'undefined') return;
-    let lastWidth = box.getBoundingClientRect().width;
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? box.getBoundingClientRect().width;
-      if (Math.abs(width - lastWidth) < 1) return;
-      lastWidth = width;
-      setLevel(0);
-      setPass((current) => current + 1);
-    });
-    observer.observe(box);
-    return () => observer.disconnect();
-  }, [boxRef]);
-
-  return level;
-}
+// The measuring loop itself is lib/useCompactLevel, shared with the amber Editing strip
+// that replaces this bar while somebody has Edit on — the two are handed the same box by
+// the room's header row and neither can ask a window how wide it is.
 
 type Tone = 'idle' | 'on' | 'danger';
 
@@ -232,7 +180,7 @@ const TopBar: React.FC<TopBarProps> = ({
     onOpenSessions ? 1 : 0,
     isHost ? 1 : 0,
   ].join('|');
-  const compact = useCompactLevel(boxRef, barRef, contentKey);
+  const compact = useCompactLevel(boxRef, barRef, contentKey, TOP_BAR_MAX_COMPACT);
   const shows = (control: TopBarButton) => compact < dropLevelOf(control);
 
   return (

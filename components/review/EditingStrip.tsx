@@ -21,26 +21,86 @@
 //
 // Only the person editing ever sees this. Everybody else in the room sees
 // "Paco is editing the review" instead — see ReviewEditingBanner.
+//
+// The strip has to FIT, and what it has to fit is not the window. It is handed the same
+// box the top bar it replaces is handed — everything between the room's left block and the
+// side panel — and since batch BS it MEASURES that box and sheds words, least-important
+// first, until it fits: the mechanism batch BQ2 gave the top bar, in lib/useCompactLevel.
+// Before that it asked the WINDOW with four different `min-width` rules, which is how it
+// came to run past its container at 1600x900 with the side panel open: Reset part, Reset
+// all parts and Save this view landed on top of the review's name, and Done — the only way
+// out of Edit — was pushed off screen. A window cannot know how wide the block beside the
+// strip has grown, and it cannot know that the review is called "Landing gear review,
+// variant 3". See EDITING_STRIP_DROP_ORDER for what goes, and in what order.
 
 import React, { useCallback, useMemo } from 'react';
 import { Box, Camera, Check, Move3D, RotateCcw, Scale, Undo2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { findSceneNode, selectedNodeId, useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
+import { useCompactLevel } from '../../lib/useCompactLevel';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { keepReviewPlacements } from '../../lib/scene/keepPlacements';
 import { partTargetFor } from '../../lib/scene/partTransforms';
 import type { SceneUpdate } from '../../lib/scene/roomScene';
 import type { ReviewGizmoMode } from '../../types';
 
-const TOOLS: Array<{ mode: Exclude<ReviewGizmoMode, null>; label: string; icon: React.ReactNode; modelTitle: string; partTitle: string }> = [
-  { mode: 'translate', label: 'Move',   icon: <Move3D size={14} />,    modelTitle: 'Move the selected model',   partTitle: 'Move the selected part' },
-  { mode: 'rotate',    label: 'Rotate', icon: <RotateCcw size={14} />, modelTitle: 'Rotate the selected model', partTitle: 'Rotate the selected part' },
-  { mode: 'scale',     label: 'Scale',  icon: <Scale size={14} />,     modelTitle: 'Resize the selected model', partTitle: 'Resize the selected part, one axis at a time' },
+const TOOLS: Array<{ mode: Exclude<ReviewGizmoMode, null>; control: EditingStripControl; label: string; icon: React.ReactNode; modelTitle: string; partTitle: string }> = [
+  { mode: 'translate', control: 'move',   label: 'Move',   icon: <Move3D size={14} />,    modelTitle: 'Move the selected model',   partTitle: 'Move the selected part' },
+  { mode: 'rotate',    control: 'rotate', label: 'Rotate', icon: <RotateCcw size={14} />, modelTitle: 'Rotate the selected model', partTitle: 'Rotate the selected part' },
+  { mode: 'scale',     control: 'scale',  label: 'Scale',  icon: <Scale size={14} />,     modelTitle: 'Resize the selected model', partTitle: 'Resize the selected part, one axis at a time' },
 ];
 
 const RESET_PART = 'Reset part puts it back where the file had it';
 const RESET_ALL_PARTS = 'Put every part of this model back where the file had it';
+
+const SENTENCE = 'Editing the review — changes are saved and seen by everyone';
+/** What the sentence becomes when there is no room for it. All of it stays in `title`. */
+const SENTENCE_SHORT = 'Editing';
+
+/**
+ * The order the strip sheds in, least-important first.
+ *
+ * Index 0 goes at compact level 1, and so on: at level N every entry in the first N has
+ * lost its words, each keeping its `title` so a hover still says what it is.
+ *
+ * The sentence goes first because it is the only thing here that is not a control. It
+ * explains the colour, and the colour keeps on explaining it once the words will not fit.
+ * Then the two Resets — the way back, but a way back nobody needs until they have moved
+ * something — then the three tools from least-used to most, then Save this view.
+ *
+ * Two things never go. Whole model | Part is the mode, and two icons side by side are a
+ * choice nobody can read; they are also the shortest words on the strip. And Done is the
+ * way OUT of Edit: a control that loses the word saying what it does at a narrow window is
+ * a room somebody cannot leave. The part's own name is the last thing to give, and it
+ * gives by truncating rather than by disappearing — 8 characters of a flange name is still
+ * more than an icon says, and the whole name leads the tooltip.
+ *
+ * Exported because the test that pins the order reads it: "sheds least-important first" is
+ * a claim about a list, and a list a test cannot see is a list that can be reordered by
+ * accident.
+ */
+export const EDITING_STRIP_DROP_ORDER = [
+  'sentence',
+  'resetAllParts',
+  'resetPart',
+  'rotate',
+  'scale',
+  'move',
+  'saveView',
+  'partName',
+] as const;
+
+/** A piece of the strip whose words it can shed. */
+export type EditingStripControl = (typeof EDITING_STRIP_DROP_ORDER)[number];
+
+/** The compact level at which this piece's words go. Level 0 is "everything labelled". */
+export function editingStripDropLevelOf(control: EditingStripControl): number {
+  return EDITING_STRIP_DROP_ORDER.indexOf(control) + 1;
+}
+
+/** The level at which there is nothing left to shed. */
+export const EDITING_STRIP_MAX_COMPACT = EDITING_STRIP_DROP_ORDER.length;
 
 const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   const gizmoMode = useStore((s) => s.reviewGizmoMode);
@@ -84,6 +144,12 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   const partName = partTarget?.nodeId
     ? findSceneNode(importedSceneTree, partTarget.nodeId)?.name ?? partTarget.nodeId
     : null;
+  // The name on screen: the part's own when the gizmo is on a part, and the label the
+  // combined tree gives the model's root when that is what is selected. One value because
+  // it is both what is drawn and what the measuring pass has to notice changing.
+  const shownName = partName
+    ?? importedSceneTree?.children?.find((c) => c.id === selection)?.name
+    ?? selection;
   // Whether there is anything for each Reset to undo. Disabled rather than hidden,
   // the strip's rule for every control whose subject comes and goes: a button that
   // appears when there is something to reset teaches what it does, and one that is
@@ -152,10 +218,43 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     ? 'Click a part in the 3D view or in the model tree first'
     : 'Select a model in the tree first';
 
+  const boxRef = React.useRef<HTMLDivElement>(null);
+  const barRef = React.useRef<HTMLDivElement>(null);
+  // Everything that decides how wide the strip WANTS to be, as one string: which mode it
+  // is in, whether there is a part to name, and the name itself — a longer name is a wider
+  // strip, so selecting one has to be measured again. Nothing else here changes the width:
+  // a disabled button is the same size as an enabled one, and so is a latched tool.
+  const contentKey = [
+    inPartMode ? 1 : 0,
+    partTarget === null ? 0 : 1,
+    shownName ?? '',
+  ].join('|');
+  const compact = useCompactLevel(boxRef, barRef, contentKey, EDITING_STRIP_MAX_COMPACT);
+  const shows = (control: EditingStripControl) => compact < editingStripDropLevelOf(control);
+
   return (
-    <div className="flex items-center gap-1.5 bg-amber-400 border border-amber-500 rounded-md shadow-sm p-1.5 pointer-events-auto">
-      <span className="text-[10px] font-bold uppercase tracking-wide text-amber-950 px-1.5 shrink-0">
-        Editing the review — changes are saved and seen by everyone
+    // The box the strip has to fit, given to it by the room's header row: everything
+    // between the left block and the side panel. Centring lives here rather than in
+    // Interface so that the thing being measured and the thing being centred are the same
+    // element, and so the strip can be measured on its own in a test.
+    <div
+      ref={boxRef}
+      data-testid="editing-strip-box"
+      className="flex w-full min-w-0 justify-center pointer-events-none"
+    >
+    <div
+      ref={barRef}
+      data-testid="editing-strip"
+      className="flex items-center gap-1.5 bg-amber-400 border border-amber-500 rounded-md shadow-sm p-1.5 pointer-events-auto"
+    >
+      {/* What the colour means, and the first thing to lose its words: it is the only text
+          here that is not a control, and the amber goes on saying it. The whole sentence
+          moves to the tooltip, where a hover finds it. */}
+      <span
+        title={shows('sentence') ? undefined : SENTENCE}
+        className="text-[10px] font-bold uppercase tracking-wide text-amber-950 px-1.5 shrink-0"
+      >
+        {shows('sentence') ? SENTENCE : SENTENCE_SHORT}
       </span>
 
       <div className="w-px h-7 bg-amber-600/40 mx-0.5 shrink-0" />
@@ -182,9 +281,9 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
             )}
           >
             {option.target === 'part' && <Box size={12} />}
-            <span className={option.target === 'model' ? '' : 'hidden [@media(min-width:1400px)]:inline'}>
-              {option.label}
-            </span>
+            {/* The mode keeps its words at every width: two icons side by side are a
+                choice nobody can read, and these are the shortest words on the strip. */}
+            <span>{option.label}</span>
           </button>
         ))}
       </div>
@@ -204,9 +303,9 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
           )}
         >
           {tool.icon}
-          <span className="hidden [@media(min-width:1500px)]:inline text-[10px] font-bold uppercase tracking-wide">
-            {tool.label}
-          </span>
+          {shows(tool.control) && (
+            <span className="text-[10px] font-bold uppercase tracking-wide">{tool.label}</span>
+          )}
         </button>
       ))}
 
@@ -222,14 +321,20 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
           </span>
         ) : (
           <span className="flex items-center gap-1.5 shrink-0 px-1.5">
+            {/* WHAT the gizmo is on. Shed last, and shed by truncating rather than by
+                going: the full name leads the tooltip, so a hover on eight characters of a
+                400-part assembly still says which flange this is. */}
             <span
               data-testid="gizmo-part-name"
-              title={partTarget.nodeId
-                ? `The gizmo is attached to this part of ${targetModel?.line ?? 'the model'}`
-                : 'That is the model’s own root, so the tools move the whole model'}
-              className="max-w-[14rem] truncate text-[10px] font-mono font-bold text-amber-950"
+              title={`${shownName ?? ''} — ${partTarget.nodeId
+                ? `the gizmo is attached to this part of ${targetModel?.line ?? 'the model'}`
+                : 'that is the model’s own root, so the tools move the whole model'}`}
+              className={clsx(
+                'shrink-0 truncate text-[10px] font-mono font-bold text-amber-950',
+                shows('partName') ? 'max-w-[14rem]' : 'max-w-[8ch]',
+              )}
             >
-              {partName ?? importedSceneTree?.children?.find((c) => c.id === selection)?.name ?? selection}
+              {shownName}
             </span>
 
             <button
@@ -244,9 +349,9 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
               )}
             >
               <Undo2 size={14} />
-              <span className="hidden [@media(min-width:1500px)]:inline text-[10px] font-bold uppercase tracking-wide">
-                Reset part
-              </span>
+              {shows('resetPart') && (
+                <span className="text-[10px] font-bold uppercase tracking-wide">Reset part</span>
+              )}
             </button>
 
             <button
@@ -261,9 +366,9 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
               )}
             >
               <Undo2 size={14} />
-              <span className="hidden [@media(min-width:1600px)]:inline text-[10px] font-bold uppercase tracking-wide">
-                Reset all parts
-              </span>
+              {shows('resetAllParts') && (
+                <span className="text-[10px] font-bold uppercase tracking-wide">Reset all parts</span>
+              )}
             </button>
           </span>
         )
@@ -277,11 +382,15 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         className="h-9 px-2 shrink-0 flex items-center gap-1.5 rounded-sm border bg-white/80 text-amber-950 border-amber-600/30 hover:border-amber-900/50 transition-all"
       >
         <Camera size={14} />
-        <span className="hidden [@media(min-width:1300px)]:inline text-[10px] font-bold uppercase tracking-wide">
-          Save this view
-        </span>
+        {shows('saveView') && (
+          <span className="text-[10px] font-bold uppercase tracking-wide">Save this view</span>
+        )}
       </button>
 
+      {/* The way out of Edit, and the one word this strip never sheds: a control that
+          loses the word saying what it does at a narrow window is a room nobody can leave.
+          It is also why the strip sheds anything at all — before it did, Done was the thing
+          that went off the right-hand edge of the screen. */}
       <button
         onClick={onDone}
         title="Finish editing and go back to the meeting"
@@ -290,6 +399,7 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         <Check size={14} />
         <span className="text-[10px] font-bold uppercase tracking-wide">Done</span>
       </button>
+    </div>
     </div>
   );
 };
