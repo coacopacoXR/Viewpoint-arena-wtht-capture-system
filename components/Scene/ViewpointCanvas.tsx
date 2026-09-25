@@ -11,6 +11,8 @@ import SpatialComments from './SpatialComments';
 import XRManager from './XRManager';
 import ReviewArtifacts from './ReviewArtifacts';
 import ReviewModelGizmo from './ReviewModelGizmo';
+import SceneClickSelect from './SceneClickSelect';
+import { SCENE_TONE_MAPPING, SCENE_TONE_MAPPING_EXPOSURE } from './LightRig';
 import { useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
 import { participantLabel } from '../../lib/identity';
@@ -169,7 +171,13 @@ const SceneRenderer = () => {
   }
 
   const controlsRef = useRef<any>(null);
-  
+
+  // Whether the amber strip's gizmo has hold of the pointer, written by the gizmo and
+  // read by the click that selects a part. A shared ref rather than a prop because the
+  // two are siblings with nothing between them, and because the answer has to be
+  // current at the instant a press lands — see components/Scene/SceneClickSelect.tsx.
+  const gizmoDraggingRef = useRef(false);
+
   // Movement smoothing refs
   const posVec = useRef(new THREE.Vector3());
   const targetVec = useRef(new THREE.Vector3());
@@ -554,7 +562,11 @@ const SceneRenderer = () => {
       {/* The amber strip's Move / Rotate / Scale, attached to the selected scene
           model. Renders nothing unless this person has Edit on and a model is
           selected, so it costs the room nothing while a meeting is running. */}
-      <ReviewModelGizmo controlsRef={controlsRef} />
+      <ReviewModelGizmo controlsRef={controlsRef} draggingRef={gizmoDraggingRef} />
+      {/* Clicking a model or one part of it in Edit mode, which is how the strip's
+          Part mode gets its selection without a trip to the model tree. Renders
+          nothing at all, and outside Edit mode it does not even read the store. */}
+      <SceneClickSelect draggingRef={gizmoDraggingRef} />
       {/* Curated review artifacts (pins, camera-jump animator). Shares this
           renderer's controlsRef so jumps update orbit controls in lockstep. */}
       <ReviewArtifacts controlsRef={controlsRef} />
@@ -759,7 +771,12 @@ const ViewpointCanvas: React.FC = () => {
       style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
       gl={{
         antialias: true,
-        toneMapping: THREE.ACESFilmicToneMapping,
+        // Neutral rather than ACES filmic: the film curve desaturates towards white as
+        // it rolls off, which is a look a colour grading suite wants and a design review
+        // does not — the colour of the part is the thing under discussion. One constant,
+        // shared with the lobby's preview. See components/Scene/LightRig.tsx.
+        toneMapping: SCENE_TONE_MAPPING,
+        toneMappingExposure: SCENE_TONE_MAPPING_EXPOSURE,
         autoClear: false,
         preserveDrawingBuffer: true
       }}

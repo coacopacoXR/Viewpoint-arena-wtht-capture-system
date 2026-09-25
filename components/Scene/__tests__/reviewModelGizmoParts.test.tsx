@@ -66,6 +66,7 @@ vi.mock('../../../lib/PresenceContext', () => ({
 const { default: ReviewModelGizmo } = await import('../ReviewModelGizmo');
 const { useStore } = await import('../../../store');
 const { useActiveReviewStore } = await import('../../../lib/activeReviewStore');
+const { useEditHistory } = await import('../../../lib/scene/editHistory');
 const { forgetLocalEdit } = await import('../../../lib/reviewLocalEdit');
 const { createReviewDraft } = await import('../../../lib/reviewSetupStore');
 const { sceneModelId, sceneModelPrefix } = await import('../../../lib/scene/roomScene');
@@ -349,5 +350,55 @@ describe('ReviewModelGizmo — Part mode', () => {
 
     expect(wire.reviewConfigs).toHaveLength(1);
     expect(partsInStore()?.[FLANGE].position).toEqual([3, 0, 0]);
+  });
+
+  it('is ONE step of history for a whole drag, and not one per frame', () => {
+    // Batch BT. onObjectChange fires on every pointer move, so a history recorded there
+    // would be a hundred steps for one move — and Ctrl+Z would appear to do nothing at
+    // all, because the first hundred presses would walk back through one drag.
+    useEditHistory.getState().clear();
+    const handles = mountGizmo();
+    if (!handles) throw new Error('the gizmo rendered no TransformControls');
+
+    handles.onMouseDown();
+    flange.position.set(1, 0, 0);
+    handles.onObjectChange();
+    flange.position.set(2, 0, 0);
+    handles.onObjectChange();
+    flange.position.set(3, 0, 0);
+    handles.onObjectChange();
+    handles.onMouseUp();
+
+    const history = useEditHistory.getState();
+    expect(history.steps).toHaveLength(1);
+    expect(history.steps[0].label).toContain('bracket');
+    expect(history.steps[0].before[0].parts).toBeUndefined();
+    expect(history.steps[0].after[0].parts?.[FLANGE].position).toEqual([3, 0, 0]);
+    expect(history.cursor).toBe(1);
+  });
+
+  it('records no step for a drag that ended where it started', () => {
+    useEditHistory.getState().clear();
+    const handles = mountGizmo({ target: 'model' });
+    if (!handles) throw new Error('the gizmo rendered no TransformControls');
+
+    handles.onMouseDown();
+    handles.onMouseUp();
+
+    // Somebody who took hold of a handle and put it down again has not made an edit,
+    // and a step for it is a Ctrl+Z that appears to do nothing.
+    expect(useEditHistory.getState().steps).toHaveLength(0);
+  });
+
+  it('says which model a drag was against, so four undos can be told apart', () => {
+    useEditHistory.getState().clear();
+    const handles = mountGizmo({ target: 'model' });
+    if (!handles) throw new Error('the gizmo rendered no TransformControls');
+
+    handles.onMouseDown();
+    wrapper.position.set(4, 0, 0);
+    handles.onMouseUp();
+
+    expect(useEditHistory.getState().steps[0].label).toBe('Moved bracket · Rev A');
   });
 });

@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import type { ObjectState } from '../types';
+import { originalEmissiveOf } from './scene/materialHighlight';
 import {
   remoteLaserTargets,
   remoteLaserColors,
@@ -83,13 +84,20 @@ export function applyBuiltInGlow(
     if (!(obj instanceof THREE.Mesh)) return;
     const mat = obj.material as THREE.MeshStandardMaterial;
     if (!mat || !('emissive' in mat)) return;
+    // Remembered the first time this mesh is passed over, before anything has eased
+    // it anywhere. The GLBs this runs on carry their own emissive — a lens, a reflector,
+    // a light pipe — and this pass used to ease every un-pointed mesh towards ZERO, so
+    // one selection or one laser sweep took the file's own glow off it for good.
+    const original = originalEmissiveOf(mat);
+    if (!original) return;
     const glow = targetGlow(obj, { granularity, objectStates, ...pointers });
     if (glow) {
       scratch.set(glow.color);
       mat.emissive.lerp(scratch, 0.15);
       mat.emissiveIntensity = THREE.MathUtils.lerp(mat.emissiveIntensity, glow.intensity, 0.15);
     } else {
-      mat.emissiveIntensity = THREE.MathUtils.lerp(mat.emissiveIntensity, 0.0, 0.1);
+      mat.emissive.lerp(original.color, 0.1);
+      mat.emissiveIntensity = THREE.MathUtils.lerp(mat.emissiveIntensity, original.intensity, 0.1);
     }
   });
 }

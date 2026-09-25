@@ -47,7 +47,6 @@ import React, { Suspense, useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   ContactShadows,
-  Environment,
   Grid,
   OrbitControls,
   PerspectiveCamera,
@@ -75,6 +74,10 @@ import {
 } from '../../lib/scene/roomScene';
 import { SAMPLE_MODELS } from '../../lib/scene/sampleModels';
 import { parseSceneModelFile, type SceneModelEntry } from '../../lib/scene/sceneEntries';
+import LightRig, {
+  SCENE_TONE_MAPPING,
+  SCENE_TONE_MAPPING_EXPOSURE,
+} from '../Scene/LightRig';
 import { placeImportedGroup } from '../Scene/ImportedModel';
 
 // ─── The words ──────────────────────────────────────────────────────────────
@@ -436,12 +439,6 @@ const SampleModel: React.FC<{ sample: BuiltInModel }> = ({ sample }) => {
 
 // ─── The panel ──────────────────────────────────────────────────────────────
 
-class EnvErrorBoundary extends React.Component<{ children: React.ReactNode }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  render() { return this.state.failed ? null : this.props.children; }
-}
-
 export interface ReviewModelViewerProps {
   /** The design review to look inside. Changing it reloads and frees the last one. */
   reviewId: string;
@@ -621,7 +618,16 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
         {(state.status === 'ready' || state.status === 'sample') && (
           <Canvas
             dpr={[1, 2]}
-            gl={{ antialias: true, alpha: true }}
+            gl={{
+              antialias: true,
+              alpha: true,
+              // The room's tone mapping, from the one constant the room also uses: a
+              // preview that graded its colours differently from the meeting it is a
+              // preview of would be two opinions about the same product, and this panel
+              // exists to answer "what does that design review look like inside".
+              toneMapping: SCENE_TONE_MAPPING,
+              toneMappingExposure: SCENE_TONE_MAPPING_EXPOSURE,
+            }}
             aria-label="Live view of the model this design review would open on"
           >
             <PerspectiveCamera
@@ -632,17 +638,10 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
               far={400}
             />
 
-            <ambientLight intensity={0.75} />
-            <directionalLight position={[4, 6, 4]} intensity={0.9} />
-
-            {/* The preset fetches a remote HDR, so it is both suspended and fenced:
-                an install with no route to the CDN shows a flat-lit model rather than
-                an empty panel. Both halves are World.tsx's arrangement. */}
-            <EnvErrorBoundary>
-              <Suspense fallback={null}>
-                <Environment preset="studio" blur={1} environmentIntensity={1} />
-              </Suspense>
-            </EnvErrorBoundary>
+            {/* The room's own light rig, rather than the second arrangement this panel
+                used to have. The grid, the floor shadow and the framing stay this
+                file's: they belong to the stage, and this stage is smaller. */}
+            <LightRig />
 
             <Grid
               infiniteGrid

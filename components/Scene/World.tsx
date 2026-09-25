@@ -1,18 +1,14 @@
 import React, { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Grid, Environment, ContactShadows } from '@react-three/drei';
+import { Grid, ContactShadows } from '@react-three/drei';
 import type * as THREE from 'three';
 
-class EnvErrorBoundary extends React.Component<{ children: React.ReactNode }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  render() { return this.state.failed ? null : this.props.children; }
-}
 import Product from './Product';
 import Bicycle from './Bicycle';
 import Headphones from './Headphones';
 import ImportedModel from './ImportedModel';
 import Agent from './Agent';
+import LightRig from './LightRig';
 import ThumbnailCapture from './ThumbnailCapture';
 import { useStore } from '../../store';
 import { useSceneModelLoader } from '../../lib/scene/useSceneModelLoader';
@@ -67,12 +63,12 @@ const World: React.FC<WorldProps> = ({ hideAgents: hideAgentsOverride, modelGrou
       <color attach="background" args={['#f0f0f0']} />
       <fog attach="fog" args={['#f0f0f0', 5, 25]} />
 
-      <ambientLight intensity={0.7} />
-      <pointLight position={[10, 10, 10]} intensity={0.5} castShadow />
-      
-      <EnvErrorBoundary>
-        <Environment preset="studio" blur={1} environmentIntensity={1} />
-      </EnvErrorBoundary>
+      {/* The lights, and the same lights the lobby's "Turn in 3D" preview draws a model
+          under — see components/Scene/LightRig.tsx for what changed and why. What was
+          here (ambient 0.7, one point light, a studio environment blurred to nothing)
+          left a curved surface with no gradient on it, which is most of why an imported
+          model looked flat next to the picture its author took of it. */}
+      <LightRig />
 
       {/* Interaction Plane for Mouse Tracking */}
       <mesh visible={false} rotation={[-Math.PI/2, 0, 0]} position={[0, 0.5, 0]} onPointerMove={handlePointerMove}>

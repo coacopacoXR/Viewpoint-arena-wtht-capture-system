@@ -41,6 +41,7 @@ import EmptyScenePrompt from './room/EmptyScenePrompt';
 import LobbyLink from './room/LobbyLink';
 import ReviewNameTag from './room/ReviewNameTag';
 import EditingStrip from '../review/EditingStrip';
+import { useSceneEditShortcuts } from '../../lib/scene/useSceneEditHistory';
 import PlmLaunch from '../review/PlmLaunch';
 import ReviewEditingNotice from '../review/ReviewEditingNotice';
 import { useReviewRole } from '../../lib/reviews/useReviewRole';
@@ -188,6 +189,12 @@ const Interface: React.FC = () => {
   // MINE, not "somebody is". The strip, the panel swap and the gizmo are all
   // gated on this; everybody else in the room gets the banner instead.
   const iAmEditing = reviewEditing !== null && reviewEditing.userId === localUserId;
+
+  // Ctrl+Z / Ctrl+Shift+Z for the scene, and the thing that empties the undo stack
+  // when the room is left. Mounted here rather than in the strip: the buttons belong
+  // to Edit mode but the history does not — hiding a model in the tree and undoing it
+  // a moment later is the same undo whether or not anybody has the edit lock.
+  useSceneEditShortcuts();
 
   // ?edit=1 — where the lobby's "New design review" and a saved review's Edit both
   // land. Retried until the room answers rather than fired once: RoomPage navigates

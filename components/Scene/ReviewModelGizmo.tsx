@@ -39,7 +39,8 @@ import {
   rememberOriginalLocalTransform,
   usablePartScale,
 } from '../../lib/scene/partTransforms';
-import { sceneModelTransform, type SceneUpdate } from '../../lib/scene/roomScene';
+import { sceneModelLabel, sceneModelTransform, type SceneModel, type SceneUpdate } from '../../lib/scene/roomScene';
+import { useSceneEditHistory } from '../../lib/scene/useSceneEditHistory';
 
 /** How often a drag may put a message on the socket. See flush. */
 const SEND_INTERVAL_MS = 100;
@@ -57,7 +58,15 @@ interface OrbitLike {
 
 const ReviewModelGizmo: React.FC<{
   controlsRef: React.MutableRefObject<OrbitLike | null>;
-}> = ({ controlsRef }) => {
+  /**
+   * Written while a handle has hold of the pointer, read by the click that selects a
+   * part. Optional so a canvas that mounts no SceneClickSelect — the two review-setup
+   * tests, and any future canvas that wants the gizmo without the click — has nothing
+   * to hand over. See components/Scene/SceneClickSelect.tsx for why it has to be known
+   * at the instant a press lands rather than at the moment it is released.
+   */
+  draggingRef?: React.MutableRefObject<boolean>;
+}> = ({ controlsRef, draggingRef }) => {
   const mode = useStore((state) => state.reviewGizmoMode);
   const editing = useStore((state) => state.reviewEditing);
   const gizmoTarget = useStore((state) => state.reviewGizmoTarget);
@@ -204,7 +213,12 @@ const ReviewModelGizmo: React.FC<{
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-  }, []);
+    // Unmounted mid-drag — Done pressed, or the tool switched off under a hand still on
+    // a handle. Left true, this would tell SceneClickSelect that every subsequent press
+    // belongs to a gizmo that is no longer there, and clicking a part would stop working
+    // for the rest of the meeting.
+    if (draggingRef) draggingRef.current = false;
+  }, [draggingRef]);
 
   /**
    * Remember where the drag ended with the REVIEW as well as with the room.
@@ -227,6 +241,35 @@ const ReviewModelGizmo: React.FC<{
     keepReviewPlacements(broadcastReviewConfig);
   }, [broadcastReviewConfig]);
 
+  const { snapshot, recordFrom } = useSceneEditHistory();
+
+  /**
+   * The record this drag started from, taken at pointer-down.
+   *
+   * Not at pointer-up, and not by asking the history to read the scene when it records:
+   * a drag puts a throttled operation on the wire every hundred milliseconds and applies
+   * each one here, so by the time the pointer comes up the scene already says where the
+   * drag ended. An "after" measured against that is a step from nowhere to nowhere, and
+   * Ctrl+Z would put the model where the first frame of the drag left it.
+   */
+  const dragBefore = useRef<SceneModel[]>([]);
+
+  /**
+   * What this drag will be called in the history.
+   *
+   * Named after the tool and the subject rather than left as "Moved": Ctrl+Z four times
+   * in a row is four notices, and "Undone." four times tells a person nothing about
+   * whether the one they wanted is next. The part is described rather than named because
+   * the gizmo has the object and not the tree's row for it, and the strip already shows
+   * the name of whatever the tools are attached to.
+   */
+  const dragLabel = useMemo(() => {
+    const verb = mode === 'rotate' ? 'Turned' : mode === 'scale' ? 'Resized' : 'Moved';
+    const model = models.find((one) => one.id === modelId);
+    const subject = model ? sceneModelLabel(model) : 'the model';
+    return partTarget?.nodeId ? `${verb} a part of ${subject}` : `${verb} ${subject}`;
+  }, [mode, modelId, models, partTarget]);
+
   if (!mine || !mode || !object) return null;
 
   return (
@@ -238,6 +281,10 @@ const ReviewModelGizmo: React.FC<{
         // The camera must not orbit underneath a model that is being moved. The
         // curate canvas did the same to its own OrbitControls.
         if (controlsRef.current) controlsRef.current.enabled = false;
+        // Said out loud for the click-to-select beside this component: the press landed
+        // on a handle, so it is not a click on the part underneath one.
+        if (draggingRef) draggingRef.current = true;
+        dragBefore.current = snapshot(modelId ? [modelId] : []);
         // Stamped here and not in an effect: TransformControls moves the object on
         // the pointer-move that follows this event, and an "original" captured after
         // that would be the dragged value — which is what "Reset part" restores, so
@@ -247,14 +294,22 @@ const ReviewModelGizmo: React.FC<{
       }}
       onMouseUp={() => {
         if (controlsRef.current) controlsRef.current.enabled = true;
+        if (draggingRef) draggingRef.current = false;
         // A drag that ends inside the throttle window still has to land: the last
         // few centimetres of a move are the ones the person was aiming.
         if (timer.current) {
           clearTimeout(timer.current);
           timer.current = null;
         }
-        send();
-        keepPlacements();
+        // ONE step for the whole drag, recorded here and not in onObjectChange: that
+        // fires on every pointer move, and fifty steps for one move is a history
+        // nobody can walk back through. Measured against the snapshot taken when the
+        // handle was taken hold of, and stored at all only when the two differ, so a
+        // press that moved nothing costs no step.
+        recordFrom(dragLabel, modelId ? [modelId] : [], dragBefore.current, () => {
+          send();
+          keepPlacements();
+        });
       }}
       onObjectChange={() => flush()}
     />

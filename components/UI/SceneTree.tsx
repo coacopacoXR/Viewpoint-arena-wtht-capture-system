@@ -30,6 +30,7 @@ import {
     type SceneUpdate,
 } from '../../lib/scene/roomScene';
 import { useScenePermissions } from '../../lib/scene/useScenePermissions';
+import { useSceneEditHistory } from '../../lib/scene/useSceneEditHistory';
 import { useSampleModels } from '../../lib/scene/useSampleModels';
 import { claimImportPicker, claimSceneImports } from '../../lib/scene/importHandoff';
 import { compareOffsets, nextToOffset, type SceneExtent } from '../../lib/scene/placement';
@@ -192,6 +193,7 @@ const SceneModelRow: React.FC<{ model: SceneModel; onCompare: (line: string) => 
     const isComparing = useStore(state => state.compare?.line === model.line);
     const { broadcastSceneUpdate } = usePresence();
     const { canChangeModels, reason } = useScenePermissions();
+    const { record } = useSceneEditHistory();
 
     const isVisible = sceneModelVisible(model, localModelVisibility);
 
@@ -199,8 +201,13 @@ const SceneModelRow: React.FC<{ model: SceneModel; onCompare: (line: string) => 
         e.stopPropagation();
         if (canChangeModels) {
             const update: SceneUpdate = { op: 'setVisible', id: model.id, visible: !isVisible };
-            broadcastSceneUpdate(update);
-            applyLocalSceneUpdate(update);
+            // Remembered, like every other change to the shared scene: hiding a revision
+            // so the one behind it can be seen is exactly the kind of thing somebody
+            // wants back one press later, and the eye is not the only way it happens.
+            record(isVisible ? `Hid ${sceneModelLabel(model)}` : `Showed ${sceneModelLabel(model)}`, [model.id], () => {
+                broadcastSceneUpdate(update);
+                applyLocalSceneUpdate(update);
+            });
         } else {
             // Local only, and deliberately so — see the comment on this component.
             setLocalModelVisibility(model.id, !isVisible);
@@ -210,8 +217,10 @@ const SceneModelRow: React.FC<{ model: SceneModel; onCompare: (line: string) => 
     const handleRemove = (e: React.MouseEvent) => {
         e.stopPropagation();
         const update: SceneUpdate = { op: 'remove', id: model.id };
-        broadcastSceneUpdate(update);
-        applyLocalSceneUpdate(update);
+        record(`Removed ${sceneModelLabel(model)}`, [model.id], () => {
+            broadcastSceneUpdate(update);
+            applyLocalSceneUpdate(update);
+        });
     };
 
     return (
@@ -594,6 +603,7 @@ const SceneTree: React.FC = () => {
     const { broadcastSceneUpdate, localUserId } = usePresence();
     const { canChangeModels, maySetModelEditors, reason: cannotChangeReason } = useScenePermissions();
     const { samples, chooseSample } = useSampleModels();
+    const { record } = useSceneEditHistory();
 
     const [importError, setImportError] = useState<string | null>(null);
     const [pending, setPending] = useState<PendingImport | null>(null);
@@ -874,7 +884,23 @@ const SceneTree: React.FC = () => {
         }
         updates.push({ op: 'add', model });
 
-        applySceneUpdates(updates, choice === 'replace' ? { fresh: true } : undefined);
+        // ONE step for the whole import, whatever it did to what was already there:
+        // undoing "added Rev B" has to bring Rev A back into the light with it, and
+        // undoing a replacement has to bring back everything it replaced. Every id the
+        // batch touches is named here, including the ones it removes — after the fact
+        // there is no record left in the scene to find them by.
+        const touched = [
+            model.id,
+            ...(previous ? [previous.id] : []),
+            ...(choice === 'replace' ? models.map((existing) => existing.id) : []),
+        ];
+        record(
+            choice === 'replace'
+                ? `Replaced the scene with ${sceneModelLabel(model)}`
+                : `Added ${sceneModelLabel(model)}`,
+            [...new Set(touched)],
+            () => applySceneUpdates(updates, choice === 'replace' ? { fresh: true } : undefined),
+        );
         // After the scene, not before: adopting a scene drops the parsed geometry
         // of any model it no longer holds, so an entry added first would be thrown
         // away by the very change that asks for it.

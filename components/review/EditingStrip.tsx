@@ -8,6 +8,11 @@
 // to do.
 //
 // Three tools, one switch and one exit:
+//   Undo / Redo — batch BT, and the first thing on the strip because it is the first
+//     thing somebody reaches for after a mistake. Ctrl+Z does the same job from
+//     anywhere in the room (lib/scene/useSceneEditHistory.ts owns the key bindings);
+//     these are icon-only at every width, so they cost no words and are not part of
+//     the shedding order below.
 //   Whole model | Part — WHAT the tools are attached to, batch BR. The three tools
 //     did not change and are not doubled up: Move is Move either way, and a person
 //     who has found the tool they want should not have to find it again to use it on
@@ -15,7 +20,9 @@
 //   Move / Rotate / Scale — drei's TransformControls modes, applied to whatever that
 //     switch says. The gizmo itself is components/Scene/ReviewModelGizmo, inside the
 //     canvas; this is only the switch.
-//   Reset part / Reset all parts — the way back, because there is no undo here.
+//   Reset part / Reset all parts — the way back to the FILE, which undo is not: undo
+//     puts a part where the last drag left it, and these put it where the exporter had
+//     it before anybody in this meeting touched it.
 //   Save this view — the camera where it is, as a viewpoint of the review.
 //   Done — gives the edit lock up. The room hears about it and capture resumes.
 //
@@ -34,7 +41,7 @@
 // variant 3". See EDITING_STRIP_DROP_ORDER for what goes, and in what order.
 
 import React, { useCallback, useMemo } from 'react';
-import { Box, Camera, Check, Move3D, RotateCcw, Scale, Undo2 } from 'lucide-react';
+import { Box, Camera, Check, Move3D, Redo2, RotateCcw, Scale, Undo2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { findSceneNode, selectedNodeId, useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
@@ -42,7 +49,8 @@ import { useCompactLevel } from '../../lib/useCompactLevel';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
 import { keepReviewPlacements } from '../../lib/scene/keepPlacements';
 import { partTargetFor } from '../../lib/scene/partTransforms';
-import type { SceneUpdate } from '../../lib/scene/roomScene';
+import { sceneModelLabel, type SceneUpdate } from '../../lib/scene/roomScene';
+import { useSceneEditHistory } from '../../lib/scene/useSceneEditHistory';
 import type { ReviewGizmoMode } from '../../types';
 
 const TOOLS: Array<{ mode: Exclude<ReviewGizmoMode, null>; control: EditingStripControl; label: string; icon: React.ReactNode; modelTitle: string; partTitle: string }> = [
@@ -115,6 +123,7 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   const viewpointCount = useActiveReviewStore((s) => s.config?.viewpoints.length ?? 0);
   const { broadcastSceneUpdate, broadcastReviewConfig } = usePresence();
   const applyLocalSceneUpdate = useStore((s) => s.applyLocalSceneUpdate);
+  const { record, undo, redo, mayUndo, mayRedo } = useSceneEditHistory();
 
   /**
    * Which part of which model the tools would move, or null for "nothing to act on".
@@ -174,13 +183,23 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   }, [applyLocalSceneUpdate, broadcastReviewConfig, broadcastSceneUpdate]);
 
   const resetPart = () => {
-    if (!partTarget?.nodeId) return;
-    send({ op: 'setPartTransform', id: partTarget.modelId, nodeId: partTarget.nodeId, transform: null });
+    // Locals rather than the narrowed `partTarget.nodeId` inside the callback: TypeScript
+    // drops a narrowing of a property at a closure boundary, and the update needs the
+    // node id to be the string the guard just proved it is.
+    const modelId = partTarget?.modelId;
+    const nodeId = partTarget?.nodeId;
+    if (!modelId || !nodeId || !targetModel) return;
+    record(`Reset a part of ${sceneModelLabel(targetModel)}`, [modelId], () => {
+      send({ op: 'setPartTransform', id: modelId, nodeId, transform: null });
+    });
   };
 
   const resetAllParts = () => {
-    if (!targetModel) return;
-    send({ op: 'clearPartTransforms', id: targetModel.id });
+    const modelId = targetModel?.id;
+    if (!modelId || !targetModel) return;
+    record(`Reset every part of ${sceneModelLabel(targetModel)}`, [modelId], () => {
+      send({ op: 'clearPartTransforms', id: modelId });
+    });
   };
 
   /**
@@ -247,6 +266,45 @@ const EditingStrip: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       data-testid="editing-strip"
       className="flex items-center gap-1.5 bg-amber-400 border border-amber-500 rounded-md shadow-sm p-1.5 pointer-events-auto"
     >
+      {/* Undo and redo, at the start because that is where every other application
+          puts them and where a hand goes first after a mistake. Icon-only at EVERY
+          width and therefore not in EDITING_STRIP_DROP_ORDER: batch BS made this strip
+          fit by shedding words, and these two have none to shed — a 72px pair is what
+          the rest of the strip has to fit around, at 1600px and at 1100px alike.
+          Disabled rather than hidden for the strip's usual reason: a control that
+          appears the moment there is something to undo teaches what it does, and one
+          that is always there and sometimes grey teaches where to find it. */}
+      <button
+        data-testid="undo-scene-edit"
+        onClick={undo}
+        disabled={!mayUndo}
+        title="Undo (Ctrl+Z)"
+        className={clsx(
+          'h-9 w-9 shrink-0 flex items-center justify-center rounded-sm border transition-all',
+          mayUndo
+            ? 'bg-white/80 text-amber-950 border-amber-600/30 hover:border-amber-900/50'
+            : 'bg-white/40 text-amber-950/50 border-amber-600/20 cursor-not-allowed',
+        )}
+      >
+        <Undo2 size={14} />
+      </button>
+      <button
+        data-testid="redo-scene-edit"
+        onClick={redo}
+        disabled={!mayRedo}
+        title="Redo (Ctrl+Shift+Z)"
+        className={clsx(
+          'h-9 w-9 shrink-0 flex items-center justify-center rounded-sm border transition-all',
+          mayRedo
+            ? 'bg-white/80 text-amber-950 border-amber-600/30 hover:border-amber-900/50'
+            : 'bg-white/40 text-amber-950/50 border-amber-600/20 cursor-not-allowed',
+        )}
+      >
+        <Redo2 size={14} />
+      </button>
+
+      <div className="w-px h-7 bg-amber-600/40 mx-0.5 shrink-0" />
+
       {/* What the colour means, and the first thing to lose its words: it is the only text
           here that is not a control, and the amber goes on saying it. The whole sentence
           moves to the tooltip, where a hover finds it. */}

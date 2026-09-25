@@ -5,6 +5,18 @@ import { useStore, sceneModelVisible, type SceneModelEntry } from '../../store';
 import type { SceneModel } from '../../lib/scene/roomScene';
 import { sceneModelTransform } from '../../lib/scene/roomScene';
 import { applyPartTransforms } from '../../lib/scene/partTransforms';
+import { setEmissiveHighlight } from '../../lib/scene/materialHighlight';
+
+/**
+ * The selection glow for an imported model, as one object rather than per-mesh values.
+ *
+ * Allocated once here because the walk that applies it runs over every mesh of every
+ * model on every change to the tree's states, and the version this replaced built two
+ * THREE.Colors per mesh per pass. The same blue the built-in samples use — see
+ * SELECTION_GLOW in lib/builtInModelGlow.ts — because one selection has one colour
+ * whichever model it is on.
+ */
+const SELECTION_HIGHLIGHT = { color: new THREE.Color(0x0044aa), intensity: 0.5 };
 
 /**
  * Scale the imported model and put it centred on the origin, resting on the
@@ -117,12 +129,15 @@ const SceneModelView: React.FC<{ model: SceneModel; entry: SceneModelEntry; labe
 
             if (object instanceof THREE.Mesh) {
                 const materials = Array.isArray(object.material) ? object.material : [object.material];
+                // The selection glow, and the material's own emissive back again when
+                // the selection moves on. It used to write black and zero here, which
+                // is what an imported material's emissive "should" be and is not: a
+                // file that gave a lens its glow, or a CAD export that marked a warning
+                // stripe with one, came back from being selected once permanently dead.
+                // lib/scene/materialHighlight remembers the original in userData the
+                // first time it is asked, so the restore costs one lookup per material.
                 materials.forEach(material => {
-                    if (material && 'emissive' in material) {
-                        const meshMaterial = material as THREE.MeshStandardMaterial;
-                        meshMaterial.emissive = isSelected ? new THREE.Color(0x0044aa) : new THREE.Color(0x000000);
-                        meshMaterial.emissiveIntensity = isSelected ? 0.5 : 0;
-                    }
+                    setEmissiveHighlight(material, isSelected ? SELECTION_HIGHLIGHT : null);
                 });
             }
 
