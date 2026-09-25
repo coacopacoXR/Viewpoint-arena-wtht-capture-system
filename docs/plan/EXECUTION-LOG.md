@@ -887,6 +887,56 @@ the `.mjs` scripts puts them in eslint's scan, so keep them lint-clean.
 - an up-axis flip button for imports;
 - a validation surface on the review-setup upload.
 
+## Session 2026-09-24/25: plan 14 — rooms, models, admin, AI, curation in the room
+
+The user asked for:
+- persistent design reviews with model revisions, and tracker continuity;
+- imports that add rather than replace, synced for everyone, with a host
+  permission;
+- an admin console;
+- AI providers chosen per job from the screen;
+- hand-made cards;
+- curation merged into the room (sketch approved: four roles, an Edit switch).
+
+All of it is built, reviewed, verified live on the WSL install (accounts mode),
+and committed:
+- **Storage and admin:** `f8404a6` BA+BD (model storage by hash, admin People),
+  `d6b5699` BE (admin Design reviews and Models).
+- **Scene and AI:** `98092f4` BB+BF (multi-model scene with revisions and
+  Compare; AI router with an encrypted settings store).
+- **Reviews and cards:** `282da20` BC (roles, stored revisions, tracker
+  continuity), `36e6fb8` BH/BH2/BH3 (curation in the room; the Curate page is
+  deleted), `478d468` BG (+ Card, archive filter, every model file, deadline
+  resolution, PLM launch).
+
+**Found live that tests had missed:**
+- review_members and owner_id were writable with the public anon key, which
+  meant privilege escalation. Closed, then attacked five ways.
+- The admin models endpoint judged the admin check by `res.writableEnded`.
+- New revisions went to the last line added.
+- In-room edits were never saved, and later a second person's stale copy
+  overwrote saved ones. Saving is now per local edit.
+- The owner saw "Import locked" when not the meeting host.
+- The auth token limit (above) and deadline words glued to model dates.
+
+**Qwen incidents:**
+- The monthly quota ran out mid-BH. The user upgraded, and the resumed run kept
+  the partial work and fixed five defects in it.
+- BG hit the per-run tool-call cap. The watcher only looked for a report, so it
+  went unnoticed for about 7 hours. **Always wait on the qwen process exit**,
+  not on log text.
+- Split big batches: five sections is too many for one run.
+
+**Test data:** removed each time. The user's own account (`coacopaco@gmail.com`,
+admin) is the only one. The install is left in accounts mode, as the user asked.
+
+**Open:**
+- The disappearing Import button: not reproduced. Waiting on host/guest,
+  page, and window size.
+- Model transforms persist in room storage, not in the review row.
+- Adding a pin inside the room has no UI yet.
+- The main bundle is 1.2 MB, so lazy-load ReviewEditPanel.
+
 ### Resuming from a cold session
 
 Read this file top to bottom first — it is the only place the findings,
