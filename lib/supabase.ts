@@ -57,6 +57,14 @@ export type TrackerSession = {
   review_id?: string | null;
   /** model_revisions ids that were visible — "what was on screen". */
   revision_ids?: string[] | null;
+  // Batch BK (docs/plan/15-sessions-and-variants.md). Optional for the same reason
+  // as the two above: an install that has not re-applied docs/supabase-schema.sql
+  // returns rows without them, and a meeting with no line is rendered without one
+  // rather than dropped — lib/reviews/lines.sessionLabel answers null for it.
+  /** review_lines.id this meeting was on, or null for one recorded before lines. */
+  line_id?: string | null;
+  /** Its number on that line: 3 for "S3", 2 for "A2". */
+  seq?: number | null;
 };
 
 export type LabelField = {
@@ -102,6 +110,19 @@ export type TrackerItem = {
   created_by_name?: string | null;
   /** 'manual' for a card a person typed in the room; 'ai' (or absent) otherwise. */
   source?: 'ai' | 'manual';
+  // Batch BK (docs/plan/15-sessions-and-variants.md). Optional like the ones above.
+  // line_id and origin_line_id are TWO columns because they come apart: adopting a
+  // variant into the main line (batch BL) moves the card's line and leaves its
+  // origin alone, which is what lets the tracker say "Raised in Variant A · adopted
+  // 12 Oct" instead of quietly rewriting where the risk came from.
+  /** review_lines.id the card is on now. */
+  line_id?: string | null;
+  /** review_lines.id the card was raised on. Never changes. */
+  origin_line_id?: string | null;
+  /** When the card was adopted into the main line, or null. */
+  adopted_at?: string | null;
+  /** Why a closed card is closed, when the reason is not one of the four statuses. */
+  closed_reason?: string | null;
   // joined
   session?: TrackerSession;
 };

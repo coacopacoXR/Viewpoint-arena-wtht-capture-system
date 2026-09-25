@@ -11,6 +11,13 @@
 // Nothing here may break a meeting. Every failure is logged and answered with
 // null: a meeting that ends without reaching the tracker is a lost record, which
 // is bad; a meeting that cannot end is worse.
+//
+// WHAT THIS WRITES IS ONLY WHAT THIS MEETING PRODUCED. The cards a meeting started
+// with — the ones its line was still carrying from the sessions before it, which
+// the room shows in the Capture panel's "Carried over" group — are tracker items
+// that already exist, and they are never in `insightCards`, so they are never
+// inserted again. A risk raised in S2 and still open in S4 is one row with one
+// history, not three copies of itself.
 
 import { supabase } from './supabase';
 import { InsightCard } from '../types';
@@ -21,6 +28,7 @@ import {
   revisionsOnScreen,
   type ModelRevision,
 } from './reviews/revisionsRepo';
+import { nextSessionSeq, resolveLine } from './reviews/linesRepo';
 
 /** A node id somebody pointed at, by the name the room knew it by. */
 export type PartNames = Record<string, string>;
@@ -47,6 +55,17 @@ export async function flushSessionToTracker(opts: {
   onScreen?: readonly Pick<SceneModel, 'line' | 'revision' | 'visible'>[] | null;
   /** Part names for the ids cards point at. See store.ts's pointedAtPartNames. */
   partNames?: PartNames;
+  /**
+   * The line of the design review this meeting was held on — a review_lines.id, or
+   * null when the room did not know one.
+   *
+   * Null is not "no line" but "the room could not say", and the difference matters:
+   * a meeting in a curated review always belongs to a line, so this module works the
+   * main line out for itself (resolveLine → ensureMainLine) rather than recording a
+   * session the map cannot place. An ad-hoc room has no review and so has no line
+   * either, and that stays exactly as it was.
+   */
+  lineId?: string | null;
 }): Promise<string | null> {
   const { roomId, insightCards, participantCount, modelName, labels } = opts;
 
@@ -63,6 +82,14 @@ export async function flushSessionToTracker(opts: {
     ? revisionsOnScreen(await listModelRevisions(reviewId), opts.onScreen ?? [])
     : [];
 
+  // Which line this meeting continues, and which number it is on it. Read here
+  // rather than in the room for the same reason as the revisions: numbering a
+  // session is the tracker's business, and the room only knows the line it was
+  // opened on. `seq` is one more than the line's highest, so a meeting somebody
+  // deleted from the tracker does not hand its number to this one.
+  const line = reviewId ? await resolveLine(reviewId, opts.lineId ?? null) : null;
+  const seq = line ? await nextSessionSeq(line.id) : null;
+
   // 1. Create the session record
   const { data: session, error: sessionErr } = await supabase
     .from('tracker_sessions')
@@ -75,6 +102,8 @@ export async function flushSessionToTracker(opts: {
       labels: labels ?? {},
       review_id: reviewId,
       revision_ids: revisions.map((revision) => revision.id),
+      line_id: line?.id ?? null,
+      seq,
     })
     .select()
     .single();
@@ -113,6 +142,13 @@ export async function flushSessionToTracker(opts: {
       // batch BG; a hand-made one carries the name of whoever typed it.
       source: card.source === 'manual' ? 'manual' : 'ai',
       created_by_name: card.source === 'manual' ? (card.createdByName ?? null) : null,
+      // Both halves of "where this card came from". They are the same line here and
+      // only come apart later: adopting a variant into the main line (batch BL)
+      // moves line_id and leaves origin_line_id alone, which is what lets the
+      // tracker keep saying the card was raised in Variant A after it has joined
+      // the main line's board.
+      line_id: line?.id ?? null,
+      origin_line_id: line?.id ?? null,
     };
   });
 

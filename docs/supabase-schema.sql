@@ -553,6 +553,180 @@ create policy "public update model revisions" on model_revisions for update usin
 -- which has BYPASSRLS and does not need one.
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Lines of a design review (added 2026-09-25, docs/plan/15-sessions-and-variants.md
+-- batch BK). A design review is the lasting thing; inside it a LINE is a
+-- continuous run of meetings, and a session belongs to one.
+--
+-- Every review has exactly one MAIN line — the meetings everybody means when they
+-- say "the review met on Tuesday" — and may have VARIANTS: a named side line
+-- started from one of the main line's sessions, to try a different answer without
+-- losing the one the main line is holding. `parent_session_id` is that session,
+-- and it is what the session map draws the variant leaving from.
+--
+-- On screen these are "Main line" and "Variant A". The words branch, fork, merge
+-- and commit never appear: the people using this are hardware engineers and the
+-- plan is explicit that the programming metaphor must not show through.
+--
+-- `letter` is a variant's A, B, C … and is NULL for the main line, which needs no
+-- letter because there is only ever one of it. It is part of
+-- `unique (review_id, kind, letter)` so two variants of one review cannot both be
+-- Variant A, and it is the suffix of a variant's live room name
+-- (`<reviewId>~<letter>`, lib/reviews/lines.partyRoomName) — which is why it is
+-- assigned once and never reused, even after the variant is dropped.
+--
+-- `status` is the variant's fate: 'active' while it is being explored, 'adopted'
+-- when its model and cards have been taken into the main line, 'dropped' when it
+-- was not. Both are kept for the record rather than deleted — a dropped variant is
+-- an answer the review tried and rejected, and that is worth seeing on the map.
+-- `closed_at` is when it became one or the other. Batch BK only ever writes
+-- 'active'; adopting and dropping are batch BL.
+--
+-- review_id has deliberately NO foreign key, for the same reason
+-- tracker_sessions.review_id has none: a line belongs to a review by id, and a
+-- key would refuse the write for any room that has no curation row.
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists review_lines (
+  id uuid primary key default gen_random_uuid(),
+  review_id text not null,
+  kind text not null check (kind in ('main', 'variant')),
+  name text not null default '',
+  letter text,
+  parent_session_id uuid references tracker_sessions(id),
+  status text not null default 'active' check (status in ('active', 'adopted', 'dropped')),
+  created_by uuid,
+  created_by_name text not null default '',
+  created_at timestamptz not null default now(),
+  closed_at timestamptz,
+  unique (review_id, kind, letter)
+);
+
+-- Exactly one main line per design review. A partial index rather than a column
+-- constraint because `unique (review_id, kind, letter)` cannot express it: the
+-- main line's letter is NULL, and two NULLs are distinct to a unique constraint,
+-- so without this nothing would stop a second main line appearing.
+create unique index if not exists review_lines_one_main_per_review
+  on review_lines (review_id) where kind = 'main';
+
+create index if not exists review_lines_review_idx
+  on review_lines (review_id, created_at);
+
+alter table review_lines enable row level security;
+
+-- Written exactly the way model_revisions is: open read, open insert, open
+-- update, no delete (a line is the review's history). The role check — who may
+-- start a variant, who may adopt or drop one — is in the app, not here, for the
+-- reason set out in the model_revisions block below: a `mode: 'none'` install has
+-- no signed-in callers, so an auth.uid()-keyed policy would refuse every write.
+-- Batch BL is the one that tightens who may create a variant.
+drop policy if exists "public read review lines" on review_lines;
+drop policy if exists "public insert review lines" on review_lines;
+drop policy if exists "public update review lines" on review_lines;
+create policy "public read review lines"   on review_lines for select using (true);
+create policy "public insert review lines" on review_lines for insert with check (true);
+create policy "public update review lines" on review_lines for update using (true);
+
+-- Which line a meeting belongs to, and which number it is on that line
+-- (added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BK).
+--
+-- `seq` is the number in the label the map and the tracker show: S1, S2, S3 on
+-- the main line, A1, A2 on Variant A. Stored rather than derived from
+-- `row_number() over (order by ended_at)` because a line's meetings are numbered
+-- by the order they happened in and two of them can end inside the same second —
+-- and because a session that is later deleted must not renumber the ones after
+-- it, which would silently change what every card raised in them says.
+--
+-- Both NULLABLE: a meeting recorded before this column existed has no line until
+-- the backfill below gives it one, and a meeting held in a room nobody curated
+-- (review_id NULL) never gets one at all. lib/reviews/lines.sessionLabel answers
+-- null for a session with no seq, and the tracker then renders the card without a
+-- line rather than inventing "S0".
+alter table tracker_sessions
+  add column if not exists line_id uuid;
+alter table tracker_sessions
+  add column if not exists seq int;
+
+create index if not exists tracker_sessions_line_idx
+  on tracker_sessions (line_id, seq);
+
+-- Which line a card belongs to, and which one it was raised on
+-- (added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BK).
+--
+-- Two columns because they come apart, and the moment they do is the whole point
+-- of a variant. `line_id` is the line the card is ON now — where a reviewer
+-- looking at the main line finds it. `origin_line_id` is the line it was RAISED
+-- on, and never changes: adopting a variant into the main line (batch BL) moves
+-- the card's line_id and leaves its origin alone, which is what lets the tracker
+-- say "Raised in Variant A · adopted 12 Oct" instead of quietly rewriting where a
+-- risk came from.
+--
+-- `adopted_at` is that moment, and `closed_reason` is why a card that is closed is
+-- closed when the reason is not one of the four statuses — "dropped with the
+-- variant" being the one batch BL writes. Both nullable and both unused in BK.
+alter table tracker_items
+  add column if not exists line_id uuid;
+alter table tracker_items
+  add column if not exists origin_line_id uuid;
+alter table tracker_items
+  add column if not exists adopted_at timestamptz;
+alter table tracker_items
+  add column if not exists closed_reason text;
+
+create index if not exists tracker_items_line_idx on tracker_items (line_id);
+
+-- ─── Backfill: give every review that has met a main line ────────────────────
+--
+-- A design review that existed before this batch has sessions and cards and no
+-- line, and the moment it is opened the map, the tracker's line filter and the
+-- "carried over" group all ask which line those meetings are on. So the answer is
+-- written here, once, for every review that has met: its sessions and their cards
+-- join a main line, numbered in the order they happened.
+--
+-- EVERY STATEMENT BELOW IS SAFE TO RUN TWICE, because install.sh re-applies this
+-- whole file on every run and an upgrade is exactly a re-run. Each one is keyed on
+-- "is still missing" (NOT EXISTS, `is null`) rather than on "has this run before",
+-- and the insert conflicts with review_lines_one_main_per_review and does nothing
+-- — so a second run adds no line, renumbers no session, and never overwrites a
+-- line or an origin that batch BL has since moved.
+insert into review_lines (review_id, kind, name, letter, status, created_at)
+select s.review_id, 'main', 'Main line', null, 'active', min(s.ended_at)
+from tracker_sessions s
+where s.review_id is not null
+  and not exists (
+    select 1 from review_lines l where l.review_id = s.review_id and l.kind = 'main'
+  )
+group by s.review_id
+on conflict do nothing;
+
+update tracker_sessions s
+set line_id = l.id
+from review_lines l
+where l.kind = 'main'
+  and l.review_id = s.review_id
+  and s.line_id is null;
+
+with numbered as (
+  select s.id, row_number() over (partition by s.line_id order by s.ended_at, s.id) as n
+  from tracker_sessions s
+  where s.line_id is not null
+)
+update tracker_sessions s
+set seq = numbered.n
+from numbered
+where s.id = numbered.id
+  and s.seq is null;
+
+-- The card's line is its meeting's line. origin_line_id is set from the same row
+-- and is the one that stays: coalesce rather than assignment, so a card BL has
+-- already adopted into the main line keeps the variant it was raised on.
+update tracker_items i
+set line_id = coalesce(i.line_id, s.line_id),
+    origin_line_id = coalesce(i.origin_line_id, s.line_id)
+from tracker_sessions s
+where s.id = i.session_id
+  and s.line_id is not null
+  and (i.line_id is null or i.origin_line_id is null);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Application settings (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md
 -- batch BF). One row per setting, written from the admin console's AI section
 -- and read back by the server-side AI router (lib/ai/settingsStore.ts).

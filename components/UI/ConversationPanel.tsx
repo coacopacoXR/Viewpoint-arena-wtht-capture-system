@@ -23,6 +23,7 @@ import { selectSegmentsForLine } from '../../lib/selectSegmentsForLine';
 import { getDisplayName } from '../../lib/identity';
 import { isLaserEntryFresh, remoteLaserPartNames, remoteLaserTargets } from '../../lib/laserTargetRef';
 import { useReviewRole } from '../../lib/reviews/useReviewRole';
+import CarriedOverCards from './CarriedOverCards';
 
 // --- MAIN PANEL ---
 
@@ -108,6 +109,12 @@ const ConversationPanel: React.FC = () => {
   const { can } = useReviewRole({ reviewId, sessionHostId, localUserId });
   const mayAddCard = can('addCard');
   const mayEditCard = can('editCard');
+
+  // The line of the design review this room is on, which is what the "Carried over"
+  // group reads its cards from. Null in an ad-hoc room, on an install with no
+  // database, and until pages/RoomPage.tsx has resolved it — and the group renders
+  // nothing for all three, which is the panel as it was before lines existed.
+  const activeLine = useStore((s) => s.activeLine);
 
   // The node the room has selected. The laser selects as it moves
   // (components/Scene/UserLaser.tsx), so on a desktop this is usually the part
@@ -370,6 +377,18 @@ const ConversationPanel: React.FC = () => {
                 <DetectedInsightsHeader
                     insightCards={insightCards}
                     onOpenExplainer={() => setShowExplainer(true)}
+                />
+                {/* What this session started with: the line's still-open cards from
+                    the meetings before it (docs/plan/15 batch BK). Above the new ones
+                    because it is what the meeting has to pick up, and separate from
+                    them because these are tracker items already — nothing here is
+                    copied into `insightCards`, so the flush at meeting end cannot
+                    re-save one. Renders nothing at all when there is nothing carried
+                    over, which is every first meeting and every ad-hoc room. */}
+                <CarriedOverCards
+                    line={activeLine}
+                    mayEdit={mayEditCard}
+                    changedBy={getDisplayName()}
                 />
                 {mayAddCard && (
                     <div className="px-2 pt-2 shrink-0">

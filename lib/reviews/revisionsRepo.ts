@@ -327,6 +327,35 @@ export function revisionsOnScreen(
 }
 
 /**
+ * The rows a meeting said were on screen, out of a review's whole history.
+ *
+ * This is how a session starts where its line left off (docs/plan/15 batch BK):
+ * tracker_sessions.revision_ids is the set that was VISIBLE when a meeting ended,
+ * and narrowing the history to it before handing it to `sceneFromRevisions` gives a
+ * room the model that meeting was looking at rather than the newest revision of
+ * every line the review has ever stored. The difference is a review whose main line
+ * went to Rev C in the last meeting and whose variant is still on Rev A: opened on
+ * the variant, the room shows Rev A.
+ *
+ * Ids that no longer have a row — a revision deleted from the review through the
+ * admin console — are skipped rather than causing an empty answer, so a history
+ * that has moved on still opens on the part of it the meeting named. An empty
+ * `revisionIds` answers the whole history, because that is what a meeting recorded
+ * before revision_ids existed means: nothing was stored, so there is nothing to
+ * narrow to.
+ */
+export function revisionsForSession(
+  revisions: readonly ModelRevision[],
+  revisionIds: readonly string[] | null | undefined,
+): ModelRevision[] {
+  if (!revisionIds || revisionIds.length === 0) return [...revisions];
+  const narrowed = revisions.filter((revision) => revisionIds.includes(revision.id));
+  // Nothing it named survives, so there is no origin to honour — and an empty scene
+  // is not a fallback, it is a room that appears to have lost its model.
+  return narrowed.length > 0 ? narrowed : [...revisions];
+}
+
+/**
  * Which stored revision a part belongs to, from the node id it was pointed at.
  *
  * Node ids in an imported model's tree are prefixed with `sceneModelPrefix(hash)`

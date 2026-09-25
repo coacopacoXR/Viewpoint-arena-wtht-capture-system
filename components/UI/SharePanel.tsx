@@ -5,6 +5,7 @@ import { useConnectorConfig } from '../../lib/config/ConfigContext.tsx';
 import { useJoinPolicy, broadcastSetJoinPolicy } from '../../lib/usePartyPresence';
 import { usePresence } from '../../lib/PresenceContext';
 import { useStore } from '../../store';
+import { roomPath, shortLineLabel } from '../../lib/reviews/lines';
 
 interface SharePanelProps {
   roomId: string;
@@ -36,9 +37,18 @@ const SharePanel: React.FC<SharePanelProps> = ({ roomId, onClose }) => {
   const sessionHostId = useStore(state => state.sessionHostId);
   const isHost = sessionHostId === localUserId || sessionHostId === null;
 
+  // Which line this room is on, so the link it hands out opens THAT line. Sharing a
+  // variant's meeting as the review's own address would invite the next person into
+  // the main line — a different live room, a different model on screen — and they
+  // would have no way to tell from the link. The main line carries no parameter, so
+  // the address of every review that existed before lines did is unchanged.
+  const activeLine = useStore(state => state.activeLine);
+  const onVariant = activeLine?.kind === 'variant';
+  const variantLabel = onVariant ? shortLineLabel(activeLine) : null;
+
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const baseUrl = config.publicUrl || origin;
-  const roomUrl = `${baseUrl}/room/${roomId}`;
+  const roomUrl = `${baseUrl}${roomPath(roomId, onVariant ? activeLine?.id ?? null : null)}`;
 
   const urlHost = extractHost(baseUrl);
   const localOnly = isLocalHost(urlHost);
@@ -232,6 +242,7 @@ const SharePanel: React.FC<SharePanelProps> = ({ roomId, onClose }) => {
         <div className="px-4 pb-3">
           <p className="text-[9px] font-mono text-center" style={{ color: 'rgba(255,255,255,0.2)' }}>
             Room · {roomId.slice(0, 8).toUpperCase()}
+            {variantLabel ? ` · ${variantLabel}` : ''}
           </p>
         </div>
       </div>

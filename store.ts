@@ -9,6 +9,7 @@ import { useReviewSetupStore } from './lib/reviewSetupStore';
 // still being evaluated, which is what makes the import cycle between them safe.
 import { useActiveReviewStore } from './lib/activeReviewStore';
 import { usePointingTimelineStore } from './lib/pointingTimelineStore';
+import type { ReviewLine } from './lib/reviews/lines';
 import type { SceneModelEntry } from './lib/scene/sceneEntries';
 import {
   applySceneUpdate,
@@ -808,6 +809,27 @@ interface AppState {
    */
   activeReviewId: string | null;
   setActiveReviewId: (id: string | null) => void;
+
+  /**
+   * The line of that design review this room is on, or null.
+   *
+   * docs/plan/15-sessions-and-variants.md batch BK. A review's meetings run along a
+   * MAIN line, and a VARIANT is a side line somebody started from one of them to try
+   * a different answer; the room is always on exactly one of them. Null means this
+   * browser has not worked out which yet, or the room is an ad-hoc session with no
+   * review to have lines — and both are answered for at meeting end by
+   * lib/trackerBridge, which resolves the line itself rather than recording a
+   * session the map cannot place.
+   *
+   * Set by pages/RoomPage.tsx, from the address it was opened on: `/room/<reviewId>`
+   * is the main line, so every link already in circulation keeps working, and
+   * `/room/<reviewId>?line=<lineId>` is that variant. The whole row is held rather
+   * than its id because three readers need more than the id — the meeting flush
+   * numbers the session on it, the Capture panel lists the cards it is carrying, and
+   * lib/scene/showCurationModel.ts starts the scene from its last meeting.
+   */
+  activeLine: ReviewLine | null;
+  setActiveLine: (line: ReviewLine | null) => void;
 }
 
 
@@ -912,7 +934,7 @@ export const useStore = create<AppState>((set, get) => ({
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
   endMeeting: (ended, participantCount) => {
     if (ended) {
-      const { insightCards, agents, activeModelType, hideAgents, scene, activeReviewId } = get();
+      const { insightCards, agents, activeModelType, hideAgents, scene, activeReviewId, activeLine } = get();
       const roomId = window.location.pathname.split('/room/')[1] ?? 'local';
       // The labels of the review this meeting was held in. The room's own copy
       // first, because batch BH3 drops the lobby's handover draft once the room
@@ -946,6 +968,11 @@ export const useStore = create<AppState>((set, get) => ({
         // against revisions rather than against "the model".
         onScreen: scene.models,
         partNames: pointedAtPartNames(),
+        // The line this meeting continued. Null when the room never worked one out
+        // — an ad-hoc session, or a review on an install whose database has no
+        // review_lines yet — and lib/trackerBridge resolves the main line itself
+        // rather than recording a session the map cannot place.
+        lineId: activeLine?.id ?? null,
       });
     }
     set({ isMeetingEnded: ended, isPlaying: !ended });
@@ -1228,6 +1255,8 @@ export const useStore = create<AppState>((set, get) => ({
   // --- THE DESIGN REVIEW THIS ROOM IS HOLDING ---
   activeReviewId: null,
   setActiveReviewId: (activeReviewId) => set({ activeReviewId }),
+  activeLine: null,
+  setActiveLine: (activeLine) => set({ activeLine }),
 
   // --- BOARDROOM MODE ---
   boardroomPendingEntry: false,

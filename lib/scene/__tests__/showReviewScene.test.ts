@@ -49,6 +49,18 @@ vi.mock('../../reviews/revisionsRepo', async (importOriginal) => {
 
 vi.mock('../../../utils/modelLoader', () => ({ parseModelFile: vi.fn() }));
 
+// Since batch BK the scene also depends on which LINE the room is on: a session
+// starts from what its line was last looking at, not from the review's newest
+// upload. That read goes to two more tables through the same client, so it is faked
+// here — the read itself is pinned in lib/reviews/__tests__/linesRepo.test.ts, and
+// what this file adds is the scene it produces.
+const origin = vi.hoisted(() => ({ revisionIds: null as string[] | null }));
+
+vi.mock('../../reviews/linesRepo', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../reviews/linesRepo')>();
+  return { ...actual, originRevisionIds: vi.fn(async () => origin.revisionIds) };
+});
+
 import { forgetReviewScene, showReviewScene } from '../showCurationModel';
 
 const HASH_A = 'a1'.repeat(32);
@@ -77,8 +89,54 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.scene = { models: [], builtIn: null };
   state.stored = [];
+  origin.revisionIds = null;
   forgetReviewScene('review-1');
   forgetReviewScene('review-2');
+});
+
+describe('showReviewScene — the line the room is on', () => {
+  beforeEach(() => {
+    state.stored = [
+      revision({ id: 'rev-1', revision: 'A', hash: HASH_A }),
+      revision({ id: 'rev-2', revision: 'B', hash: HASH_B, fileName: 'bracket-v2.step' }),
+    ];
+  });
+
+  it('opens on what its line was last looking at, not on the review\'s newest upload', async () => {
+    // docs/plan/15 batch BK: a session starts where its line left off. The review
+    // has been to Rev B; the line this room is on last met on Rev A.
+    origin.revisionIds = ['rev-1'];
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(state.scene.models).toHaveLength(1);
+    expect(state.scene.models[0]).toMatchObject({ revision: 'A', visible: true });
+  });
+
+  it('opens on the whole history when the line has never met', async () => {
+    // Which is exactly what opening such a review did before lines existed.
+    origin.revisionIds = null;
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(state.scene.models.map((model) => model.revision).sort()).toEqual(['A', 'B']);
+    expect(state.scene.models.find((model) => model.revision === 'B')?.visible).toBe(true);
+  });
+
+  it('opens on the whole history when the line named revisions that are all gone', async () => {
+    // A revision deleted from the review through the admin console. The fallback is
+    // everything the review still has, never an empty room.
+    origin.revisionIds = ['rev-deleted'];
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(state.scene.models.map((model) => model.revision).sort()).toEqual(['A', 'B']);
+  });
+
+  it('still shows the curation model synchronously, before either read has answered', async () => {
+    origin.revisionIds = ['rev-1'];
+    const promise = showReviewScene('review-1', ASSET, 'test');
+    expect(state.scene.models).toHaveLength(1);
+    expect(state.scene.models[0].hash).toBe(HASH_A);
+    await promise;
+  });
 });
 
 describe('showReviewScene — the fallback every existing review takes', () => {

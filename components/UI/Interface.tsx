@@ -41,6 +41,7 @@ import PlmLaunch from '../review/PlmLaunch';
 import ReviewEditingNotice from '../review/ReviewEditingNotice';
 import { useReviewRole } from '../../lib/reviews/useReviewRole';
 import { useLeaderAutoRelease } from '../../lib/useLeaderAutoRelease';
+import { useSessionMap } from '../../lib/reviews/useSessionMap';
 
 /**
  * The review's editing tools, fetched when somebody actually turns Edit on.
@@ -53,6 +54,17 @@ import { useLeaderAutoRelease } from '../../lib/useLeaderAutoRelease';
  * what it statically imports.
  */
 const ReviewEditPanel = React.lazy(() => import('../review/ReviewEditPanel'));
+
+/**
+ * The map of this design review's sessions, fetched when somebody presses Sessions.
+ *
+ * Batch BK. Same reasoning as the panel above: the map is one SVG drawing and its
+ * layout, but it is in the room's own chunk otherwise, and the room's chunk is what
+ * every participant downloads in order to look at a model. Lazy here AND in
+ * pages/TrackerPage.tsx — a static import from either one puts it straight back in
+ * the main bundle.
+ */
+const SessionMap = React.lazy(() => import('../review/SessionMap'));
 
 // The side panel owns the right edge, so every bar that centres on the *free*
 // canvas has to stop short of it. Collapsed rail is 48px, the open panel 340px,
@@ -103,6 +115,14 @@ const Interface: React.FC = () => {
   const [showExplainer, setShowExplainer] = useState(false);
   const [showDeicticExplainer, setShowDeicticExplainer] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
+
+  // The map of this design review's sessions, opened from the top bar
+  // (docs/plan/15 batch BK). Everybody in the room may open it — it changes nothing
+  // — and it is read only while it is open: passing null until then means a meeting
+  // that never looks at the map never asks the database for it.
+  const [showSessions, setShowSessions] = useState(false);
+  const reviewTitle = useActiveReviewStore((s) => s.config?.title ?? null);
+  const sessionMap = useSessionMap(showSessions ? (roomId ?? null) : null);
 
   // Sync sameRoom flag with presence broadcasting
   useEffect(() => {
@@ -466,9 +486,33 @@ const Interface: React.FC = () => {
             onOpenDeicticExplainer={() => setShowDeicticExplainer(true)}
             canEditReview={mayEditReview && !roleLoading && roomId !== undefined}
             onEditReview={() => requestReviewEdit()}
+            onOpenSessions={roomId ? () => setShowSessions(v => !v) : undefined}
           />
         )}
       </div>
+
+      {/* The session map, over the canvas and centred on the same free space the
+          top bar is: it is a panel about this design review, not a modal about the
+          app, and it has to leave the left column and the side panel alone. Read
+          only while open, so a meeting that never presses Sessions costs nothing. */}
+      {showSessions && roomId && (
+        <div className={clsx(
+          "absolute top-[76px] bottom-6 left-[300px] z-[60] pointer-events-auto",
+          canvasRightClass
+        )}>
+          <Suspense fallback={null}>
+            <SessionMap
+              reviewTitle={reviewTitle}
+              lines={sessionMap.lines}
+              sessions={sessionMap.sessions}
+              revisions={sessionMap.revisions}
+              cards={sessionMap.cards}
+              onClose={() => setShowSessions(false)}
+              emptyMessage={sessionMap.loading ? 'Reading this design review’s sessions…' : undefined}
+            />
+          </Suspense>
+        </div>
+      )}
 
       {/* Status indicators — top right of the canvas, below the bar and clear
           of the side panel, which now starts at the very top of the window. */}

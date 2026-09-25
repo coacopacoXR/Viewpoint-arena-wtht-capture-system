@@ -14,7 +14,8 @@ import { curationScene, curationSceneModel, legacyCurationModel } from './curati
 import { sceneModelPrefix } from './roomScene';
 import { sceneModelEntry } from './sceneEntries';
 import { applyStoredPlacements, type StoredPlacement } from './placement';
-import { listModelRevisions, sceneFromRevisions } from '../reviews/revisionsRepo';
+import { listModelRevisions, revisionsForSession, sceneFromRevisions } from '../reviews/revisionsRepo';
+import { originRevisionIds } from '../reviews/linesRepo';
 
 /** The part of a curation's asset that decides what to show. */
 export interface CurationAssetModel {
@@ -150,7 +151,18 @@ export async function showReviewScene(
   rebuilt.add(reviewId);
 
   const before = useStore.getState().scene;
-  const revisions = await listModelRevisions(reviewId);
+  // Two reads, together: the review's whole history, and the part of it the LINE
+  // this room is on was last looking at. The second is what makes a session start
+  // where its line left off (docs/plan/15 batch BK) instead of where the review's
+  // newest upload happens to be — a variant still on Rev A opens on Rev A even
+  // though the main line has been to Rev C since. Null for a line that has never
+  // met, for a meeting recorded before revision_ids existed, and for an install
+  // with no database, and every one of those opens on the whole history, which is
+  // exactly what it did before this batch.
+  const [revisions, origin] = await Promise.all([
+    listModelRevisions(reviewId),
+    originRevisionIds(reviewId, useStore.getState().activeLine?.id ?? null),
+  ]);
   if (revisions.length === 0) return true;
 
   const state = useStore.getState();
@@ -171,8 +183,13 @@ export async function showReviewScene(
   // placement wins over the beside-each-other default sceneFromRevisions computes,
   // because that default is a guess about a room nobody has been in since, and the
   // placement is where somebody actually left it (batch BI).
+  //
+  // Narrowed to the line's last meeting when it named revisions that still exist.
+  // revisionsForSession falls back to the whole history when it named none — a
+  // revision deleted since, a meeting recorded before the column — so a line whose
+  // origin cannot be honoured opens on everything rather than on an empty room.
   state.setRoomScene(applyStoredPlacements(
-    sceneFromRevisions(revisions, unrecorded),
+    sceneFromRevisions(revisionsForSession(revisions, origin), unrecorded),
     asset?.placements,
   ));
   return true;

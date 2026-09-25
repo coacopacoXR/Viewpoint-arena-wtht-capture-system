@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import IntegrationsPanel from '../components/UI/IntegrationsPanel';
 import AssigneeComboBox from '../components/UI/AssigneeComboBox';
 import LabelFieldsSettings from '../components/UI/LabelFieldsSettings';
-import CardContinuityLine, { CardContinuityProvider } from '../components/UI/CardContinuity';
+import CardContinuityLine, { CardContinuityProvider, CardLineLabel } from '../components/UI/CardContinuity';
 import { getDisplayName } from '../lib/identity';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import { listAllCurations, type CurationSummary } from '../lib/curationsRepo';
 import { listModelRevisions, type ModelRevision } from '../lib/reviews/revisionsRepo';
+import { listLines } from '../lib/reviews/linesRepo';
+import { useSessionMap } from '../lib/reviews/useSessionMap';
+import { lineLabel, type ReviewLine } from '../lib/reviews/lines';
 import { isClosed } from '../lib/trackerContinuity';
 import {
   groupSessions,
@@ -125,6 +128,25 @@ export const NO_DESIGN_REVIEW = '__no_design_review__';
  */
 function reviewOf(item: TrackerItem): string | null {
   return item.review_id ?? item.session?.review_id ?? null;
+}
+
+/**
+ * The line of a design review a card is on, and the number of the session that
+ * raised it (docs/plan/15-sessions-and-variants.md batch BK).
+ *
+ * The card's own line_id first, then its meeting's: a card added by hand through
+ * this page's own Add Item modal names a session and has never written a line of its
+ * own, and without the fallback it would vanish the moment the review was filtered
+ * by line — the same trap reviewOf's fallback exists for.
+ *
+ * `origin_line_id` is deliberately NOT what this answers. It is where the card was
+ * RAISED, and after a variant is adopted into the main line (batch BL) the two
+ * differ: the card belongs to the main line's board and still says it came from
+ * Variant A. Filtering by where a card is now is what a reviewer looking at one line
+ * wants; the origin is what the label next to it says.
+ */
+function lineOf(item: TrackerItem): string | null {
+  return item.line_id ?? item.session?.line_id ?? null;
 }
 
 /**
@@ -377,6 +399,10 @@ const CardContent: React.FC<{ item: TrackerItem; isDragging?: boolean }> = ({ it
       <div className="flex items-center gap-1.5 flex-wrap">
         <TypeBadge type={item.type} />
         <PriorityBadge priority={item.priority} />
+        {/* Which run of meetings this belongs to, beside the revision continuity
+            below it: the line says where, the revision says which version of the
+            product. Renders nothing for a card with no line. */}
+        <CardLineLabel item={item} />
         {origin && (
           <span title={origin} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-500">
             ✍ {item.created_by_name?.trim() || 'by hand'}
@@ -691,6 +717,7 @@ const ListView: React.FC<{ items: TrackerItem[]; onItemClick: (i: TrackerItem) =
               <td className="px-3 py-2.5 max-w-xs">
                 <span className="font-medium text-gray-900 line-clamp-1">{item.title}</span>
                 {item.component_reference && <span className="font-mono text-[10px] text-gray-400 ml-2">{item.component_reference}</span>}
+                <CardLineLabel item={item} className="inline-flex items-center ml-2 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-500 align-middle" />
                 <CardContinuityLine item={item} className="font-mono text-[10px] text-gray-500 mt-0.5" />
               </td>
               <td className="px-3 py-2.5 font-mono text-xs text-gray-500">{item.assignee ?? '—'}</td>
@@ -864,6 +891,9 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate, onDele
         </div>
         <div className="px-6 pt-4 pb-2 border-b border-gray-100 flex-shrink-0">
           <InlineField label="" value={item.title} onSave={field('title')} placeholder="Item title…" />
+          {/* Where this card came from, above the revisions it has lived through:
+              "Variant A · A2" and then "Raised on Rev A · still open on Rev C". */}
+          <CardLineLabel item={item} className="inline-flex items-center mx-2.5 mb-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-500" />
           <CardContinuityLine item={item} className="font-mono text-[11px] text-gray-500 px-2.5 pb-1" />
           {cardOrigin(item) && <p className="font-mono text-[10px] text-gray-400 px-2.5 pb-1">{cardOrigin(item)}</p>}
         </div>
@@ -1201,7 +1231,7 @@ const SessionSidebar: React.FC<{
 
 // ─── Filter Bar ───────────────────────────────────────────────────────────────
 
-interface Filters { type: TrackerItem['type'] | 'All'; priority: TrackerItem['priority'] | 'All'; status: TrackerItem['status'] | 'All'; assignee: string | 'All'; search: string; review: string | 'All'; }
+interface Filters { type: TrackerItem['type'] | 'All'; priority: TrackerItem['priority'] | 'All'; status: TrackerItem['status'] | 'All'; assignee: string | 'All'; search: string; review: string | 'All'; line: string | 'All'; }
 
 /** One entry of the design-review filter: the review's id and what to call it. */
 interface ReviewOption { id: string; label: string; }
@@ -1210,6 +1240,12 @@ interface FilterBarProps {
   filters: Filters;
   assignees: string[];
   reviewOptions: ReviewOption[];
+  /**
+   * The lines of the review being looked at, for the filter that narrows to one of
+   * them. Same shape as a review option — an id and what to call it — because that
+   * is all a select needs.
+   */
+  lineOptions: ReviewOption[];
   onChange: (f: Filters) => void;
   onOpenPalette: () => void;
   sessions?: TrackerSession[];
@@ -1217,7 +1253,7 @@ interface FilterBarProps {
   onSelectSession?: (id: string | null) => void;
 }
 
-const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, reviewOptions, onChange, onOpenPalette, sessions, selectedSessionId, onSelectSession }) => {
+const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, reviewOptions, lineOptions, onChange, onOpenPalette, sessions, selectedSessionId, onSelectSession }) => {
   const sel = 'border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-black cursor-pointer hover:border-gray-300 transition-colors';
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -1247,6 +1283,17 @@ const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, reviewOptions
             reachable rather than becoming an unfilterable remainder. */}
         <option value={NO_DESIGN_REVIEW}>No design review</option>
       </select>
+      {/* One line of that review. Offered only when there is a review to have lines
+          and more than one of them to choose between: a filter that can only answer
+          "everything" is noise, and every card on an install whose database predates
+          review_lines is on no line at all. */}
+      {lineOptions.length > 1 && (
+        <select value={filters.line} onChange={e => onChange({ ...filters, line: e.target.value })} className={sel}
+          aria-label="Filter by line" title="Show only the cards and meetings of one line of this design review">
+          <option value="All">All lines</option>
+          {lineOptions.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+        </select>
+      )}
       <select value={filters.type} onChange={e => onChange({ ...filters, type: e.target.value as Filters['type'] })} className={sel}>
         <option value="All">All Types</option>
         {ALL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -1690,22 +1737,46 @@ const ReviewPanel: React.FC<{
 
 type ViewMode = 'board' | 'list' | 'matrix' | 'trends';
 
+/**
+ * The map of a design review's sessions, fetched when it is opened.
+ *
+ * Batch BK. App.tsx does not code-split its routes, so this page is in the main
+ * chunk and a static import here would put the map in it too — and the map is only
+ * ever drawn for somebody who pressed the button. Lazy here AND in
+ * components/UI/Interface.tsx, which shows the same component over the room's canvas.
+ */
+const SessionMap = React.lazy(() => import('../components/review/SessionMap'));
+
 const TrackerPage: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  // A link in from the session map names the meeting it wants
+  // (/tracker?session=<id>&review=<id>), so a card listed under a stop on the map
+  // lands on that card's board rather than on the tracker's front door. Read once,
+  // on the first render, because this page keeps no router state to stay in step
+  // with afterwards — the filters below are the user's from that point on.
+  const [arrival] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    return { session: params.get('session'), review: params.get('review') };
+  });
   const [sessions, setSessions] = useState<TrackerSession[]>([]);
   const [allItems, setAllItems] = useState<TrackerItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(arrival.session);
   const [viewMode, setViewMode] = useState<ViewMode>('board');
   const [selectedItem, setSelectedItem] = useState<TrackerItem | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
-  const [filters, setFilters] = useState<Filters>({ type: 'All', priority: 'All', status: 'All', assignee: 'All', search: '', review: 'All' });
+  const [filters, setFilters] = useState<Filters>({ type: 'All', priority: 'All', status: 'All', assignee: 'All', search: '', review: arrival.review ?? 'All', line: 'All' });
   const [addItemState, setAddItemState] = useState<{ open: boolean; status: TrackerItem['status'] }>({ open: false, status: 'Open' });
   const [groupBy, setGroupBy] = useState<GroupByChoice>({ fieldIds: [] });
   const [groupFilters, setGroupFilters] = useState<GroupFilters>({});
   const [labelSettingsOpen, setLabelSettingsOpen] = useState(false);
+  // The session map is opened rather than always drawn: a review that has met twenty
+  // times has twenty stops in it, and the tracker's job the rest of the time is the
+  // board. Read (and drawn) only while it is open.
+  const [mapOpen, setMapOpen] = useState(false);
   // Batch BC: the design reviews a meeting or card can belong to, the revisions
   // each of them has stored, and when each closed card was closed. All three
   // start empty and stay empty on an install whose database predates them, which
@@ -1713,6 +1784,10 @@ const TrackerPage: React.FC = () => {
   const [reviews, setReviews] = useState<CurationSummary[]>([]);
   const [revisionsByReview, setRevisionsByReview] = useState<Record<string, ModelRevision[]>>({});
   const [closedAtByItem, setClosedAtByItem] = useState<Record<string, string>>({});
+  // Batch BK (docs/plan/15): the lines of each design review on screen, so a card can
+  // say "Main line · S3" and the filter can offer one of them. Empty on an install
+  // whose database has no review_lines yet, which costs a label and nothing else.
+  const [linesByReview, setLinesByReview] = useState<Record<string, ReviewLine[]>>({});
 
   // Label fields store
   const labelFields = useLabelFieldsStore((s) => s.fields);
@@ -1809,6 +1884,38 @@ const TrackerPage: React.FC = () => {
     return () => { cancelled = true; };
   }, [allItems, selectedReviewId, revisionsByReview]);
 
+  // The lines behind the cards on screen: one read per design review that has a card
+  // on a line, plus the review being looked at, whose filter has to offer every line
+  // whether or not a card names one.
+  //
+  // Driven by `line_id` for the same reason the revision read is driven by
+  // `raised_on_revision`: on an install whose database predates batch BK no card has
+  // one, so this effect makes no request at all and the page costs what it cost
+  // before. A review already read is not read again, and a failure stores the empty
+  // list listLines would have answered anyway.
+  useEffect(() => {
+    const wanted: string[] = [];
+    for (const item of allItems) {
+      const reviewId = lineOf(item) ? reviewOf(item) : null;
+      if (reviewId && !wanted.includes(reviewId)) wanted.push(reviewId);
+    }
+    if (selectedReviewId && !wanted.includes(selectedReviewId)) wanted.push(selectedReviewId);
+    const missing = wanted.filter(id => !(id in linesByReview));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    Promise.all(missing.map(async id => ({ id, lines: await listLines(id) })))
+      .then(loaded => {
+        if (cancelled) return;
+        setLinesByReview(prev => {
+          const next = { ...prev };
+          for (const entry of loaded) next[entry.id] = entry.lines;
+          return next;
+        });
+      })
+      .catch(() => { /* a review whose lines cannot be read has no line labels to show */ });
+    return () => { cancelled = true; };
+  }, [allItems, selectedReviewId, linesByReview]);
+
   // When each closed card was closed — the other half of "Closed on Rev B · 12
   // Mar". tracker_status_history has no revision column and this batch's schema is
   // fixed, so the revision is derived by lining the two histories up by time in
@@ -1894,8 +2001,9 @@ const TrackerPage: React.FC = () => {
     setSeeding(true);
     await seedDemoData();
     // The demo sessions belong to no design review, so seeding while one is
-    // selected would appear to do nothing at all.
-    setFilters(f => ({ ...f, review: 'All' }));
+    // selected would appear to do nothing at all. The line goes with it: it names a
+    // line of that review, and the demo sessions are on none.
+    setFilters(f => ({ ...f, review: 'All', line: 'All' }));
     setSelectedSessionId(null);
     await Promise.all([fetchSessions(), fetchItems()]);
     setSeeding(false);
@@ -1913,12 +2021,32 @@ const TrackerPage: React.FC = () => {
     return reviewId === filters.review;
   }, [filters.review]);
 
+  // One line of the review being looked at: the main line, or one of its variants.
+  // 'All' is the answer for every install whose database has no review_lines yet, and
+  // for every card recorded before the backfill gave it a line — those keep showing
+  // exactly where they showed before.
+  const matchesLine = useCallback((item: TrackerItem) => {
+    if (filters.line === 'All') return true;
+    return lineOf(item) === filters.line;
+  }, [filters.line]);
+
+  const matchesSessionLine = useCallback((session: TrackerSession) => {
+    if (filters.line === 'All') return true;
+    return (session.line_id ?? null) === filters.line;
+  }, [filters.line]);
+
   // The review's cards, before the type/priority/status/assignee filters: what its
   // panel counts and what Trends draws. Trends has always ignored the card
   // filters, and the review is a scope rather than one of them.
-  const reviewItems = useMemo(() => allItems.filter(item => matchesReview(reviewOf(item))), [allItems, matchesReview]);
+  const reviewItems = useMemo(
+    () => allItems.filter(item => matchesReview(reviewOf(item)) && matchesLine(item)),
+    [allItems, matchesReview, matchesLine],
+  );
 
-  const visibleSessions = useMemo(() => sessions.filter(s => matchesReview(s.review_id ?? null)), [sessions, matchesReview]);
+  const visibleSessions = useMemo(
+    () => sessions.filter(s => matchesReview(s.review_id ?? null) && matchesSessionLine(s)),
+    [sessions, matchesReview, matchesSessionLine],
+  );
 
   const filteredItems = useMemo(() => reviewItems.filter(item => {
     if (filters.type !== 'All' && item.type !== filters.type) return false;
@@ -1948,7 +2076,26 @@ const TrackerPage: React.FC = () => {
 
   const stats = useMemo(() => computeStats(reviewItems), [reviewItems]);
 
-  const continuityData = useMemo(() => ({ revisionsByReview, closedAtByItem }), [revisionsByReview, closedAtByItem]);
+  // What the line filter offers: the review's own lines, named the way the session
+  // map names them. Empty until the review's lines have been read, which is also when
+  // the select hides itself — a filter with one entry in it is not a filter.
+  const lineOptions = useMemo<ReviewOption[]>(() => {
+    if (!selectedReviewId) return [];
+    return (linesByReview[selectedReviewId] ?? []).map(line => ({
+      id: line.id,
+      label: lineLabel(line) ?? 'Line',
+    }));
+  }, [selectedReviewId, linesByReview]);
+
+  // The map of the review being looked at, drawn above its cards. Read only while it
+  // is open AND a review is selected: with 'All design reviews' there is no one
+  // history to draw, and useSessionMap(null) makes no request at all.
+  const sessionMap = useSessionMap(mapOpen ? selectedReviewId : null);
+
+  const continuityData = useMemo(
+    () => ({ revisionsByReview, closedAtByItem, linesByReview }),
+    [revisionsByReview, closedAtByItem, linesByReview],
+  );
 
   if (loading) {
     return (
@@ -2010,13 +2157,17 @@ const TrackerPage: React.FC = () => {
           <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
             {/* Toolbar */}
             <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3 bg-white border-b border-gray-100 flex-wrap">
-              <FilterBar filters={filters} assignees={assignees} reviewOptions={reviewOptions}
-                onChange={f => {
+              <FilterBar filters={filters} assignees={assignees} reviewOptions={reviewOptions} lineOptions={lineOptions}
+                onChange={next => {
                   // Moving to another design review leaves the meeting that was
                   // open in the last one: fetchItems scopes the board to it, and a
                   // session the review filter hides would otherwise empty the view.
-                  if (f.review !== filters.review) { setSelectedSessionId(null); setSelectedItem(null); }
-                  setFilters(f);
+                  // It leaves the LINE too, which belongs to the review rather than
+                  // to the filters — an id from the last review would match nothing
+                  // in this one and silently empty the board.
+                  const moved = next.review !== filters.review;
+                  if (moved) { setSelectedSessionId(null); setSelectedItem(null); }
+                  setFilters(moved ? { ...next, line: 'All' } : next);
                 }}
                 onOpenPalette={() => setPaletteOpen(true)} sessions={visibleSessions} selectedSessionId={selectedSessionId} onSelectSession={id => { setSelectedSessionId(id); setSelectedItem(null); }} />
               <button
@@ -2060,6 +2211,39 @@ const TrackerPage: React.FC = () => {
                 selectedSessionId={selectedSessionId}
                 onSelectSession={id => { setSelectedSessionId(id); setSelectedItem(null); }}
               />
+            )}
+
+            {/* The same map the room's Sessions button opens: every meeting of this
+                review, its main line and its variants, above the cards they produced.
+                Folded away until asked for, so the board still gets the page. */}
+            {selectedReviewId && (
+              <div className="flex-shrink-0 bg-white border-b border-gray-100">
+                <button
+                  onClick={() => setMapOpen(v => !v)}
+                  className="w-full flex items-center gap-2 px-6 py-2 text-left hover:bg-gray-50 transition-colors"
+                  aria-expanded={mapOpen}
+                >
+                  <span className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">Session map</span>
+                  <span className="text-[11px] text-gray-500">
+                    {mapOpen ? `${sessionMap.sessions.length} sessions` : 'show every session of this design review'}
+                  </span>
+                  <span className="ml-auto font-mono text-[10px] text-gray-400">{mapOpen ? '▴' : '▾'}</span>
+                </button>
+                {mapOpen && (
+                  <div className="px-6 pb-4 h-[340px]">
+                    <React.Suspense fallback={null}>
+                      <SessionMap
+                        reviewTitle={reviews.find(r => r.id === selectedReviewId)?.title ?? null}
+                        lines={sessionMap.lines}
+                        sessions={sessionMap.sessions}
+                        revisions={sessionMap.revisions}
+                        cards={sessionMap.cards}
+                        emptyMessage={sessionMap.loading ? 'Reading this design review’s sessions…' : undefined}
+                      />
+                    </React.Suspense>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Content */}

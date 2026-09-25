@@ -22,6 +22,8 @@ import RemoteAudioSink from '../components/UI/RemoteAudioSink';
 import { useJoinState } from '../lib/usePartyPresence';
 import JoinWaitingRoom from '../components/UI/JoinWaitingRoom';
 import { recordJoin, joinRoleFor, type ReviewRole } from '../lib/reviewParticipantsRepo';
+import { lineIdFromSearch, partyRoomName, type ReviewLine } from '../lib/reviews/lines';
+import { resolveLine } from '../lib/reviews/linesRepo';
 
 function getMobileUserName(): string {
   try {
@@ -76,7 +78,49 @@ const RoomPage: React.FC = () => {
     }
   }, [roomId, arrivalLaunch]);
 
-  const presence = usePartyPresence(roomId);
+  // ─── Which line of the design review this room is on ────────────────────────
+  // docs/plan/15-sessions-and-variants.md batch BK. `/room/<reviewId>` is the MAIN
+  // line, so every link already in circulation opens the room it always did;
+  // `/room/<reviewId>?line=<lineId>` is one of its variants.
+  //
+  // The line decides the PartyKit room name, and that is why this resolves BEFORE
+  // the socket is opened rather than alongside it: a variant's meetings are held in
+  // `<reviewId>~<letter>`, with their own presence, their own audio and their own
+  // scene on the room server, and connecting to the review's own room first "for a
+  // moment" would put this person in the main line's meeting — visible to it,
+  // audible to it, and able to move its model — until the read landed. So while a
+  // `?line=` is unresolved the room is connected to nothing, which the join gate
+  // already renders as a waiting room.
+  //
+  // A room with no `?line=` does not wait: it is the main line whether or not the
+  // database has a row saying so, and `resolveLine` fills that row in behind it.
+  const lineParam = lineIdFromSearch(location.search);
+  const [lineState, setLineState] = useState<{ ready: boolean; line: ReviewLine | null }>(
+    () => ({ ready: lineParam === null, line: null }),
+  );
+  useEffect(() => {
+    if (!roomId) return;
+    // No database to ask, so there is no line to resolve — and an ad-hoc room has
+    // no review to have one. The socket opens on the room id, as it always did.
+    if (!supabaseConfigured) {
+      setLineState({ ready: true, line: null });
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const line = await resolveLine(roomId, lineParam);
+      if (cancelled) return;
+      // Into the store as well as into state: the meeting flush numbers the session
+      // on it, the Capture panel lists the cards it is carrying, and
+      // lib/scene/showCurationModel starts the scene from its last meeting.
+      useStore.getState().setActiveLine(line);
+      setLineState({ ready: true, line });
+    })();
+    return () => { cancelled = true; };
+  }, [roomId, lineParam]);
+
+  const lineReady = lineState.ready;
+  const presence = usePartyPresence(lineReady ? partyRoomName(roomId ?? '', lineState.line) : undefined);
   const joinState = useJoinState();
 
   // Seed the active review for this room:
@@ -91,7 +135,8 @@ const RoomPage: React.FC = () => {
   //      older review on screen and in front of everybody else in the room.
   // Then broadcast to other participants.
   //
-  // `roomId` is the ONLY dependency. usePartyPresence builds a fresh object every
+  // `roomId` is the ONLY reactive dependency (plus `arrivalLaunch`, and `lineReady`
+  // which flips once). usePartyPresence builds a fresh object every
   // render, so listing it re-ran the seed on every render of the room and put the
   // lobby's draft back over whatever the review had become since. That is how a
   // view saved from the amber strip was gone again a moment later, and how the
@@ -110,6 +155,12 @@ const RoomPage: React.FC = () => {
   const seededDraftRef = useRef<ReviewDraft | null>(null);
   useEffect(() => {
     if (!roomId) return;
+    // Not before the line is known. Seeding is what puts the review's scene up
+    // (lib/activeReviewStore → showReviewScene), and which scene that is depends on
+    // which line this room is on — seeding first would start a variant's meeting on
+    // the main line's model. A room with no `?line=` is ready on the first render,
+    // so nothing it does is delayed by this.
+    if (!lineReady) return;
     let cancelled = false;
     let stopRetrying: (() => void) | undefined;
 
@@ -192,7 +243,7 @@ const RoomPage: React.FC = () => {
     }
 
     return () => { cancelled = true; stopRetrying?.(); };
-  }, [roomId, arrivalLaunch]);
+  }, [roomId, arrivalLaunch, lineReady]);
 
   // Persist in-room edits to viewpoints / pins / agenda back to the cloud
   // (debounced). Only one screen writes through at a time — everybody else gets
@@ -292,6 +343,10 @@ const RoomPage: React.FC = () => {
       // lobby's demo, or from the next room this browser opens, must not be
       // recorded against the review that was open a moment ago.
       useStore.getState().setActiveReviewId(null);
+      // And not onto the line that review was on, either: the next room is on its
+      // own line, and a stale one would number its first session on the last
+      // review's.
+      useStore.getState().setActiveLine(null);
     };
   }, []);
 

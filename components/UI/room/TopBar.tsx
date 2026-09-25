@@ -9,7 +9,7 @@
 
 import React from 'react';
 import {
-  Crosshair, Users, Share2, Shield, ShieldOff, MonitorPlay, Pencil,
+  Crosshair, Users, Share2, Shield, ShieldOff, MonitorPlay, Pencil, Milestone,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../../store';
@@ -69,6 +69,15 @@ interface TopBarProps {
   canEditReview?: boolean;
   /** Ask the room for Edit. The answer arrives as state, not as a return value. */
   onEditReview?: () => void;
+  /**
+   * Open the map of this design review's sessions, or undefined when there is no
+   * review to have one — an ad-hoc room has meetings and no design review, and a
+   * button that opens an empty map is a question the room then has to answer.
+   *
+   * Not permission-gated, and deliberately so: seeing how a review got here is what
+   * lets somebody take part in it. Editing the review is the thing that needs a role.
+   */
+  onOpenSessions?: () => void;
 }
 
 const TopBar: React.FC<TopBarProps> = ({
@@ -81,6 +90,7 @@ const TopBar: React.FC<TopBarProps> = ({
   onOpenDeicticExplainer,
   canEditReview = false,
   onEditReview,
+  onOpenSessions,
 }) => {
   const isPrivacyMode = useStore((s) => s.isPrivacyMode);
   const togglePrivacyMode = useStore((s) => s.togglePrivacyMode);
@@ -108,6 +118,19 @@ const TopBar: React.FC<TopBarProps> = ({
           title="Edit the review"
           icon={<Pencil size={16} />}
           label="Edit"
+        />
+      )}
+
+      {/* The map of this design review's sessions: the main line, its variants, and
+          what each meeting was looking at. Everybody in the room may open it —
+          knowing how the review got here is what makes it possible to take part in
+          it, and unlike Edit it changes nothing. */}
+      {onOpenSessions && (
+        <RoomButton
+          onClick={onOpenSessions}
+          title="This design review's sessions"
+          icon={<Milestone size={16} />}
+          label="Sessions"
         />
       )}
 
