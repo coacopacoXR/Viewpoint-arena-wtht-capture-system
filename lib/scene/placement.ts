@@ -19,7 +19,10 @@
 
 import {
   IDENTITY_SCENE_TRANSFORM,
+  hasPartTransforms,
+  samePartTransforms,
   sceneModelTransform,
+  type PartTransforms,
   type RoomScene,
   type SceneModel,
   type SceneModelTransform,
@@ -164,6 +167,22 @@ export interface StoredPlacement {
   offset: [number, number, number];
   rotation: [number, number, number];
   scale: number;
+  /**
+   * Parts somebody moved on their own, batch BR — carried here for exactly the
+   * reason the three fields above are: room storage is the room's and a review
+   * outlives it, so a bracket whose flange was pulled out to show the clearance has
+   * to come back pulled out when the review is opened next month, and the lobby's
+   * "Turn in 3D" has to be turning the same thing the room was looking at.
+   *
+   * Keyed by node id, which is derived from the file's hash, so it means the same
+   * nodes here as it did in the room that wrote it — and it is per (line, revision)
+   * like everything else in this record, which is what makes "a new revision starts
+   * with no part overrides" fall out for free: Rev B is a different file with a
+   * different hash, so none of Rev A's ids can match a node of it.
+   *
+   * Absent, not `{}`, when nothing was moved — see withParts in roomScene.ts.
+   */
+  parts?: PartTransforms;
 }
 
 /** Whether a transform is the one a model nobody touched has. */
@@ -192,8 +211,18 @@ export function placementsFromScene(models: readonly SceneModel[]): StoredPlacem
   const stored: StoredPlacement[] = [];
   for (const model of models) {
     const transform = sceneModelTransform(model);
-    if (isIdentity(transform)) continue;
-    stored.push({ line: model.line, revision: model.revision, ...transform });
+    // A model whose parts were moved is worth remembering even standing at the
+    // origin: the identity check is about the model's OWN transform, and without
+    // this second condition a pulled-apart assembly that nobody had dragged would
+    // have been thrown away on the way to the review.
+    const movedParts = hasPartTransforms(model);
+    if (isIdentity(transform) && !movedParts) continue;
+    stored.push({
+      line: model.line,
+      revision: model.revision,
+      ...transform,
+      ...(movedParts ? { parts: model.parts } : {}),
+    });
   }
   return stored;
 }
@@ -233,19 +262,28 @@ export function applyStoredPlacements(
     // been turned has no rotation field at all, and restoring [0,0,0] onto it is
     // not a change worth a new scene object.
     const current = sceneModelTransform(model);
-    if (
+    const sameTransform =
       current.offset[0] === next.offset[0] &&
       current.offset[1] === next.offset[1] &&
       current.offset[2] === next.offset[2] &&
       current.rotation[0] === next.rotation[0] &&
       current.rotation[1] === next.rotation[1] &&
       current.rotation[2] === next.rotation[2] &&
-      current.scale === next.scale
-    ) {
-      return model;
-    }
+      current.scale === next.scale;
+    // Parts are compared too, and a placement with none does NOT clear the ones the
+    // scene already has: this is called on a scene built from the review's history
+    // or restored from room storage, and either could legitimately have arrived with
+    // its own overrides. Only what was stored is written.
+    const sameParts = samePartTransforms(model.parts, stored.parts);
+    if (sameTransform && sameParts) return model;
     changed = true;
-    return { ...model, offset: next.offset, rotation: next.rotation, scale: next.scale };
+    return {
+      ...model,
+      offset: next.offset,
+      rotation: next.rotation,
+      scale: next.scale,
+      ...(stored.parts ? { parts: stored.parts } : {}),
+    };
   });
 
   return changed ? { ...scene, models } : scene;
@@ -280,7 +318,12 @@ export function samePlacements(
       match.rotation[0] === placement.rotation[0] &&
       match.rotation[1] === placement.rotation[1] &&
       match.rotation[2] === placement.rotation[2] &&
-      match.scale === placement.scale
+      match.scale === placement.scale &&
+      // Moved parts are part of the placement, so a drag that only moved a part
+      // still counts as a change — which is what marks the review edited and gets
+      // it saved. Without this, "Reset part" after a reload would have been the
+      // only thing that ever wrote.
+      samePartTransforms(match.parts, placement.parts)
     );
   });
 }

@@ -1,5 +1,5 @@
 // The room's transform gizmo: Move / Rotate / Scale, applied to the SELECTED
-// scene model.
+// scene model — or, since batch BR, to one PART of it.
 //
 // docs/plan/14-rooms-models-admin-ai.md batch BH. The amber strip owns the three
 // buttons and writes `reviewGizmoMode`; this is the thing those buttons actually
@@ -8,25 +8,38 @@
 // arrangement (components/Scene/ReviewSetupCanvas.tsx) against a single loaded
 // model; this one works against the room's scene, where there can be eight.
 //
-// What it writes is the model's OWN transform — SceneModel.offset, .rotation and
-// .scale — sent as one `setTransform` operation, so the room server applies it to
-// its single copy and relays the result to everybody. That is the difference
-// between "I moved the model" and "the model moved": a drag here is a change to
-// the meeting, not to this browser.
+// What it writes depends on the strip's other switch, `reviewGizmoTarget`:
+//
+//   Whole model — the model's OWN transform, SceneModel.offset/.rotation/.scale,
+//     sent as one `setTransform`. Unchanged since batch BH.
+//   Part — one node's transform, in that node's own local space, sent as one
+//     `setPartTransform` keyed by the node id the Model Tree shows. The node is the
+//     one the laser or the tree has SELECTED; there is no second selection.
+//
+// Both go to the room server as one operation, so it applies the change to its single
+// copy and relays the result to everybody. That is the difference between "I moved
+// the model" and "the model moved": a drag here is a change to the meeting, not to
+// this browser.
 //
 // Batch BI added a second copy of the answer, written when the drag ENDS: the
-// review keeps every model's placement too, because the room server's storage is
-// the room's and a review is opened again long after that room is gone. See
-// keepPlacements below and lib/scene/placement.ts.
+// review keeps every model's placement — and, since BR, every moved part — because
+// the room server's storage is the room's and a review is opened again long after
+// that room is gone. See lib/scene/keepPlacements.ts.
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { TransformControls } from '@react-three/drei';
 import * as THREE from 'three';
-import { useStore } from '../../store';
+import { selectedNodeId, useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
-import { useActiveReviewStore } from '../../lib/activeReviewStore';
-import { placementsFromScene } from '../../lib/scene/placement';
-import { sceneModelTransform } from '../../lib/scene/roomScene';
+import { keepReviewPlacements } from '../../lib/scene/keepPlacements';
+import {
+  findPartNode,
+  partTargetFor,
+  partTransformFromObject,
+  rememberOriginalLocalTransform,
+  usablePartScale,
+} from '../../lib/scene/partTransforms';
+import { sceneModelTransform, type SceneUpdate } from '../../lib/scene/roomScene';
 
 /** How often a drag may put a message on the socket. See flush. */
 const SEND_INTERVAL_MS = 100;
@@ -47,11 +60,62 @@ const ReviewModelGizmo: React.FC<{
 }> = ({ controlsRef }) => {
   const mode = useStore((state) => state.reviewGizmoMode);
   const editing = useStore((state) => state.reviewEditing);
+  const gizmoTarget = useStore((state) => state.reviewGizmoTarget);
   const activeSceneModelId = useStore((state) => state.activeSceneModelId);
   const groups = useStore((state) => state.sceneModelGroups);
+  const models = useStore((state) => state.scene.models);
+  const entries = useStore((state) => state.sceneEntries);
+  const selection = useStore((state) => selectedNodeId(state.objectStates));
   const { localUserId, broadcastSceneUpdate, broadcastReviewConfig } = usePresence();
 
-  const object = activeSceneModelId ? groups[activeSceneModelId] : undefined;
+  /**
+   * What Part mode is pointing at, or null in Whole model mode.
+   *
+   * The same resolution the strip does, from the same selection, so the strip and
+   * the gizmo cannot disagree about what is about to move. A `nodeId` of null means
+   * the selection is a model's own root, which the batch brief says behaves like
+   * Whole model — so the wrapper group it falls through to below is the answer, not
+   * a special case.
+   */
+  const partTarget = useMemo(
+    () => (gizmoTarget === 'part'
+      ? partTargetFor(models, (modelId) => entries[modelId]?.sceneTree.id ?? null, selection)
+      : null),
+    [gizmoTarget, models, entries, selection],
+  );
+
+  // Which model the drag will be written against: the one the tree has active in
+  // Whole model mode, the one the selected part belongs to in Part mode. The two are
+  // not the same thing — pointing at a part in the 3D view selects it without
+  // changing which model the scale slider refers to.
+  const modelId = gizmoTarget === 'part' ? partTarget?.modelId ?? null : activeSceneModelId;
+  const wrapper = modelId ? groups[modelId] : undefined;
+
+  /**
+   * The node itself, found in the model's parsed group.
+   *
+   * A walk rather than a lookup because the parsed group is the only index of the
+   * objects there is; see findPartNode. Memoised on the wrapper and the target so a
+   * drag that changes nothing about either does not re-walk a 400-part assembly on
+   * every socket echo.
+   */
+  const partObject = useMemo(() => {
+    const nodeId = partTarget?.nodeId;
+    if (!wrapper || !nodeId) return null;
+    return findPartNode(wrapper, nodeId);
+  }, [wrapper, partTarget]);
+
+  /**
+   * The object the gizmo is attached to, or undefined for "there is nothing to move".
+   *
+   * A part id that resolves to no object — a model still downloading, a node id from
+   * a file that has since been replaced — gives NO gizmo rather than quietly falling
+   * back to the whole model. Moving a product when somebody meant to move one bolt
+   * of it is the kind of mistake that is expensive to notice.
+   */
+  let object: THREE.Object3D | undefined = wrapper;
+  if (partTarget && partTarget.nodeId !== null) object = partObject ?? undefined;
+
   // The gizmo is a tool of edit mode, and edit mode belongs to one person. A
   // participant who is watching somebody else edit sees the model move; they do
   // not get handles on it.
@@ -66,23 +130,54 @@ const ReviewModelGizmo: React.FC<{
   const lastSentAt = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const send = useCallback((group: THREE.Group) => {
-    if (!activeSceneModelId) return;
-    const model = useStore.getState().scene.models.find((m) => m.id === activeSceneModelId);
+  const send = useCallback(() => {
+    if (!modelId) return;
+    const nodeId = partTarget?.nodeId;
+
+    if (nodeId && partObject) {
+      // The file's own transform, remembered BEFORE anything else touches this node
+      // — which on a drag has already happened at pointer-down, so this is a read.
+      // An override REPLACES it rather than adding to it, so the value sent is the
+      // node's local transform as it now stands and applying it twice is a no-op.
+      const original = rememberOriginalLocalTransform(partObject);
+      const local = partTransformFromObject(partObject);
+      const update: SceneUpdate = {
+        op: 'setPartTransform',
+        id: modelId,
+        nodeId,
+        transform: {
+          position: local.position ?? original.position,
+          rotation: local.rotation ?? original.rotation,
+          // Non-uniform, unlike the model's own scale: a part is inside the model's
+          // bounding box, so nothing else in the scene has to read this back as one
+          // number. A drag through zero is clamped to the file's own value on that
+          // axis rather than sent, because the wire refuses a part scaled to nothing
+          // and a refused drag would leave this browser showing what the room is not.
+          scale: usablePartScale(local.scale ?? original.scale, original.scale),
+        },
+      };
+      lastSentAt.current = Date.now();
+      broadcastSceneUpdate(update);
+      useStore.getState().applyLocalSceneUpdate(update);
+      return;
+    }
+
+    if (!wrapper) return;
+    const model = useStore.getState().scene.models.find((m) => m.id === modelId);
     if (!model) return;
     const current = sceneModelTransform(model);
-    const update = {
-      op: 'setTransform' as const,
-      id: activeSceneModelId,
+    const update: SceneUpdate = {
+      op: 'setTransform',
+      id: modelId,
       transform: {
-        offset: [group.position.x, group.position.y, group.position.z] as [number, number, number],
-        rotation: [group.rotation.x, group.rotation.y, group.rotation.z] as [number, number, number],
+        offset: [wrapper.position.x, wrapper.position.y, wrapper.position.z],
+        rotation: [wrapper.rotation.x, wrapper.rotation.y, wrapper.rotation.z],
         // Uniform, as everywhere else in the app: drei's scale gizmo drags one
         // axis at a time, and a model scaled 2× on X and 1× on Y is not something
         // the rest of the scene — the bounding box, the label height, placement —
         // knows how to read. Averaging the three keeps a non-uniform drag from
         // being thrown away while still landing on one number.
-        scale: (group.scale.x + group.scale.y + group.scale.z) / 3 || current.scale,
+        scale: (wrapper.scale.x + wrapper.scale.y + wrapper.scale.z) / 3 || current.scale,
       },
     };
     lastSentAt.current = Date.now();
@@ -91,18 +186,18 @@ const ReviewModelGizmo: React.FC<{
     // step is a prediction the echo confirms; it is still needed outside a room.
     broadcastSceneUpdate(update);
     useStore.getState().applyLocalSceneUpdate(update);
-  }, [activeSceneModelId, broadcastSceneUpdate]);
+  }, [modelId, partObject, partTarget, wrapper, broadcastSceneUpdate]);
 
-  const flush = useCallback((group: THREE.Group) => {
+  const flush = useCallback(() => {
     const wait = SEND_INTERVAL_MS - (Date.now() - lastSentAt.current);
     if (wait <= 0) {
-      send(group);
+      send();
       return;
     }
     if (timer.current) return;
     timer.current = setTimeout(() => {
       timer.current = null;
-      send(group);
+      send();
     }, wait);
   }, [send]);
 
@@ -117,20 +212,19 @@ const ReviewModelGizmo: React.FC<{
    * `send` puts the transform in the scene, which the room server persists — and
    * room storage is the room's, so a review opened next month, from the lobby, on
    * an install whose server hibernated, gets its models back standing the way they
-   * arrived rather than the way they were left (batch BI).
+   * arrived rather than the way they were left (batch BI), and its parts back where
+   * their file had them rather than where the meeting left them (batch BR).
    *
    * Once per drag and not per frame: onObjectChange fires on every pointer move,
    * and each of these is a whole review broadcast to everybody in the room and a
    * row written a second later. By drag end `send` has already applied the final
    * transform locally, so the scene this reads is the scene the person is looking
    * at. Null back from the store means there was nothing to remember — no review
-   * open, or every model ended where it started — and then nothing is broadcast.
+   * open, or every model and every part ended where it started — and then nothing
+   * is broadcast.
    */
   const keepPlacements = useCallback(() => {
-    const next = useActiveReviewStore.getState().setScenePlacements(
-      placementsFromScene(useStore.getState().scene.models),
-    );
-    if (next) broadcastReviewConfig(next);
+    keepReviewPlacements(broadcastReviewConfig);
   }, [broadcastReviewConfig]);
 
   if (!mine || !mode || !object) return null;
@@ -144,6 +238,12 @@ const ReviewModelGizmo: React.FC<{
         // The camera must not orbit underneath a model that is being moved. The
         // curate canvas did the same to its own OrbitControls.
         if (controlsRef.current) controlsRef.current.enabled = false;
+        // Stamped here and not in an effect: TransformControls moves the object on
+        // the pointer-move that follows this event, and an "original" captured after
+        // that would be the dragged value — which is what "Reset part" restores, so
+        // getting the moment wrong would make Reset put the part where the drag
+        // happened to end.
+        if (partObject) rememberOriginalLocalTransform(partObject);
       }}
       onMouseUp={() => {
         if (controlsRef.current) controlsRef.current.enabled = true;
@@ -153,10 +253,10 @@ const ReviewModelGizmo: React.FC<{
           clearTimeout(timer.current);
           timer.current = null;
         }
-        send(object);
+        send();
         keepPlacements();
       }}
-      onObjectChange={() => flush(object)}
+      onObjectChange={() => flush()}
     />
   );
 };

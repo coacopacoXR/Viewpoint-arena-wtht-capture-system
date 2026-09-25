@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, ReviewGizmoMode, BoardroomLayout, LiveChatMessage, ViewCapture } from './types';
+import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, ChatMessage, InsightCard, AgentBehaviorState, SceneNode, ObjectState, Requirement, KBEntry, InsightType, SpatialComment, CommentMode, ModelType, RightPanelMode, ReviewGizmoMode, ReviewGizmoTarget, BoardroomLayout, LiveChatMessage, ViewCapture } from './types';
 import { Vector3, type Group } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
 import { writeMeetingMinutes } from './lib/capture/meetingMinutes';
@@ -283,6 +283,37 @@ export function sceneModelVisible(
 /** The width of one model in scene units, which is what placement needs. */
 export function sceneEntryWidth(entry: SceneModelEntry): number {
     return entry.size.x * entry.baseScale * entry.scale;
+}
+
+/**
+ * The node the Model Tree or the laser has selected, or null.
+ *
+ * One selection, and it is the one that already existed: `selectNode` writes
+ * `objectStates[id].selected` from a row click in the tree and from a hit in the 3D
+ * view alike, and batch BR's Part mode reads it rather than adding a second
+ * selection of its own that a person would have to keep in step with the first.
+ *
+ * Takes the record rather than the whole state so it can BE the selector —
+ * `useStore(s => selectedNodeId(s.objectStates))` answers a string, and a string is
+ * something zustand can compare, which an object literal built inside a selector is
+ * not.
+ */
+export function selectedNodeId(objectStates: Record<string, ObjectState>): string | null {
+    for (const id of Object.keys(objectStates)) {
+        if (objectStates[id]?.selected) return id;
+    }
+    return null;
+}
+
+/** The node with this id in a scene tree, or null when the tree does not hold it. */
+export function findSceneNode(tree: SceneNode | null, id: string | null): SceneNode | null {
+    if (!tree || !id) return null;
+    if (tree.id === id) return tree;
+    for (const child of tree.children ?? []) {
+        const found = findSceneNode(child, id);
+        if (found) return found;
+    }
+    return null;
 }
 
 /**
@@ -772,6 +803,20 @@ interface AppState {
    */
   reviewGizmoMode: ReviewGizmoMode;
   setReviewGizmoMode: (mode: ReviewGizmoMode) => void;
+  /**
+   * Whether those tools move the whole selected model or one PART of it — batch BR.
+   *
+   * In the store beside the mode for the same reason the mode is: the thing being
+   * moved is drei's TransformControls inside the R3F canvas and the switch is a
+   * button in the amber strip, which is an overlay in a different React tree.
+   *
+   * Which part is NOT stored here. The selection the laser and the Model Tree
+   * already set — objectStates[id].selected — is the only selection there is, and a
+   * second one for the gizmo would have been a third thing a person had to keep in
+   * step. lib/scene/partTransforms.partTargetFor resolves it.
+   */
+  reviewGizmoTarget: ReviewGizmoTarget;
+  setReviewGizmoTarget: (target: ReviewGizmoTarget) => void;
 
   // --- NEW: Comments Display Actions ---
   toggleCommentsExpandedInScene: () => void;
@@ -949,6 +994,7 @@ export const useStore = create<AppState>((set, get) => ({
   reviewEditNotice: null,
   reviewEditRefusal: null,
   reviewGizmoMode: null,
+  reviewGizmoTarget: 'model',
 
   // --- NEW: Comments Display State ---
   commentsExpandedInScene: false,
@@ -1289,14 +1335,15 @@ export const useStore = create<AppState>((set, get) => ({
     // differently, and leaving the prompt up beside the working tools would be
     // two contradictory things on one screen.
     editing === null
-      ? (state.reviewGizmoMode !== null || state.reviewEditRefusal !== null
-          ? { reviewEditing: null, reviewGizmoMode: null, reviewEditRefusal: null }
+      ? (state.reviewGizmoMode !== null || state.reviewEditRefusal !== null || state.reviewGizmoTarget !== 'model'
+          ? { reviewEditing: null, reviewGizmoMode: null, reviewGizmoTarget: 'model', reviewEditRefusal: null }
           : { reviewEditing: null })
       : { reviewEditing: editing, reviewEditRefusal: null }
   )),
   setReviewEditNotice: (message) => set({ reviewEditNotice: message }),
   setReviewEditRefusal: (refusal) => set({ reviewEditRefusal: refusal }),
   setReviewGizmoMode: (mode) => set({ reviewGizmoMode: mode }),
+  setReviewGizmoTarget: (target) => set({ reviewGizmoTarget: target }),
 
   // --- NEW: Comments Display Actions ---
   toggleCommentsExpandedInScene: () => set((state) => ({

@@ -392,6 +392,19 @@ export type RightPanelMode = 'meeting' | 'comments' | 'chat';
 export type ReviewGizmoMode = 'translate' | 'rotate' | 'scale' | null;
 
 /**
+ * What the amber strip's three tools are attached to: the whole selected model, or
+ * the one part of it that is selected. Batch BR
+ * (docs/plan/14-rooms-models-admin-ai.md).
+ *
+ * The three MODES do not change — Move is Move either way — which is the point of a
+ * second switch beside them rather than three more buttons: a person who has found
+ * the tool they want should not have to find it again to use it on something else.
+ *
+ * 'model' is the default and the one every screen written before this batch means.
+ */
+export type ReviewGizmoTarget = 'model' | 'part';
+
+/**
  * Where the room's camera is, as a review viewpoint needs it.
  *
  * The three fields ReviewViewpoint carries about a place in the model, without the

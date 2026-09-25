@@ -66,6 +66,7 @@ import { curationSceneModel } from '../../lib/scene/curationScene';
 import { FRAME_FOV, applyFrame, frameBox } from '../../lib/scene/frameBox';
 import { reviewModelBounds } from '../../lib/scene/modelBounds';
 import { applyStoredPlacements } from '../../lib/scene/placement';
+import { applyPartTransforms } from '../../lib/scene/partTransforms';
 import {
   sceneModelLabel,
   sceneModelTransform,
@@ -499,6 +500,17 @@ const ReviewModelViewer: React.FC<ReviewModelViewerProps> = ({ reviewId, classNa
         // disposed. Doing it before React has seen the object is also what makes
         // `measure` below exact — see LoadedModel.box.
         placeImportedGroup(entry.group, entry.scale * entry.baseScale, entry.basePosition);
+        // The parts somebody pulled apart in the room's Edit mode, batch BR. Applied
+        // here as well as in SceneModelView because this viewer draws the review's own
+        // scene — `reviewSceneFor` above has already put the review's stored placements
+        // over it, and `parts` rides inside those — and a preview that showed the
+        // assembly closed when the meeting had left it open would be a different
+        // product from the one the review is about.
+        //
+        // Before `measure`, so the frame is composed around the model as it actually
+        // stands: a part dragged out to show a clearance is exactly the part that would
+        // otherwise be cut off by a box measured on the file's own geometry.
+        applyPartTransforms(entry.group, model.parts);
         return { model, entry, box: measure(model, entry) };
       } catch (error) {
         console.error(`[lobby] could not load ${model.fileName} (${model.hash}):`, error);

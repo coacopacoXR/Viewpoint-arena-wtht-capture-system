@@ -4,6 +4,7 @@ import { Html } from '@react-three/drei';
 import { useStore, sceneModelVisible, type SceneModelEntry } from '../../store';
 import type { SceneModel } from '../../lib/scene/roomScene';
 import { sceneModelTransform } from '../../lib/scene/roomScene';
+import { applyPartTransforms } from '../../lib/scene/partTransforms';
 
 /**
  * Scale the imported model and put it centred on the origin, resting on the
@@ -63,6 +64,25 @@ const SceneModelView: React.FC<{ model: SceneModel; entry: SceneModelEntry; labe
         placeImportedGroup(groupRef.current, entry.scale * entry.baseScale, entry.basePosition);
     }, [entry]);
 
+    /**
+     * The parts of this model somebody moved on their own — batch BR.
+     *
+     * Declared AFTER the placement above and BEFORE the point-of-interest walk below,
+     * and the order is the whole of the contract: placement scales and centres the
+     * group and computes where the floor is from the geometry as the FILE has it, so
+     * a moved part must not change that (pulling one flange out would otherwise slide
+     * the whole product sideways); and the POIs are world-space centres the agents and
+     * the laser aim at, so they have to be measured after the parts have moved or the
+     * laser would point at where a part used to be.
+     *
+     * `model.parts` is a fresh object only when the reducer actually changed it, which
+     * is what makes this effect cheap: a SCENE_STATE relayed for something else leaves
+     * the reference alone and this does not run.
+     */
+    useEffect(() => {
+        applyPartTransforms(entry.group, model.parts);
+    }, [entry, model.parts]);
+
     useEffect(() => {
         if (!groupRef.current) return;
         registeredIds.current.clear();
@@ -82,7 +102,7 @@ const SceneModelView: React.FC<{ model: SceneModel; entry: SceneModelEntry; labe
                 registeredIds.current.add(id);
             }
         });
-    }, [registerPOI, entry]);
+    }, [registerPOI, entry, model.parts]);
 
     useEffect(() => {
         if (!groupRef.current) return;

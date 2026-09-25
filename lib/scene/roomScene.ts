@@ -22,6 +22,50 @@ import { can, type Role } from '../reviews/roles';
 export type BuiltInModel = 'synth' | 'headphones' | 'bicycle';
 
 /**
+ * One PART of one model, moved / turned / resized away from where its file had it.
+ *
+ * Every field is optional and in the node's LOCAL (parent) space, and each one is
+ * an OVERRIDE of the transform the file gave the node rather than a delta on top of
+ * it — so applying the same override twice is a no-op, and "Reset part" is a delete
+ * of the entry rather than an arithmetic inverse. Batch BR
+ * (docs/plan/14-rooms-models-admin-ai.md).
+ *
+ * Scale is three numbers and non-uniform on purpose, unlike the model's own single
+ * `scale`: a whole model has to stay readable by the bounding box, the label height
+ * and placement, which all assume one number, while a part is inside that box and
+ * stretching one flange is exactly the thing an assembly review wants to do.
+ */
+export interface PartTransform {
+  position?: [number, number, number];
+  /** Euler radians in XYZ, the order three.js reads an object's rotation in. */
+  rotation?: [number, number, number];
+  scale?: [number, number, number];
+}
+
+/**
+ * Every moved part of one model, keyed by NODE ID — the id `buildSceneTree` writes
+ * into `userData.modelId`, which is the id the Model Tree shows, the id a card's
+ * `componentReference` carries and the id the pointing timeline resolves. Keying on
+ * that rather than on a name or an index is what makes a moved part still be the part
+ * everything else in the app already refers to.
+ */
+export type PartTransforms = Record<string, PartTransform>;
+
+/**
+ * How many part overrides one model may carry.
+ *
+ * The scene is persisted whole and replayed to every connection that joins, so this
+ * is the same kind of ceiling as MAX_SCENE_MODELS: nothing here grows on its own, but
+ * a client could otherwise grow it without bound. 500 is far past the number of parts
+ * anybody moves by hand in a design review and far below the node count of a big CAD
+ * assembly, which is the case the cap exists to stop.
+ */
+export const MAX_SCENE_PARTS = 500;
+
+/** A node id longer than this is not one this app minted. See MAX_SCENE_PARTS. */
+export const MAX_PART_NODE_ID = 200;
+
+/**
  * One model in the room's scene.
  *
  * `hash` is BA's content address: the bytes live in model storage and every
@@ -60,6 +104,17 @@ export interface SceneModel {
   rotation?: [number, number, number];
   /** Uniform, multiplying the entry's own baseScale and the user's slider. */
   scale?: number;
+  /**
+   * Parts of THIS model somebody moved on their own, keyed by node id — batch BR.
+   *
+   * Optional and absent on every model written before this batch, on every new
+   * revision (a different file, whose nodes are not the same nodes), and on every
+   * model added beside another. Absent means "stand exactly as the file says", which
+   * is what an older build's scene and an older client's payload both have to keep
+   * meaning: a reader that has never heard of parts renders the model unchanged, and
+   * a writer that has never heard of them sends an update that leaves them alone.
+   */
+  parts?: PartTransforms;
 }
 
 /** Where one model sits in the room, and how it is turned and sized. */
@@ -93,6 +148,68 @@ export function sceneModelTransform(model: SceneModel): SceneModelTransform {
     rotation: model.rotation ?? IDENTITY_SCENE_TRANSFORM.rotation,
     scale,
   };
+}
+
+/**
+ * Whether two part overrides say the same thing.
+ *
+ * Field by field, with an absent field and a present one meaning different things
+ * only when the numbers differ: `{ position: [0,0,0] }` and `{}` both leave a node
+ * where its file had it IF the file had it at the origin, and the reducer cannot
+ * know that — so it compares what is written, not what it would do. That is the same
+ * choice applySceneUpdate's setTransform makes about a model's own rotation.
+ */
+export function samePartTransform(a: PartTransform, b: PartTransform): boolean {
+  const fields: Array<'position' | 'rotation' | 'scale'> = ['position', 'rotation', 'scale'];
+  for (const field of fields) {
+    const left = a[field];
+    const right = b[field];
+    if (left === undefined || right === undefined) {
+      if (left !== right) return false;
+      continue;
+    }
+    if (left[0] !== right[0] || left[1] !== right[1] || left[2] !== right[2]) return false;
+  }
+  return true;
+}
+
+/** Whether two models' part overrides are the same set of the same changes. */
+export function samePartTransforms(
+  a: PartTransforms | undefined | null,
+  b: PartTransforms | undefined | null,
+): boolean {
+  const left = a ?? {};
+  const right = b ?? {};
+  const leftIds = Object.keys(left);
+  const rightIds = Object.keys(right);
+  if (leftIds.length !== rightIds.length) return false;
+  return leftIds.every((id) => right[id] !== undefined && samePartTransform(left[id], right[id]));
+}
+
+/** Whether a model has any part overrides at all. */
+export function hasPartTransforms(model: Pick<SceneModel, 'parts'>): boolean {
+  return model.parts !== undefined && Object.keys(model.parts).length > 0;
+}
+
+/**
+ * Which model a node id belongs to, or null when it belongs to none of them.
+ *
+ * By the id's PREFIX rather than by walking the parsed trees, because the prefix is
+ * derived from the file's hash (see sceneModelPrefix) and so is available before the
+ * file has been fetched, on the room server, and in every test. A node id that
+ * matches no model's prefix is a built-in's — the synth's and the headphones' parts
+ * are React components with no SceneModel behind them, and batch BR moves parts of
+ * imported models only.
+ */
+export function sceneModelForNode(
+  models: readonly SceneModel[],
+  nodeId: string,
+): SceneModel | null {
+  for (const model of models) {
+    if (model.hash === '') continue;
+    if (nodeId.startsWith(`${sceneModelPrefix(model.hash)}_`)) return model;
+  }
+  return null;
 }
 
 /**
@@ -165,6 +282,25 @@ export type SceneUpdate =
    * turn and size.
    */
   | { op: 'setTransform'; id: string; transform: SceneModelTransform }
+  /**
+   * One PART of one model, moved — batch BR.
+   *
+   * The gizmo produces all three fields on every drag frame, so this carries all
+   * three for the same reason `setTransform` does. `null` is the operation "Reset
+   * part": it deletes the override, which puts the node back where its file had it,
+   * because an override REPLACES the file's transform rather than adding to it.
+   *
+   * Deliberately not one op per axis and not a delta: a delta would have to be
+   * applied in order by every client, and a client that joined late or missed one
+   * message would end up with a part in a place nobody put it.
+   */
+  | { op: 'setPartTransform'; id: string; nodeId: string; transform: PartTransform | null }
+  /**
+   * Every part of one model back where its file had it — the strip's "Reset all
+   * parts". One operation rather than N `setPartTransform`s so the room relays one
+   * SCENE_STATE for it, not five hundred.
+   */
+  | { op: 'clearPartTransforms'; id: string }
   | { op: 'setBuiltIn'; builtIn: BuiltInModel | null };
 
 /**
@@ -496,6 +632,30 @@ function sameTriple(
 }
 
 /**
+ * One model's part overrides, replaced — with an EMPTY set written as an absent
+ * field rather than as `{}`.
+ *
+ * "Absent means the file's own transform" is the single rule SceneModel's optionals
+ * follow, and a stored `{}` would be a second way of saying the same thing: it would
+ * survive into room storage, into the review's placements and onto the wire, and every
+ * comparison that asks "has anybody moved a part here" would have to remember to look
+ * inside it. Deleting the key keeps that question a `!== undefined`.
+ */
+function withParts(scene: RoomScene, id: string, parts: PartTransforms): RoomScene {
+  const empty = Object.keys(parts).length === 0;
+  return {
+    ...scene,
+    models: scene.models.map((model) => {
+      if (model.id !== id) return model;
+      const next: SceneModel = { ...model };
+      if (empty) delete next.parts;
+      else next.parts = parts;
+      return next;
+    }),
+  };
+}
+
+/**
  * Apply one operation to a scene.
  *
  * Returns the SAME object when the operation changes nothing — an unknown id, a
@@ -576,6 +736,33 @@ export function applySceneUpdate(scene: RoomScene, update: SceneUpdate): RoomSce
             : model,
         ),
       };
+    }
+    case 'setPartTransform': {
+      const target = scene.models.find((model) => model.id === update.id);
+      if (!target) return scene;
+      const current = target.parts;
+      const existing = current?.[update.nodeId];
+      if (update.transform === null) {
+        // "Reset part". Already where its file had it — nothing to relay, and
+        // relaying would redraw every participant's model tree for no change.
+        if (!existing) return scene;
+        const parts: PartTransforms = { ...current };
+        delete parts[update.nodeId];
+        return withParts(scene, update.id, parts);
+      }
+      if (existing && samePartTransform(existing, update.transform)) return scene;
+      // Capped here as well as on the wire, so the two callers of this reducer
+      // cannot disagree about what a scene may hold: a browser that applied a 501st
+      // override locally would be showing a part the room server refused, and would
+      // go on showing it until something else happened to change the scene.
+      const count = current ? Object.keys(current).length : 0;
+      if (!existing && count >= MAX_SCENE_PARTS) return scene;
+      return withParts(scene, update.id, { ...(current ?? {}), [update.nodeId]: update.transform });
+    }
+    case 'clearPartTransforms': {
+      const target = scene.models.find((model) => model.id === update.id);
+      if (!target || !hasPartTransforms(target)) return scene;
+      return withParts(scene, update.id, {});
     }
     default:
       return scene;

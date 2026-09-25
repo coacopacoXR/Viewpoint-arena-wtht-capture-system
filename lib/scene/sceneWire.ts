@@ -15,9 +15,13 @@
 import {
   FIRST_REVISION,
   lineFromFileName,
+  MAX_PART_NODE_ID,
+  MAX_SCENE_PARTS,
   sceneModelId,
   type BuiltInModel,
   type ModelEditors,
+  type PartTransform,
+  type PartTransforms,
   type RoomScene,
   type SceneModel,
   type SceneStatePayload,
@@ -52,6 +56,90 @@ function asBuiltIn(value: unknown): BuiltInModel | null {
   return typeof value === 'string' && (BUILT_IN_MODELS as string[]).includes(value)
     ? (value as BuiltInModel)
     : null;
+}
+
+/**
+ * A part's scale, or nothing.
+ *
+ * Every component has to be a positive finite number, which is `asOffset`'s rule
+ * plus the model-scale rule the setTransform case below already applies: zero would
+ * flatten the part for everybody in the room and a negative one would turn it inside
+ * out, and neither is a resize anybody meant. Non-uniform IS allowed — that is the
+ * difference between a part and a model, and the reason this is not `asOffset`.
+ */
+function asPartScale(value: unknown): [number, number, number] | null {
+  const triple = asOffset(value);
+  if (!triple) return null;
+  return triple[0] > 0 && triple[1] > 0 && triple[2] > 0 ? triple : null;
+}
+
+/**
+ * One part's override, rebuilt. Null for anything this server could not read.
+ *
+ * An override with NONE of the three fields is refused rather than kept as `{}`: it
+ * would be a record that changes nothing, persisted and replayed for ever, and the
+ * only client that sends one is a client that is broken.
+ */
+export function asPartTransform(value: unknown): PartTransform | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const next: PartTransform = {};
+  let fields = 0;
+  if (record.position !== undefined) {
+    const position = asOffset(record.position);
+    if (!position) return null;
+    next.position = position;
+    fields += 1;
+  }
+  if (record.rotation !== undefined) {
+    const rotation = asOffset(record.rotation);
+    if (!rotation) return null;
+    next.rotation = rotation;
+    fields += 1;
+  }
+  if (record.scale !== undefined) {
+    const scale = asPartScale(record.scale);
+    if (!scale) return null;
+    next.scale = scale;
+    fields += 1;
+  }
+  return fields === 0 ? null : next;
+}
+
+/**
+ * A model's part overrides, rebuilt — capped, and refusing the whole record rather
+ * than one entry of it.
+ *
+ * Three answers, and the third is why this is not `… | null`:
+ *   `undefined` — the record has no parts, which is every record written before batch
+ *     BR and every model nobody has moved a part of since;
+ *   `null` — the record has something this server cannot read;
+ *   a `PartTransforms` — the overrides, rebuilt field by field.
+ *
+ * Refusing the whole set rather than dropping the bad entry is the opposite of what
+ * asRoomScene does to a bad MODEL, and deliberately so: one unreadable model costs the
+ * room a model it can get back, while a part entry quietly dropped would leave the
+ * person who moved it looking at a part that is where they put it and everybody else
+ * looking at one that is not.
+ */
+export function asPartTransforms(
+  value: unknown,
+  maxEntries: number = MAX_SCENE_PARTS,
+): PartTransforms | null | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const ids = Object.keys(record);
+  if (ids.length > maxEntries) return null;
+  const parts: PartTransforms = {};
+  for (const id of ids) {
+    if (id === '' || id.length > MAX_PART_NODE_ID) return null;
+    const transform = asPartTransform(record[id]);
+    if (!transform) return null;
+    parts[id] = transform;
+  }
+  // An empty record means what an absent one means, so it reads as one.
+  return ids.length === 0 ? undefined : parts;
 }
 
 /**
@@ -94,6 +182,15 @@ export function asSceneModel(value: unknown): SceneModel | null {
   const scale = typeof rawScale === 'number' && Number.isFinite(rawScale) && rawScale > 0
     ? rawScale
     : null;
+  // Part overrides, batch BR. Read with the SAME asymmetry as the rotation and scale
+  // above rather than with asSceneUpdate's: unreadable parts are left out and the
+  // model is kept, because this is the function that restores a scene from the
+  // server's own storage as well as the one that reads a relay, and dropping a model
+  // over one bad part entry would take a product off everybody's screen in the middle
+  // of a review. An operation that ASKS for a change is refused outright instead —
+  // see the setPartTransform case below — because there the sender is still there to
+  // be told.
+  const parts = asPartTransforms(record.parts);
 
   return {
     id,
@@ -105,6 +202,7 @@ export function asSceneModel(value: unknown): SceneModel | null {
     offset,
     ...(rotation ? { rotation } : {}),
     ...(scale === null ? {} : { scale }),
+    ...(parts ? { parts } : {}),
   };
 }
 
@@ -203,6 +301,27 @@ export function asSceneUpdate(value: unknown): SceneUpdate | null {
       const scale = fields.scale;
       if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0) return null;
       return { op: 'setTransform', id: record.id, transform: { offset, rotation, scale } };
+    }
+    case 'setPartTransform': {
+      if (typeof record.id !== 'string' || record.id === '') return null;
+      // The node id is a key this server stores and replays, so it is capped the way
+      // asModelEditors caps its list of names: without a length here a client could
+      // write arbitrarily large keys into room storage one update at a time.
+      const nodeId = record.nodeId;
+      if (typeof nodeId !== 'string' || nodeId === '' || nodeId.length > MAX_PART_NODE_ID) return null;
+      // `null` is "Reset part" and is a perfectly good transform — see the op's own
+      // comment in lib/scene/roomScene.ts. Everything else is rebuilt field by field
+      // and refused whole, so a caller cannot have one bad axis of a move applied and
+      // the other two dropped.
+      if (record.transform === null) {
+        return { op: 'setPartTransform', id: record.id, nodeId, transform: null };
+      }
+      const transform = asPartTransform(record.transform);
+      return transform ? { op: 'setPartTransform', id: record.id, nodeId, transform } : null;
+    }
+    case 'clearPartTransforms': {
+      if (typeof record.id !== 'string' || record.id === '') return null;
+      return { op: 'clearPartTransforms', id: record.id };
     }
     case 'setBuiltIn': {
       if (record.builtIn === null) return { op: 'setBuiltIn', builtIn: null };
