@@ -51,6 +51,26 @@ const Z_UP_TO_Y_UP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1
 
 const baseNameOf = (file: File): string => file.name.replace(/\.[^/.]+$/, '');
 
+/**
+ * The material a model gets when its file did not bring one.
+ *
+ * STL and PLY carry nothing but triangles, an OBJ carries an MTL this loader does not
+ * read, and a CAD kernel hands back faces with a colour and no shading model at all.
+ * What they must not get is three's default: a mesh built with no material is a white,
+ * unlit `MeshBasicMaterial`, which reads as a placeholder and leaves the person who
+ * uploaded the file no way to tell whether their file is wrong or the viewer is.
+ *
+ * Light grey, rough and barely metallic — the neutral clay a product is shown in when
+ * nobody has decided what it is made of. One factory so an STL, a PLY and a materialless
+ * mesh inside a FBX all answer the same way, and so a change to it changes all three.
+ */
+const neutralModelMaterial = (): THREE.MeshStandardMaterial => new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0.7, 0.7, 0.75),
+    metalness: 0.1,
+    roughness: 0.6,
+    side: THREE.DoubleSide
+});
+
 const convertToStandardMaterial = (material: THREE.Material): THREE.MeshStandardMaterial => {
     // If already a MeshStandardMaterial or MeshPhysicalMaterial, just ensure proper settings
     if (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshPhysicalMaterial) {
@@ -92,12 +112,7 @@ const convertToStandardMaterial = (material: THREE.Material): THREE.MeshStandard
 
 const ensureMeshMaterial = (mesh: THREE.Mesh) => {
     if (!mesh.material) {
-        mesh.material = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(0.7, 0.7, 0.75),
-            metalness: 0.2,
-            roughness: 0.6,
-            side: THREE.DoubleSide
-        });
+        mesh.material = neutralModelMaterial();
         return;
     }
 
@@ -184,12 +199,47 @@ export const buildSceneTree = (
     return node;
 };
 
+/**
+ * Tag a material's COLOUR textures as sRGB.
+ *
+ * A texture is either colour or data, and the renderer has to be told which: colour is
+ * stored gamma-encoded and must be decoded before it is lit, data (a normal map, a
+ * roughness map) is a number and must be sampled raw. GLTFLoader tags its own — that is
+ * why an imported GLB looks right — and none of the other readers here does, so an FBX
+ * with a diffuse texture, a 3MF, a Collada, a TDS or a VRML file comes in with its colour
+ * map treated as data. The result is a model that looks washed out and slightly grey,
+ * which is exactly the "not great at keeping the textures" this batch was raised for and
+ * exactly the kind of wrong that reads as "the file is bad".
+ *
+ * Only `map` and `emissiveMap`, and only downwards: a texture already tagged sRGB is
+ * left alone, and the data maps are not touched at all — tagging a normal map sRGB would
+ * be a worse bug than the one this fixes.
+ */
+const ensureSrgbColorTextures = (material: THREE.Material | THREE.Material[]) => {
+    for (const one of Array.isArray(material) ? material : [material]) {
+        // MeshPhysicalMaterial extends MeshStandardMaterial, so this covers both, and
+        // it is the right gate: ensureMeshMaterial has already converted every unlit
+        // material that was going to be converted, and anything left is either one of
+        // these or something with no colour map to tag.
+        if (!(one instanceof THREE.MeshStandardMaterial)) continue;
+        for (const texture of [one.map, one.emissiveMap]) {
+            if (!texture || texture.colorSpace === THREE.SRGBColorSpace) continue;
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.needsUpdate = true;
+        }
+    }
+};
+
 const applySceneDefaults = (root: THREE.Object3D) => {
     root.traverse(child => {
         if (child instanceof THREE.Mesh) {
             child.castShadow = true;
             child.receiveShadow = true;
             ensureMeshMaterial(child);
+            // After the conversion, so a material that was a Phong with a diffuse map is
+            // tagged on the MeshStandardMaterial it became — convertToStandardMaterial
+            // copies the texture by reference, and the reference is what carries the tag.
+            ensureSrgbColorTextures(child.material);
             if (child.geometry && !child.geometry.attributes.normal) {
                 child.geometry.computeVertexNormals();
             }
@@ -243,13 +293,7 @@ const loadFBX = async (file: File): Promise<THREE.Object3D> => {
 
 /** Geometry-only formats (STL, PLY) carry no material: give them the neutral grey. */
 const meshFromGeometry = (geometry: THREE.BufferGeometry, name: string): THREE.Mesh => {
-    const material = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(0.7, 0.7, 0.75),
-        metalness: 0.2,
-        roughness: 0.6,
-        side: THREE.DoubleSide
-    });
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = new THREE.Mesh(geometry, neutralModelMaterial());
     mesh.name = name;
     return mesh;
 };
