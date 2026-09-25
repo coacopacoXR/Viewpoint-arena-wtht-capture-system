@@ -323,8 +323,12 @@ const LobbyPage: React.FC = () => {
   };
 
   return (
+    // Its own scroll container: index.html fixes the body and hides its overflow
+    // for the 3D room, so a page that is taller than the window must scroll
+    // itself (user, 2026-09-25: "in the lobby it is not possible to scroll down").
     <div
-      className="min-h-screen bg-[#f3f4f6] font-sans text-gray-900"
+      className="h-full overflow-y-auto bg-[#f3f4f6] font-sans text-gray-900"
+      data-testid="lobby-scroll"
       style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
     >
       <div className="max-w-[1180px] mx-auto px-4 pb-12">
