@@ -28,3 +28,4 @@ f8404a6612e9efcbf1b4f7eb7a594d68ac58ed4f:api/_lib/__tests__/serviceRole.test.ts:
 f8404a6612e9efcbf1b4f7eb7a594d68ac58ed4f:api/admin/__tests__/claim.test.ts:generic-api-key:11
 f8404a6612e9efcbf1b4f7eb7a594d68ac58ed4f:api/admin/__tests__/users.test.ts:generic-api-key:12
 227690829d919f83c572237687b6def8de9c3b84:api/reviews/__tests__/lines.test.ts:generic-api-key:26
+99366d7e8b5a90dfd64b6b30becf1babc6929ed1:api/reviews/__tests__/delete.test.ts:generic-api-key:25
