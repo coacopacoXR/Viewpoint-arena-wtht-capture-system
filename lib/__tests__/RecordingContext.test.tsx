@@ -32,7 +32,7 @@ vi.mock('../WebRTCContext', () => ({
 }));
 
 vi.mock('../PresenceContext', () => ({
-  usePresence: () => ({ localUserId: 'host-1' }),
+  usePresence: () => ({ localUserId: 'host-1', remoteParticipantList: [] }),
 }));
 
 vi.mock('../config/ConfigContext', () => ({
@@ -45,6 +45,7 @@ vi.mock('../usePartyPresence', () => ({
     return () => {};
   },
   broadcastRecordingState: vi.fn(),
+  broadcastTranscriptKeep: vi.fn(),
 }));
 
 vi.mock('../../store', () => ({

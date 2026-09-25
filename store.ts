@@ -3,6 +3,13 @@ import { ViewMode, RepresentationMode, PointOfInterest, AgentState, AgentStyle, 
 import { Vector3, type Group } from 'three';
 import { flushSessionToTracker } from './lib/trackerBridge';
 import { writeMeetingMinutes } from './lib/capture/meetingMinutes';
+import { buildTranscript } from './lib/capture/transcript';
+import { isCapturePaused } from './lib/capture/captureGate';
+// Both import nothing of their own, which is why endMeeting can read them: they are
+// the two facts a meeting's record needs that live outside the store — when the
+// recording ran, and whether its transcript is to be kept. See each module's header.
+import { getRecordingState } from './lib/recordingState';
+import { getTranscriptKeep } from './lib/transcriptKeep';
 import { flattenSceneTree, type FlatComponent } from './lib/componentIndex';
 import { useReviewSetupStore } from './lib/reviewSetupStore';
 // Read inside endMeeting only, and lib/activeReviewStore reads this store inside
@@ -1027,6 +1034,32 @@ export const useStore = create<AppState>((set, get) => ({
       const reviewTitle = useActiveReviewStore.getState().config?.title
         ?? useReviewSetupStore.getState().draft?.title
         ?? null;
+      // The transcript, when the meeting asked for one to be kept.
+      //
+      // Built HERE rather than by the browser that stopped the recording, because
+      // this is the browser that writes the meeting's row and one meeting is
+      // recorded once (see meetingEndedRemotely). That is usually a different person
+      // from the one who pressed Stop, and it works because both halves of a
+      // transcript are already the room's rather than anybody's: live lines arrive
+      // on every client through TRANSCRIPT_LINE and pointing segments through
+      // POINTING_SEGMENT. The choice itself came the same way — TRANSCRIPT_KEEP,
+      // kept by the room server and relayed, so it reaches whichever browser ends up
+      // here. lib/transcriptKeep.ts.
+      //
+      // Re-checked against privacy mode and the capture pause rather than trusted
+      // from the button that was pressed, for the reason lib/capture/meetingMinutes
+      // gives for itself: a room that turned privacy on between Stop and End has
+      // said that what was said in it does not leave it, and a meeting ending is not
+      // a reason to break that.
+      const keepTranscript = getTranscriptKeep();
+      const transcript = keepTranscript?.keep === true && !isPrivacyMode && !isCapturePaused()
+        ? buildTranscript({
+            chatHistory,
+            recordingStart: getRecordingState()?.startedAt ?? 0,
+            segments: usePointingTimelineStore.getState().segments,
+            includePointing: keepTranscript.includePointing === true,
+          })
+        : [];
       const flushed = flushSessionToTracker({
         roomId,
         insightCards,
@@ -1055,6 +1088,11 @@ export const useStore = create<AppState>((set, get) => ({
         // review_lines yet — and lib/trackerBridge resolves the main line itself
         // rather than recording a session the map cannot place.
         lineId: activeLine?.id ?? null,
+        // Empty when nothing is to be stored, which lib/trackerBridge reads as
+        // "leave the column out of the INSERT entirely" — an install whose database
+        // has not been re-applied since this batch then records its meetings exactly
+        // as it did before, instead of failing the one write that matters.
+        transcript,
       });
       // The minutes, asked for once the meeting's own row exists and in the
       // background: a summary is one AI job on the whole meeting, which is seconds

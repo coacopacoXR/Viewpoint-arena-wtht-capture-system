@@ -9,18 +9,17 @@
 //   * in the Manager Workspace (ManagerPanel), where the host may already be
 //     when they want to record.
 // Both call sites are one line: <RecordingControls />.
+//
+// Since batch BU this is two rows rather than one: the control, and — once a
+// recording has been stopped — RecordingStoppedPanel, which is where the three
+// things that can be done with it live. The button says "Stop" and not "Stop &
+// summarise" because stopping no longer summarises.
 
 import React from 'react';
 import { Mic, Square, RefreshCw, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useRecordingContext } from '../../lib/RecordingContext';
-
-function formatElapsed(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
+import RecordingStoppedPanel, { formatElapsed } from './RecordingStoppedPanel';
 
 interface RecordingControlsProps {
   /**
@@ -40,6 +39,7 @@ const RecordingControls: React.FC<RecordingControlsProps> = ({ theme = 'light' }
   const dark = theme === 'dark';
 
   return (
+    <>
     <section
       className={clsx(
         'shrink-0 border-b px-3 py-2 overflow-hidden',
@@ -74,9 +74,10 @@ const RecordingControls: React.FC<RecordingControlsProps> = ({ theme = 'light' }
             <button
               onClick={() => void stop()}
               disabled={summarising}
+              title="Stop the recording, then choose what to do with it"
               className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider bg-red-600 hover:bg-red-700 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
             >
-              <Square size={10} /> {dark ? 'Stop' : <>Stop &amp; summarise</>}
+              <Square size={10} /> Stop
             </button>
           </>
         )}
@@ -130,6 +131,11 @@ const RecordingControls: React.FC<RecordingControlsProps> = ({ theme = 'light' }
         </div>
       )}
     </section>
+    {/* The three choices, once there is a stopped recording to choose about. It
+        answers null until then, so this is unconditional on purpose: the panel is
+        part of the record control's row, not a second thing a caller has to place. */}
+    <RecordingStoppedPanel theme={theme} />
+    </>
   );
 };
 

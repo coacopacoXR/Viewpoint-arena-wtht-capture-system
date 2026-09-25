@@ -31,12 +31,16 @@ import type { PointingSegment } from './pointingTimelineStore';
 import { supabase } from './supabase';
 import { getStoredIdentity } from './identity';
 import { recordingStateRef, type RecordingStatePayload } from './recordingState';
+import { setTranscriptKeep, type TranscriptKeepPayload } from './transcriptKeep';
 import type { Session } from '@supabase/supabase-js';
 
 export type { ParticipantPresence };
 // Re-exported from where it now lives, so this module's readers — usePointingTimeline,
 // RecordingContext — keep importing it from here. See lib/recordingState.ts.
 export type { RecordingStatePayload };
+// Same reasoning, and the same kind of reader: store.ts's endMeeting reads the
+// choice from lib/transcriptKeep rather than from here. See that module's header.
+export type { TranscriptKeepPayload };
 
 type RoomMessage =
   | { type: 'PRESENCE'; payload: ParticipantPresence }
@@ -89,6 +93,11 @@ type RoomMessage =
   | { type: 'XR_PRESENCE'; payload: XRParticipantData }
   | { type: 'TRANSCRIPT_LINE'; payload: import('../types').ChatMessage }
   | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } }
+  // "Save the transcript with this meeting", chosen by whoever stopped the recording
+  // and carried out by whoever ends it — which may be a different browser. Relayed
+  // by the room server to everybody and kept for late joiners; host-only, and the
+  // server is what enforces that (batch BU).
+  | { type: 'TRANSCRIPT_KEEP'; payload: TranscriptKeepPayload }
   | { type: 'POINTING_SEGMENT'; payload: import('./pointingTimelineStore').PointingSegment }
   | { type: 'ADMIT'; payload: { userId: string } }
   | { type: 'DECLINE'; payload: { userId: string } }
@@ -874,6 +883,11 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
       } else if (msg.type === 'RECORDING_STATE') {
         recordingStateRef.current = msg.payload;
         notifyRecordingStateSubscribers();
+      } else if (msg.type === 'TRANSCRIPT_KEEP') {
+        // Relayed to the sender as well as to everybody else, so a second tab of
+        // the same person and a browser that rejoined mid-meeting hold the same
+        // answer as the one that pressed the button.
+        setTranscriptKeep(msg.payload);
       } else if (msg.type === 'POINTING_SEGMENT') {
         const { addSegment } = usePointingTimelineStore.getState();
         addSegment(msg.payload);
@@ -1256,6 +1270,26 @@ export function broadcastRecordingState(state: RecordingStatePayload): void {
   const socket = partySocketRef.current;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: 'RECORDING_STATE', payload: state }));
+}
+
+/**
+ * Tell the room whether this meeting's transcript is to be stored with it.
+ *
+ * Written locally as well as sent, because the two halves of the choice can be the
+ * same browser: a room with no server to relay through (a local room, a socket that
+ * has not opened yet) still has to be able to record the meeting it just held, and
+ * the person who pressed the button is then the person who ends it. Where there IS a
+ * server it relays this to everybody, which is how the choice reaches the browser
+ * that will record the meeting when that is somebody else.
+ *
+ * Host-only, and the room server enforces it rather than trusting this function to
+ * be called from behind the right button.
+ */
+export function broadcastTranscriptKeep(payload: TranscriptKeepPayload): void {
+  setTranscriptKeep(payload);
+  const socket = partySocketRef.current;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: 'TRANSCRIPT_KEEP', payload }));
 }
 
 /**

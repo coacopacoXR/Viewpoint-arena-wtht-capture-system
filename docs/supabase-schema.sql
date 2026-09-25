@@ -744,6 +744,46 @@ alter table tracker_sessions
 alter table tracker_sessions
   add column if not exists summary text;
 
+-- The transcript of the meeting, when the meeting asked for one to be kept
+-- (added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BU).
+--
+-- Stopping a recording used to mean one thing — the audio went off for card
+-- extraction — and a person who only wanted what was said had no way to say so.
+-- It is three choices now, and this column is one of them: "Save transcript with
+-- this meeting". The other two are the cards (which land in tracker_items as they
+-- always did) and a .txt downloaded straight from the browser, which is never
+-- stored anywhere.
+--
+-- AN ARRAY OF ROWS, not the text of the transcript, because the two things a
+-- transcript can hold are not the same shape: what somebody said, and where
+-- somebody was pointing while they said it.
+--
+--   {"t": 4000, "speaker": "Olga Owner", "text": "Let's look at the hinge pin."}
+--   {"t": 7000, "speaker": "Olga Owner", "pointing": "Hinge pin", "untilMs": 12000}
+--
+-- `t` and `untilMs` are milliseconds into the recording, which is what makes a
+-- line findable in a player's scrub bar; the pointing rows are only there when
+-- "include what people pointed at" was asked for, and both kinds are sorted by
+-- `t`. A transcript that hit its cap ends with `{"truncated": true}` — a marker
+-- rather than a silently dropped tail, so lib/capture/transcriptText.ts can tell
+-- the reader the meeting went on and the record did not.
+--
+-- jsonb and not text, for the reason every other structured column here has: this
+-- file is the schema, and there is no migration to add a table type later.
+--
+-- CAPPED BY THE WRITER at 20 000 rows and 2 MB of JSON (lib/capture/transcript),
+-- because a column with no bound is a table that eventually cannot be listed — and
+-- this one is read by the session map's panel and by the lobby's preview, neither
+-- of which wants a megabyte of a meeting it is drawing a dot for. Both readers ask
+-- for it for ONE selected session and never in a list query, for the same reason.
+--
+-- NULL is the normal state and not a failure: every meeting held before this
+-- column existed, every meeting whose recording nobody asked to keep, every room
+-- in privacy mode, and every meeting recorded while capture was paused all leave
+-- it NULL, and the session panel then shows no transcript row at all.
+alter table tracker_sessions
+  add column if not exists transcript jsonb;
+
 -- Which line a card belongs to, and which one it was raised on
 -- (added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BK).
 --

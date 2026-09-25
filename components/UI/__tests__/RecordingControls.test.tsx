@@ -33,6 +33,17 @@ function makeCtx(overrides: Partial<RecordingContextValue> = {}): RecordingConte
     recordingState: null,
     ownMicStatus: 'idle',
     stopSharingMic: vi.fn(),
+    // The stopped recording's three choices (batch BU), off by default: this file is
+    // about the control row, and RecordingStoppedPanel has its own.
+    stopped: null,
+    dismissStopped: vi.fn(),
+    generateCards: vi.fn(),
+    keepTranscript: false,
+    toggleKeepTranscript: vi.fn(),
+    includePointing: false,
+    setIncludePointing: vi.fn(),
+    downloadStoppedTranscript: vi.fn(),
+    captureBlockReason: null,
     ...overrides,
   };
 }
@@ -71,7 +82,11 @@ describe('RecordingControls', () => {
     );
     render(<RecordingControls />);
     expect(screen.getByText(/recording 01:05/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /stop & summarise/i })).toBeInTheDocument();
+    // "Stop", and not the "Stop & summarise" it was before batch BU: stopping no
+    // longer sends the audio anywhere, so a button that says it does is a lie about
+    // the one thing the person pressing it is deciding.
+    expect(screen.getByRole('button', { name: /^stop$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /summarise/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /start recording/i })).toBeNull();
   });
 
@@ -96,7 +111,7 @@ describe('RecordingControls', () => {
       makeCtx({ state: 'recording', elapsedMs: 0, stop }),
     );
     render(<RecordingControls />);
-    fireEvent.click(screen.getByRole('button', { name: /stop & summarise/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^stop$/i }));
     expect(stop).toHaveBeenCalledTimes(1);
   });
 

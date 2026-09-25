@@ -30,6 +30,17 @@ function makeCtx(overrides: Partial<RecordingContextValue> = {}): RecordingConte
     recordingState: null,
     ownMicStatus: 'idle',
     stopSharingMic: vi.fn(),
+    // The stopped recording's three choices (batch BU). Null and false: this file is
+    // about the indicator, and a panel that is not up is the state it renders in.
+    stopped: null,
+    dismissStopped: vi.fn(),
+    generateCards: vi.fn(),
+    keepTranscript: false,
+    toggleKeepTranscript: vi.fn(),
+    includePointing: false,
+    setIncludePointing: vi.fn(),
+    downloadStoppedTranscript: vi.fn(),
+    captureBlockReason: null,
     ...overrides,
   };
 }

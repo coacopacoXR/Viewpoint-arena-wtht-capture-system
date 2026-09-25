@@ -578,6 +578,7 @@ const Interface: React.FC = () => {
               mayDelete={mayDeleteReview}
               isMeetingHost={isHost}
               onChanged={sessionMap.refresh}
+              readTranscript={sessionMap.readTranscript}
             />
           </Suspense>
         </div>

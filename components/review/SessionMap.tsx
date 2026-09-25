@@ -26,9 +26,17 @@
 // cards and draws them, so it renders the same in the room, in the tracker and in a
 // test with fixture data; lib/reviews/useSessionMap.ts is the half that fetches.
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Trash2, X } from 'lucide-react';
+import { Download, Trash2, X } from 'lucide-react';
+import {
+  downloadTranscript,
+  formatTranscriptDate,
+  transcriptFilename,
+  transcriptLineCount,
+  transcriptToText,
+  type TranscriptRow,
+} from '../../lib/capture/transcriptText';
 import {
   MAIN_LINE_NAME,
   lineLabel,
@@ -374,6 +382,18 @@ export interface SessionMapProps {
   /** Read the lines, sessions and cards again, after an action changed them. */
   onChanged?: () => void;
   /**
+   * Read ONE meeting's transcript, so the panel can offer it as a .txt.
+   *
+   * A reader handed in rather than a read made here, which keeps this file's rule
+   * intact: nothing here touches the database, so the same map renders in the room,
+   * in the tracker, in the lobby's preview and in a test with fixture data.
+   * lib/reviews/useSessionMap is the half that fetches, and every caller that uses
+   * it passes this down. Omitted, and the panel simply has no transcript row — a map
+   * that cannot read one is a map that does not offer one, which is the honest
+   * answer for a test's fixtures and for a surface that has no database.
+   */
+  readTranscript?: (sessionId: string) => Promise<TranscriptRow[] | null>;
+  /**
    * Draw the map as a DIAGRAM inside somebody else's panel: no heading, no card.
    *
    * Batch BP. The lobby's preview panel embeds this map, and embedded it repeated the
@@ -503,6 +523,7 @@ const SessionMap: React.FC<SessionMapProps> = ({
   mayDelete = false,
   isMeetingHost = false,
   onChanged,
+  readTranscript,
   compact = false,
 }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -512,6 +533,27 @@ const SessionMap: React.FC<SessionMapProps> = ({
   );
 
   const selected = layout.stops.find((stop) => stop.session.id === selectedId && !stop.rejoin) ?? null;
+
+  // The selected meeting's transcript, read when its stop is clicked and dropped
+  // when another one is. The id travels with the rows so a slow answer about the
+  // stop that was open a moment ago cannot land on the panel of the one open now —
+  // the panel would otherwise offer a download of a different meeting's transcript
+  // under this meeting's heading.
+  const [transcript, setTranscript] = useState<{ id: string; rows: TranscriptRow[] } | null>(null);
+  useEffect(() => {
+    if (!selectedId || !readTranscript) {
+      setTranscript(null);
+      return;
+    }
+    let cancelled = false;
+    void readTranscript(selectedId).then((rows) => {
+      if (cancelled) return;
+      setTranscript(rows && rows.length > 0 ? { id: selectedId, rows } : null);
+    });
+    return () => { cancelled = true; };
+  }, [selectedId, readTranscript]);
+  const selectedTranscript =
+    selected !== null && transcript?.id === selected.session.id ? transcript.rows : null;
   const byLine = useMemo(() => {
     const table = new Map<string, ReviewLine>();
     for (const line of lines) table.set(line.id, line);
@@ -532,6 +574,37 @@ const SessionMap: React.FC<SessionMapProps> = ({
   // [] for a meeting recorded before the column existed, and then the head count is
   // the answer — it is still a true statement about who was in the room.
   const selectedAttendees = selected?.session.attendeeNames ?? [];
+  const transcriptLines = selectedTranscript ? transcriptLineCount(selectedTranscript) : 0;
+
+  /**
+   * The selected meeting's transcript as a .txt — the same file, byte for byte, that
+   * the person who stopped the recording could have downloaded from the stop panel,
+   * because both go through lib/capture/transcriptText.
+   *
+   * `includePointing` is true and is not a choice here: what people pointed at was
+   * decided when the transcript was SAVED, and rows of that kind are in the stored
+   * array or they are not. Rendering everything the meeting kept is the only honest
+   * reading of a record — a second checkbox would offer to hide part of what was
+   * stored, and the file would stop being that meeting's transcript.
+   */
+  const downloadSelectedTranscript = () => {
+    if (!selected || !selectedTranscript) return;
+    const ended = new Date(selected.session.endedAt);
+    const date = formatTranscriptDate(Number.isNaN(ended.getTime()) ? new Date() : ended);
+    // The review's name, and the meeting's own title for a session recorded with no
+    // review behind it — a file called "transcript.txt" in a folder of them is a file
+    // nobody opens twice.
+    const heading = (reviewTitle ?? '').trim() || selected.session.title.trim() || null;
+    downloadTranscript(
+      transcriptToText(selectedTranscript, {
+        includePointing: true,
+        title: heading,
+        date,
+        attendees: selectedAttendees,
+      }),
+      transcriptFilename(heading, date),
+    );
+  };
 
   return (
     <div
@@ -827,6 +900,27 @@ const SessionMap: React.FC<SessionMapProps> = ({
                   onChanged?.();
                 }}
               />
+            </div>
+          )}
+
+          {/* The meeting's transcript, when the meeting kept one. Above the minutes
+              rather than below them: what was said is the record and the minutes are
+              a summary of it, and a reader who wants one of them wants that order.
+              Absent — not empty, not greyed out — when nothing was stored, because
+              every meeting held before batch BU and every meeting nobody asked to
+              keep has no transcript and is not missing one. */}
+          {selectedTranscript && (
+            <div className="mt-3" data-testid="session-transcript">
+              <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">
+                Transcript · {transcriptLines} {transcriptLines === 1 ? 'line' : 'lines'}
+              </p>
+              <button
+                onClick={downloadSelectedTranscript}
+                className={`${BUTTON} mt-1.5 border-gray-200 text-gray-500 hover:border-black hover:text-black bg-white`}
+                title="Download this meeting’s transcript as a text file"
+              >
+                <Download size={11} /> Download .txt
+              </button>
             </div>
           )}
 

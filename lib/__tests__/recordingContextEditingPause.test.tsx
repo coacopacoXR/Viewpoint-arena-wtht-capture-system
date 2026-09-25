@@ -35,6 +35,7 @@ interface FakeStoreState {
   chatHistory: unknown[];
   activeModelType: string;
   importedSceneTree: null;
+  isPrivacyMode: boolean;
   addInsightCard: () => void;
 }
 
@@ -46,6 +47,7 @@ const fakes = vi.hoisted(() => ({
       chatHistory: [],
       activeModelType: 'headphones',
       importedSceneTree: null,
+      isPrivacyMode: false,
       addInsightCard: () => {},
     } as {
       sessionHostId: string | null;
@@ -53,6 +55,7 @@ const fakes = vi.hoisted(() => ({
       chatHistory: unknown[];
       activeModelType: string;
       importedSceneTree: null;
+      isPrivacyMode: boolean;
       addInsightCard: () => void;
     },
   },
@@ -85,7 +88,7 @@ vi.mock('../WebRTCContext', () => ({
 }));
 
 vi.mock('../PresenceContext', () => ({
-  usePresence: () => ({ localUserId: 'host-1', broadcastInsightCard: vi.fn() }),
+  usePresence: () => ({ localUserId: 'host-1', broadcastInsightCard: vi.fn(), remoteParticipantList: [] }),
 }));
 
 vi.mock('../config/ConfigContext', () => ({
@@ -100,6 +103,7 @@ vi.mock('../usePartyPresence', () => ({
     return () => {};
   },
   broadcastRecordingState: vi.fn(),
+  broadcastTranscriptKeep: vi.fn(),
 }));
 
 vi.mock('../../store', () => ({
@@ -131,6 +135,7 @@ interface RecordingApi {
   outcome: SummaryOutcome | null;
   summarising: boolean;
   stop(): Promise<void>;
+  generateCards(): Promise<void>;
   retry(): Promise<void>;
 }
 
@@ -180,10 +185,12 @@ function lastSlicerRecording(): boolean | undefined {
 
 describe('RecordingContext — capture pauses while the review is edited', () => {
   beforeEach(() => {
-    fakes.store.current = { ...fakes.store.current, reviewEditing: null };
+    fakes.store.current = { ...fakes.store.current, reviewEditing: null, isPrivacyMode: false };
     fakes.micArgs.current = [];
     fakes.recorderStop.mockReset().mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }));
-    fakes.captureRecording.mockReset().mockResolvedValue({ cards: [] });
+    // An array, because that is what the provider's `captureRecording` answers: the
+    // cards themselves, not a document with them in it.
+    fakes.captureRecording.mockReset().mockResolvedValue([]);
     fakes.transcribeChunk.mockReset().mockResolvedValue({});
   });
 
@@ -234,9 +241,18 @@ describe('RecordingContext — capture pauses while the review is edited', () =>
     await setEditing({ userId: 'editor-1', name: 'Paco' });
 
     // Stopping still works, and the person still gets their audio: it is the
-    // SENDING that is refused.
+    // SENDING that is refused. Since batch BU stopping does not send anything at all
+    // — the extraction is the stop panel's "Generate cards" — so that is the act
+    // under test here.
+    //
+    // Two acts, not one: Stop keeps the audio in state and Generate cards reads it,
+    // so the second click has to be a second render, which is what two clicks in the
+    // room are. Inside one act() the callback still closes over a recording of null.
     await act(async () => {
       await ctx?.stop();
+    });
+    await act(async () => {
+      await ctx?.generateCards();
     });
 
     expect(fakes.captureRecording).not.toHaveBeenCalled();
@@ -249,6 +265,9 @@ describe('RecordingContext — capture pauses while the review is edited', () =>
     await setEditing({ userId: 'editor-1', name: 'Paco' });
     await act(async () => {
       await ctx?.stop();
+    });
+    await act(async () => {
+      await ctx?.generateCards();
     });
     expect(fakes.captureRecording).not.toHaveBeenCalled();
 
@@ -266,6 +285,13 @@ describe('RecordingContext — capture pauses while the review is edited', () =>
 
     await act(async () => {
       await ctx?.stop();
+    });
+    // Stop alone must not extract: that is the whole of batch BU's change, and the
+    // pause is one of the two gates on the extraction that follows it.
+    expect(fakes.captureRecording).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await ctx?.generateCards();
     });
 
     expect(isCapturePaused()).toBe(false);

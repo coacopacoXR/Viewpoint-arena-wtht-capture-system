@@ -410,6 +410,10 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
           reviewId={review.id}
           mayDelete={false}
           compact
+          // A meeting's transcript is read for the one stop somebody clicks, so the
+          // reader comes down with the rest of the map's data rather than the map
+          // reaching for the database itself.
+          readTranscript={map.readTranscript}
           onChanged={() => { map.refresh(); onChanged(); }}
           emptyMessage="No sessions recorded in this design review yet."
         />

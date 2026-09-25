@@ -149,6 +149,10 @@ type RoomMessage =
   | { type: 'XR_PRESENCE'; payload: XRParticipantData }
   | { type: 'TRANSCRIPT_LINE'; payload: { id: string; agentId: string; text: string; timestamp: number; speakerName?: string; speakerId?: string; offsetMs?: number } }
   | { type: 'RECORDING_STATE'; payload: { recording: boolean; startedAt: number; byUserId: string; byName: string } }
+  // Store this meeting's transcript on its session row. Host-only — the same rule
+  // the Record button is offered under — and relayed to the room, because the
+  // browser that ends the meeting is usually not the one that stopped the recording.
+  | { type: 'TRANSCRIPT_KEEP'; payload: { keep: boolean; includePointing: boolean; byName: string } }
   | { type: 'POINTING_SEGMENT'; payload: { userId: string; userName: string; partId: string; partName: string; source: 'laser' | 'finger' | 'hover'; fromMs: number; toMs: number } }
   | { type: 'ADMIT'; payload: { userId: string } }
   | { type: 'DECLINE'; payload: { userId: string } }
@@ -266,6 +270,19 @@ export default class RoomServer implements Party.Server {
   // Persisted recording state for late joiners (section B: per-speaker mics).
   // Null when no recording is in progress.
   recordingState: { recording: boolean; startedAt: number; byUserId: string; byName: string } | null = null;
+  // Whether this meeting's transcript is to be stored on its session row, and
+  // whether "where people were pointing at" is part of it (batch BU).
+  //
+  // Kept here rather than left to the client that chose it because the chooser and
+  // the writer are not usually the same browser: one meeting is recorded once, by
+  // whoever pressed End, and the button is pressed by whoever stopped the
+  // recording. Null is the default and means "do not store it" — a room that never
+  // saw the button records the meeting exactly as it did before.
+  //
+  // NOT persisted to room storage: the transcript it decides the fate of lives in
+  // one browser's memory and dies with the page, so a room that came back holding
+  // the choice would be a promise about a transcript nobody has any more.
+  transcriptKeep: { keep: boolean; includePointing: boolean; byName: string } | null = null;
   // Per-link join policy. 'ask' (default) means new arrivals must be admitted
   // by the host; 'open' lets anyone through. NOT persisted to Supabase in
   // batch M2 — a PartyKit room that hibernates comes back at 'ask', which is
@@ -721,6 +738,24 @@ export default class RoomServer implements Party.Server {
   }
 
   /**
+   * Whether this connection may record the meeting — and so may decide what happens
+   * to its transcript.
+   *
+   * The server's half of RecordingContext's `canRecord`, which is
+   * `isHost && captureProvider !== 'mock'`. Only the host half is answerable here:
+   * which capture provider a deployment configured is client config this server does
+   * not hold, and a deployment on 'mock' never records at all, so it never sends the
+   * message either. What is left is the half worth enforcing — a guest or a
+   * participant who crafts a TRANSCRIPT_KEEP frame must not be able to decide that a
+   * meeting's transcript is stored on the review's session row, where every person
+   * who can open the map can later read and download it.
+   */
+  private mayRecordMeeting(connId: string): boolean {
+    const userId = this.connToUser.get(connId);
+    return userId !== undefined && userId === this.computeHost();
+  }
+
+  /**
    * Turn Edit on for this connection, or say why it cannot.
    *
    * ONE editor at a time, and the room is told who. A second owner or editor who
@@ -830,6 +865,15 @@ export default class RoomServer implements Party.Server {
       conn.send(JSON.stringify({
         type: 'RECORDING_STATE',
         payload: this.recordingState,
+      } as RoomMessage));
+    }
+    // The transcript choice, for a browser that arrives after it was made. Without
+    // this the host's own reload between Stop and End would silently drop it, and
+    // "saved with this meeting" would have been a promise the room forgot.
+    if (this.transcriptKeep) {
+      conn.send(JSON.stringify({
+        type: 'TRANSCRIPT_KEEP',
+        payload: this.transcriptKeep,
       } as RoomMessage));
     }
   }
@@ -1521,6 +1565,28 @@ export default class RoomServer implements Party.Server {
       // exclude) so the sender's own indicator stays in sync.
       this.recordingState = msg.payload;
       this.relay(JSON.stringify(msg));
+
+    } else if (msg.type === 'TRANSCRIPT_KEEP') {
+      // ENFORCED, where its neighbour above is not: RECORDING_STATE only moves the
+      // room's own indicator and the client already gates the button, while this one
+      // decides that a meeting's transcript is written to the review's session row,
+      // where everybody who can open the map can read it and download it later. That
+      // is a decision about stored content, so it is the same rule the Record button
+      // is offered under and the server is what applies it (see mayRecordMeeting).
+      if (!this.mayRecordMeeting(sender.id)) return;
+      // Rebuilt field by field rather than relayed as it arrived: a frame from the
+      // wire is not a payload, and this one is stored and then handed to every
+      // connection in the room. A missing or wrong-typed field answers the default —
+      // `false`, and an empty name — instead of throwing in the message loop.
+      const wire = msg.payload as { keep?: unknown; includePointing?: unknown; byName?: unknown } | undefined;
+      this.transcriptKeep = {
+        keep: wire?.keep === true,
+        includePointing: wire?.includePointing === true,
+        byName: typeof wire?.byName === 'string' ? wire.byName.slice(0, 100) : '',
+      };
+      // To the room including the sender, as EDITING_STATE is: the panel's pressed
+      // state is then the room's answer rather than the click's assumption.
+      this.relay(JSON.stringify({ type: 'TRANSCRIPT_KEEP', payload: this.transcriptKeep } as RoomMessage));
 
     } else if (msg.type === 'TRANSCRIPT_LINE') {
       // Server-authoritative speaker stamp: overwrite speakerId with the

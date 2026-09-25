@@ -2292,6 +2292,7 @@ const TrackerPage: React.FC = () => {
                         mayEditLines={mayEditLines}
                         isMeetingHost={trackerHostsTheMeeting}
                         onChanged={afterLineChange}
+                        readTranscript={sessionMap.readTranscript}
                       />
                     </React.Suspense>
                   </div>

@@ -21,6 +21,9 @@
 
 import { supabase, type TrackerItem } from '../supabase';
 import { getStoredIdentity } from '../identity';
+// Imported for its parser and its row type only: lib/capture/transcriptText has no
+// runtime dependencies at all, so this pulls no capture path into the reviews repo.
+import { parseTranscriptRows, type TranscriptRow } from '../capture/transcriptText';
 import {
   MAIN_LINE_NAME,
   isMainLine,
@@ -38,6 +41,54 @@ interface LineRow extends Record<string, unknown> {
 
 const LINE_COLUMNS =
   'id,review_id,kind,name,letter,parent_session_id,status,created_by,created_by_name,created_at,closed_at';
+
+/**
+ * The columns a LIST of sessions reads — every one of them except `transcript`.
+ *
+ * `select('*')` stays what a read of ONE session uses, and deliberately: an install
+ * whose database predates a column must still read the meeting rather than fail on
+ * the column it does not have. A list is the other case, because batch BU put up to
+ * two megabytes of transcript on a row, and a review that has met twenty times would
+ * otherwise drag twenty of them into the lobby's grid, the room's map and the
+ * tracker's history just to draw a dot per meeting. So a list names what it wants,
+ * and `readSessionRows` falls back to `'*'` when this database does not have one of
+ * those columns yet — both rules kept: no transcript in a list, and no read lost to
+ * an install that has not been upgraded.
+ */
+const SESSION_LIST_COLUMNS =
+  'id,room_id,title,ended_at,created_at,participant_count,model_name,labels,review_id,revision_ids,line_id,seq,attendee_names,summary';
+
+/** Postgres' "column … does not exist": what an un-upgraded install answers. */
+const UNDEFINED_COLUMN = '42703';
+
+interface SessionRowsAnswer {
+  data: unknown;
+  error: { code?: string; message?: string } | null;
+}
+
+function sessionRows(data: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : [];
+}
+
+/**
+ * Read a list of sessions without their transcripts, and survive a database that
+ * does not have every column named above.
+ *
+ * The caller passes the query rather than the columns because the three lists here
+ * are three different queries over the same table, and the retry has to be the same
+ * query with `'*'` in place of the column list — including the nested
+ * `session:tracker_sessions(…)` one, where the columns are inside a join.
+ */
+async function readSessionRows(
+  build: (columns: string) => PromiseLike<SessionRowsAnswer>,
+): Promise<Array<Record<string, unknown>>> {
+  const first = await build(SESSION_LIST_COLUMNS);
+  if (!first.error) return sessionRows(first.data);
+  if (first.error.code !== UNDEFINED_COLUMN) return [];
+  const again = await build('*');
+  if (again.error) return [];
+  return sessionRows(again.data);
+}
 
 /**
  * The lines this browser has already read for a review.
@@ -266,14 +317,15 @@ export function toLineSession(row: Record<string, unknown>): LineSession | null 
 export async function listReviewSessions(reviewId: string | null | undefined): Promise<LineSession[]> {
   if (!reviewId) return [];
   try {
-    const { data, error } = await supabase
-      .from('tracker_sessions')
-      .select('*')
-      .eq('review_id', reviewId)
-      .order('ended_at', { ascending: true });
-    if (error || !data) return [];
+    const rows = await readSessionRows((columns) =>
+      supabase
+        .from('tracker_sessions')
+        .select(columns)
+        .eq('review_id', reviewId)
+        .order('ended_at', { ascending: true }),
+    );
     const sessions: LineSession[] = [];
-    for (const row of data as Array<Record<string, unknown>>) {
+    for (const row of rows) {
       const session = toLineSession(row);
       if (session) sessions.push(session);
     }
@@ -313,14 +365,16 @@ export async function nextSessionSeq(lineId: string | null | undefined): Promise
 export async function lastSessionOnLine(lineId: string | null | undefined): Promise<LineSession | null> {
   if (!lineId) return null;
   try {
-    const { data, error } = await supabase
-      .from('tracker_sessions')
-      .select('*')
-      .eq('line_id', lineId)
-      .order('ended_at', { ascending: false })
-      .limit(1);
-    if (error || !data || data.length === 0) return null;
-    return toLineSession((data as Array<Record<string, unknown>>)[0]);
+    const rows = await readSessionRows((columns) =>
+      supabase
+        .from('tracker_sessions')
+        .select(columns)
+        .eq('line_id', lineId)
+        .order('ended_at', { ascending: false })
+        .limit(1),
+    );
+    if (rows.length === 0) return null;
+    return toLineSession(rows[0]);
   } catch (err) {
     console.error('[linesRepo] lastSessionOnLine threw:', err);
     return null;
@@ -331,15 +385,51 @@ export async function lastSessionOnLine(lineId: string | null | undefined): Prom
 export async function sessionById(id: string | null | undefined): Promise<LineSession | null> {
   if (!id) return null;
   try {
+    const rows = await readSessionRows((columns) =>
+      supabase
+        .from('tracker_sessions')
+        .select(columns)
+        .eq('id', id)
+        .limit(1),
+    );
+    if (rows.length === 0) return null;
+    return toLineSession(rows[0]);
+  } catch (err) {
+    console.error('[linesRepo] sessionById threw:', err);
+    return null;
+  }
+}
+
+/**
+ * One meeting's transcript, read on its own.
+ *
+ * The ONLY reader of tracker_sessions.transcript, and the reason no other query in
+ * this file asks for it — not even the two above, which read a single row. Batch BU
+ * made that column up to two megabytes of a meeting, and the only surface that shows
+ * it is the session map's panel for the ONE stop somebody clicked, so it is asked for
+ * when that happens and never before.
+ *
+ * Null when the meeting has no transcript — every meeting recorded before this
+ * column existed, every meeting nobody asked to keep, every meeting held in privacy
+ * mode — and when this database does not have the column yet. Both are the same
+ * answer to the caller: the panel shows no transcript row at all, rather than an
+ * empty one that offers a download of nothing.
+ */
+export async function sessionTranscript(
+  id: string | null | undefined,
+): Promise<TranscriptRow[] | null> {
+  if (!id) return null;
+  try {
     const { data, error } = await supabase
       .from('tracker_sessions')
-      .select('*')
+      .select('transcript')
       .eq('id', id)
       .limit(1);
     if (error || !data || data.length === 0) return null;
-    return toLineSession((data as Array<Record<string, unknown>>)[0]);
+    const rows = parseTranscriptRows((data as Array<Record<string, unknown>>)[0]?.['transcript']);
+    return rows !== null && rows.length > 0 ? rows : null;
   } catch (err) {
-    console.error('[linesRepo] sessionById threw:', err);
+    console.error('[linesRepo] sessionTranscript threw:', err);
     return null;
   }
 }
@@ -534,14 +624,17 @@ function toCarriedOver(row: Record<string, unknown>): CarriedOverItem | null {
  */
 async function readOpenRows(lineId: string): Promise<Array<Record<string, unknown>>> {
   try {
-    const { data, error } = await supabase
-      .from('tracker_items')
-      .select('*, session:tracker_sessions(*)')
-      .eq('line_id', lineId)
-      .in('status', OPEN_STATUSES)
-      .order('created_at', { ascending: true });
-    if (error || !data) return [];
-    return data as Array<Record<string, unknown>>;
+    // The joined session's columns go through the same list as every other session
+    // list, for the same reason: a card's meeting is here to be labelled, not to be
+    // read aloud, and its transcript is up to two megabytes of neither.
+    return await readSessionRows((columns) =>
+      supabase
+        .from('tracker_items')
+        .select(`*, session:tracker_sessions(${columns})`)
+        .eq('line_id', lineId)
+        .in('status', OPEN_STATUSES)
+        .order('created_at', { ascending: true }),
+    );
   } catch (err) {
     console.error('[linesRepo] could not read the line’s open cards:', err);
     return [];
@@ -795,14 +888,14 @@ export async function listSessionsForReviews(
 ): Promise<Record<string, LineSession[]>> {
   if (reviewIds.length === 0) return {};
   try {
-    const { data, error } = await supabase
-      .from('tracker_sessions')
-      .select('*')
-      .in('review_id', [...reviewIds])
-      .order('ended_at', { ascending: true })
-      .limit(BATCH_SESSION_LIMIT);
-    if (error || !data) return {};
-    const rows = data as Array<Record<string, unknown>>;
+    const rows = await readSessionRows((columns) =>
+      supabase
+        .from('tracker_sessions')
+        .select(columns)
+        .in('review_id', [...reviewIds])
+        .order('ended_at', { ascending: true })
+        .limit(BATCH_SESSION_LIMIT),
+    );
     const grouped = groupByReview(rows, toLineSession);
     for (const list of Object.values(grouped)) {
       list.sort((a, b) => a.endedAt.localeCompare(b.endedAt) || a.id.localeCompare(b.id));

@@ -47,8 +47,20 @@ export function capturePausedBy(): string | null {
  * telling the same person two different things about the same pause.
  */
 export function capturePauseReason(): string {
-  const who = pausedBy;
-  return who
-    ? `Capture is paused while ${who} edits the review.`
+  return capturePauseReasonFor(pausedBy);
+}
+
+/**
+ * The same sentence for a name the caller already has.
+ *
+ * Split out because a component that DISABLES a button with the reason needs that
+ * sentence on the render where the room's editing state changed, and the module's
+ * own copy is written by an effect — so at that moment it still holds the previous
+ * render's answer. Taking the name as an argument keeps the wording in one place and
+ * the disabled button's reason true on the render it appears.
+ */
+export function capturePauseReasonFor(name: string | null): string {
+  return name
+    ? `Capture is paused while ${name} edits the review.`
     : 'Capture is paused while the review is being edited.';
 }

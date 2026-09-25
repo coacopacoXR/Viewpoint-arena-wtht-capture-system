@@ -29,6 +29,7 @@ import {
   type ModelRevision,
 } from './reviews/revisionsRepo';
 import { nextSessionSeq, resolveLine } from './reviews/linesRepo';
+import type { TranscriptRow } from './capture/transcriptText';
 
 /** A node id somebody pointed at, by the name the room knew it by. */
 export type PartNames = Record<string, string>;
@@ -66,6 +67,24 @@ export async function flushSessionToTracker(opts: {
   /** Part names for the ids cards point at. See store.ts's pointedAtPartNames. */
   partNames?: PartNames;
   /**
+   * The meeting's transcript, when the meeting asked for it to be kept — an empty
+   * list (the default) when it did not.
+   *
+   * Rows of `{ t, speaker, text }` with `{ t, speaker, pointing, untilMs }` among
+   * them when "where people were pointing at" was asked for too, sorted by `t` and
+   * capped by lib/capture/transcript. Written on the session's own row so the session
+   * map can offer the same .txt the person who stopped the recording could download,
+   * weeks later and to somebody who was not in the room.
+   *
+   * An EMPTY list leaves the column out of the INSERT rather than writing NULL to it,
+   * which is deliberate: a deployment whose database has not had
+   * docs/supabase-schema.sql re-applied since this column was added would fail the
+   * whole insert on an unknown column, and a meeting that is not recorded is a worse
+   * answer than a transcript that is not stored. Every meeting that did not ask for
+   * one is recorded exactly as it was before.
+   */
+  transcript?: TranscriptRow[];
+  /**
    * The line of the design review this meeting was held on — a review_lines.id, or
    * null when the room did not know one.
    *
@@ -78,8 +97,16 @@ export async function flushSessionToTracker(opts: {
   lineId?: string | null;
 }): Promise<string | null> {
   const { roomId, insightCards, participantCount, modelName, labels } = opts;
+  const transcript = opts.transcript ?? [];
 
-  if (insightCards.length === 0) return null;
+  // A meeting that produced NOTHING is not recorded: no row, no cards, no minutes.
+  // That is unchanged, and it is what keeps an empty room from littering a review's
+  // line with sessions nobody met in. What batch BU added is that a transcript
+  // somebody asked to keep IS something the meeting produced — the person who
+  // stopped the recording may have chosen "save the transcript with this meeting"
+  // and chosen NOT to generate cards, and refusing the row here would silently drop
+  // the one thing they did ask for.
+  if (insightCards.length === 0 && transcript.length === 0) return null;
 
   const reviewId = opts.reviewId ?? null;
   const partNames = opts.partNames ?? {};
@@ -115,6 +142,9 @@ export async function flushSessionToTracker(opts: {
       revision_ids: revisions.map((revision) => revision.id),
       line_id: line?.id ?? null,
       seq,
+      // Only when there is one to store: see the `transcript` option for why an
+      // absent column must not fail the insert that records the meeting.
+      ...(transcript.length > 0 ? { transcript } : {}),
     })
     .select()
     .single();
