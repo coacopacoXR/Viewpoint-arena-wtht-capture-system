@@ -329,7 +329,7 @@ export default class RoomServer implements Party.Server {
    * The scene IS restored, for the same reason as the admitted set: an upgrade
    * restarts this container during a meeting, and a room that came back with
    * nobody's models in it would leave every reconnecting participant staring at
-   * the default headphones while the review carries on about a bracket. What is
+   * an empty canvas while the review carries on about a bracket. What is
    * restored is a hash, a name, a line and a revision per model — restoring it
    * costs one small read, and the bytes stay in the store they were uploaded to.
    *
