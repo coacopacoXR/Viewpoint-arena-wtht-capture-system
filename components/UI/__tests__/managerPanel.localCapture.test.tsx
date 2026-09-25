@@ -114,7 +114,7 @@ describe('ManagerPanel — structure', () => {
         screen.queryByRole('button', { name: /start recording/i }),
       ).toBeNull();
       expectExistingTabsIntact();
-      expect(screen.getByText('Manager Workspace')).toBeInTheDocument();
+      expect(screen.getByText('Manager')).toBeInTheDocument();
     },
   );
 
@@ -124,7 +124,7 @@ describe('ManagerPanel — structure', () => {
     // The recording UI lives in RecordingControls (RecordingControls.test.tsx),
     // which renders nothing without a RecordingProvider. The panel itself
     // keeps its header, tabs, and layout.
-    expect(screen.getByText('Manager Workspace')).toBeInTheDocument();
+    expect(screen.getByText('Manager')).toBeInTheDocument();
     expectExistingTabsIntact();
   });
 

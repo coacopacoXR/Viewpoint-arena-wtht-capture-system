@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   X, AlertTriangle, CheckCircle2, Lightbulb, Check, XCircle, Pencil,
-  ClipboardList, StickyNote, ChevronDown, ChevronLeft, ChevronRight,
+  StickyNote, ChevronDown, ChevronLeft, ChevronRight,
   Mic, MessageSquare, MessageCircle, Layers, Camera,
   Info, ShieldAlert,
 } from 'lucide-react';
@@ -72,23 +72,20 @@ const ManagerPanel: React.FC = () => {
   const unreadChat = tab === 'chat' ? 0 : Math.max(0, liveChat.length - lastSeenChat);
 
   return (
-    <div className="w-full h-full flex flex-col bg-[#fafafa] text-gray-800 font-sans overflow-hidden border-l border-gray-200">
+    <div className="w-full h-full flex flex-col bg-white text-gray-800 font-sans overflow-hidden border-l border-gray-200">
       {/* ─── Header ─────────────────────────────────────────────────────────── */}
-      <header className="relative flex items-center justify-between px-4 py-2.5 shrink-0 bg-gradient-to-r from-[#0f172a] via-[#134e4a] to-[#0f172a] text-white border-b border-emerald-900/40">
+      <header className="relative flex items-center justify-between px-4 py-2.5 shrink-0 bg-white border-b border-gray-200">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-6 h-6 rounded bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center">
-            <ClipboardList size={12} className="text-emerald-300" />
-          </div>
           <div className="min-w-0">
-            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-300/90">Manager Workspace</div>
+            <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-black">Manager</div>
             {config?.title && (
-              <div className="text-[11px] text-white/70 truncate leading-tight">{config.title}</div>
+              <div className="text-[11px] text-gray-500 truncate leading-tight">{config.title}</div>
             )}
           </div>
         </div>
         <button
           onClick={() => setManagerMode(false)}
-          className="text-white/50 hover:text-white p-1 rounded hover:bg-white/10 transition-colors"
+          className="text-gray-500 hover:text-gray-900 p-1 rounded hover:bg-gray-100 transition-colors"
           title="Close manager view"
         >
           <X size={16} />
@@ -102,11 +99,11 @@ const ManagerPanel: React.FC = () => {
       <RecordingControls />
 
       {/* ─── Tab bar ────────────────────────────────────────────────────────── */}
-      <nav className="flex border-b border-gray-200 bg-white shrink-0 overflow-x-auto custom-scrollbar">
+      <nav className="flex border-b border-gray-200 bg-white shrink-0 overflow-x-auto custom-scrollbar px-2 pt-2 gap-0.5">
         <TabButton id="actions"  current={tab} onSelect={setTab} icon={<CheckCircle2 size={12} />} badge={openActions}>Actions</TabButton>
         <TabButton id="notes"    current={tab} onSelect={setTab} icon={<StickyNote size={12} />}>Notes</TabButton>
         <TabButton id="curated"  current={tab} onSelect={setTab} icon={<Camera size={12} />}>Curated</TabButton>
-        <span className="w-px self-center h-5 bg-gray-200 shrink-0" />
+        <span className="w-px self-center h-5 bg-gray-200 shrink-0 mx-1" />
         <TabButton id="capture"  current={tab} onSelect={setTab} icon={<Mic size={12} />}>Capture</TabButton>
         <TabButton id="comments" current={tab} onSelect={setTab} icon={<MessageSquare size={12} />} badge={unresolvedComments} badgeColor="blue">Comments</TabButton>
         <TabButton id="chat"     current={tab} onSelect={setTab} icon={<MessageCircle size={12} />} badge={unreadChat} badgeColor="green">Chat</TabButton>
@@ -147,8 +144,8 @@ const SlideHero: React.FC = () => {
 
   if (!config || config.agenda.length === 0) {
     return (
-      <div className="px-4 py-3 bg-gradient-to-b from-white to-gray-50 border-b border-gray-200 shrink-0">
-        <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-gray-400">
+      <div className="px-4 py-3 bg-white border-b border-gray-200 shrink-0">
+        <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-gray-500">
           <Layers size={11} /> No slides in this review
         </div>
       </div>
@@ -164,12 +161,12 @@ const SlideHero: React.FC = () => {
     .filter((p): p is NonNullable<typeof p> => Boolean(p));
 
   return (
-    <section className="relative shrink-0 bg-gradient-to-b from-emerald-50/80 via-white to-white border-b border-gray-200">
+    <section className="relative shrink-0 bg-white border-b border-gray-200">
       {/* Top row: slide counter + nav buttons */}
       <div className="flex items-center justify-between px-4 pt-3 pb-1.5">
-        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
-          <Layers size={11} className="text-emerald-600" />
-          Slide {agendaIdx + 1} <span className="text-emerald-400">/</span> {config.agenda.length}
+        <div className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest text-gray-500">
+          <Layers size={11} />
+          Slide {agendaIdx + 1} <span className="text-gray-400">/</span> {config.agenda.length}
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -210,17 +207,17 @@ const SlideHero: React.FC = () => {
             <button
               key={v.id}
               onClick={() => jumpToViewpoint(v.id)}
-              className="group flex items-center gap-1.5 pl-0.5 pr-2 py-0.5 rounded-full bg-white border border-emerald-200 hover:border-emerald-400 hover:shadow-sm transition-all"
+              className="group flex items-center gap-1.5 pl-0.5 pr-2 py-0.5 rounded-full bg-white border border-gray-200 hover:border-gray-400 hover:shadow-sm transition-all"
               title={`Jump camera to ${v.label}`}
             >
               {v.thumbnail ? (
                 <img src={v.thumbnail} alt="" className="w-6 h-4 object-cover rounded-full" />
               ) : (
-                <span className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center">
-                  <Camera size={9} className="text-emerald-600" />
+                <span className="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center">
+                  <Camera size={9} className="text-gray-600" />
                 </span>
               )}
-              <span className="text-[10px] font-bold text-emerald-800 group-hover:text-emerald-900 truncate max-w-[110px]">
+              <span className="text-[10px] font-bold text-gray-700 group-hover:text-gray-900 truncate max-w-[110px]">
                 {v.label}
               </span>
             </button>
@@ -252,7 +249,7 @@ const SlideHero: React.FC = () => {
             className={clsx(
               'rounded-full transition-all shrink-0',
               i === agendaIdx
-                ? 'w-4 h-1.5 bg-emerald-500'
+                ? 'w-4 h-1.5 bg-black'
                 : 'w-1.5 h-1.5 bg-gray-300 hover:bg-gray-400'
             )}
           />
@@ -274,21 +271,24 @@ const TabButton: React.FC<{
   children: React.ReactNode;
 }> = ({ id, current, onSelect, icon, badge, badgeColor = 'emerald', children }) => {
   const active = id === current;
-  const badgeBg = badgeColor === 'blue' ? 'bg-blue-500' : badgeColor === 'green' ? 'bg-green-500' : 'bg-emerald-500';
+  const badgeBg = badgeColor === 'blue' ? 'bg-blue-500' : badgeColor === 'green' ? 'bg-green-500' : 'bg-black';
   return (
     <button
       onClick={() => onSelect(id)}
       className={clsx(
-        'shrink-0 px-3 py-2 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors relative border-b-2',
+        'shrink-0 px-2 py-1.5 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all relative',
         active
-          ? 'text-gray-900 border-emerald-500 bg-emerald-50/50'
-          : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50 border-transparent'
+          ? 'bg-black text-white'
+          : 'text-gray-500 hover:bg-gray-100'
       )}
     >
-      <span className={clsx(active ? 'text-emerald-600' : 'text-gray-400')}>{icon}</span>
+      {icon}
       {children}
       {badge !== undefined && badge > 0 && (
-        <span className={clsx('ml-0.5 min-w-[16px] h-4 px-1 rounded-full text-[8px] flex items-center justify-center font-bold text-white', badgeBg)}>
+        <span className={clsx(
+          'min-w-[14px] h-3.5 px-1 rounded-full text-[8px] flex items-center justify-center font-bold text-white',
+          active ? 'bg-white/20' : badgeBg,
+        )}>
           {badge > 9 ? '9+' : badge}
         </span>
       )}
@@ -330,7 +330,7 @@ const ActionsTab: React.FC = () => {
               className={clsx(
                 'px-2 py-0.5 rounded transition-colors',
                 filter === f
-                  ? 'bg-emerald-100 text-emerald-700'
+                  ? 'bg-black text-white'
                   : 'text-gray-400 hover:text-gray-700'
               )}
             >
@@ -459,7 +459,7 @@ const NotesTab: React.FC = () => {
             value={sessionNotes}
             onChange={(e) => setSessionNotes(e.target.value)}
             placeholder="Running log — open items, decisions, parking lot…"
-            className="w-full h-48 bg-gray-50 text-[12px] rounded p-3 border border-gray-200 outline-none focus:border-emerald-400 placeholder:text-gray-400 resize-none leading-relaxed text-gray-800"
+            className="w-full h-48 bg-gray-50 text-[12px] rounded p-3 border border-gray-200 outline-none focus:border-gray-400 placeholder:text-gray-400 resize-none leading-relaxed text-gray-800"
           />
         </div>
       </section>
@@ -481,7 +481,7 @@ const SlideFollowUpCard: React.FC<{
     <div className={clsx(
       'rounded border transition-all',
       highlighted
-        ? 'border-emerald-300 bg-emerald-50/40 shadow-[0_0_0_3px_rgba(16,185,129,0.08)]'
+        ? 'border-gray-400 bg-gray-50 shadow-[0_0_0_3px_rgba(0,0,0,0.04)]'
         : 'border-gray-200 bg-white'
     )}>
       <button
@@ -490,7 +490,7 @@ const SlideFollowUpCard: React.FC<{
       >
         <span className={clsx(
           'text-[9px] font-mono tabular-nums w-6 text-left',
-          highlighted ? 'text-emerald-600 font-bold' : 'text-gray-400',
+          highlighted ? 'text-black font-bold' : 'text-gray-400',
         )}>
           {String(idx + 1).padStart(2, '0')}
         </span>
@@ -501,7 +501,7 @@ const SlideFollowUpCard: React.FC<{
           </span>
         )}
         {item.followUp && !highlighted && (
-          <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+          <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
             • Noted
           </span>
         )}
@@ -513,7 +513,7 @@ const SlideFollowUpCard: React.FC<{
             value={item.followUp ?? ''}
             onChange={(e) => onChange(e.target.value)}
             placeholder="Follow-up for this slide — decisions, owners, open questions…"
-            className="w-full h-20 bg-white text-[11px] rounded p-2 border border-gray-200 outline-none focus:border-emerald-400 placeholder:text-gray-400 resize-none leading-snug text-gray-800"
+            className="w-full h-20 bg-white text-[11px] rounded p-2 border border-gray-200 outline-none focus:border-gray-400 placeholder:text-gray-400 resize-none leading-snug text-gray-800"
           />
         </div>
       )}
