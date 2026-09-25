@@ -41,6 +41,7 @@ import {
 import type { LineSession, SessionCardRef } from '../../lib/reviews/linesRepo';
 import type { ModelRevision } from '../../lib/reviews/revisionsRepo';
 import { revisionLabel, shortDate } from '../../lib/trackerContinuity';
+import { ExploreVariantButton, VariantActions } from './VariantActions';
 
 /** Stop spacing along a line. Wide enough for a date and two revision letters. */
 const STEP = 140;
@@ -335,6 +336,23 @@ export interface SessionMapProps {
   onClose?: () => void;
   /** Empty-state text, for a review that has not met yet. */
   emptyMessage?: string;
+  /**
+   * The review's id, and whether this person may change its lines. Both are needed
+   * for the map to offer any of the three variant actions, and both are omitted
+   * where it should not: a map with no review id cannot say which review a variant
+   * would belong to, and a map whose reader is a participant or a guest offers
+   * actions the endpoint would refuse.
+   *
+   * `mayEditLines` is the host's `can('editReview')` — starting, adopting and
+   * dropping a variant are all the same permission as changing the review's agenda
+   * or its models, not three new ones. See lib/reviews/roles.ts.
+   */
+  reviewId?: string | null;
+  mayEditLines?: boolean;
+  /** Whether this browser is running the meeting. Read on an install with no accounts. */
+  isMeetingHost?: boolean;
+  /** Read the lines, sessions and cards again, after an action changed them. */
+  onChanged?: () => void;
 }
 
 /**
@@ -352,6 +370,10 @@ const SessionMap: React.FC<SessionMapProps> = ({
   cards = [],
   onClose,
   emptyMessage = 'No sessions recorded in this design review yet.',
+  reviewId = null,
+  mayEditLines = false,
+  isMeetingHost = false,
+  onChanged,
 }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const layout = useMemo(
@@ -365,6 +387,15 @@ const SessionMap: React.FC<SessionMapProps> = ({
     for (const line of lines) table.set(line.id, line);
     return table;
   }, [lines]);
+
+  // The variants still being explored, which are the only ones with anything to
+  // adopt or drop. An adopted or dropped one is on the map for the record and offers
+  // nothing — that is what stops "Adopt into main line" being offered twice for the
+  // same decision, and what makes the greyed row on the map read as history.
+  const activeVariants = useMemo(
+    () => lines.filter((line) => line.kind === 'variant' && line.status === 'active'),
+    [lines],
+  );
 
   const selectedCards = selected ? cards.filter((card) => card.sessionId === selected.session.id) : [];
 
@@ -517,6 +548,38 @@ const SessionMap: React.FC<SessionMapProps> = ({
         )}
       </div>
 
+      {/* The variants still being explored, and the two things that can be done with
+          each. Below the drawing rather than on it: the map is a picture of the
+          review's history, and a button floating in the middle of it is a button
+          nobody finds twice. Rendered only for somebody who may change the review's
+          lines — a participant or a guest sees the map and nothing to press. */}
+      {reviewId && mayEditLines && activeVariants.length > 0 && (
+        <div
+          className="flex-shrink-0 border-t border-gray-100 bg-white px-4 py-2.5 flex flex-col gap-2"
+          data-testid="map-variants"
+        >
+          {activeVariants.map((variant) => (
+            <div key={variant.id} className="flex items-start gap-3">
+              <p
+                className="text-[11px] text-gray-700 font-medium pt-1 w-40 shrink-0 truncate"
+                title={lineLabel(variant) ?? undefined}
+              >
+                {lineLabel(variant) ?? 'Variant'}
+              </p>
+              <div className="flex-1 min-w-0">
+                <VariantActions
+                  reviewId={reviewId}
+                  variant={variant}
+                  mayEdit={mayEditLines}
+                  isMeetingHost={isMeetingHost}
+                  onChanged={onChanged}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* One session, opened */}
       {selected && (
         <div className="flex-shrink-0 border-t border-gray-100 bg-gray-50/40 px-4 py-3 max-h-[45%] overflow-y-auto custom-scrollbar">
@@ -566,6 +629,22 @@ const SessionMap: React.FC<SessionMapProps> = ({
               </dd>
             </div>
           </dl>
+
+          {/* Any session on any line is somewhere a variant can leave from — that is
+              what the map is for. Starting one takes its model and its still-open
+              cards and opens the new line's own room. */}
+          {reviewId && mayEditLines && (
+            <div className="mt-3">
+              <ExploreVariantButton
+                reviewId={reviewId}
+                session={selected.session}
+                line={selected.line ?? byLine.get(selected.session.lineId ?? '') ?? null}
+                mayEdit={mayEditLines}
+                isMeetingHost={isMeetingHost}
+                onChanged={onChanged}
+              />
+            </div>
+          )}
 
           {selected.session.summary ? (
             <div className="mt-3">

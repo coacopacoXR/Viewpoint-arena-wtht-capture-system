@@ -29,7 +29,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronDown, ChevronRight, ExternalLink, History } from 'lucide-react';
 import { clsx } from 'clsx';
-import { listOpenLineItems, updateLineItem, type CarriedOverItem } from '../../lib/reviews/linesRepo';
+import { listCarriedOver, updateLineItem, type CarriedOverItem } from '../../lib/reviews/linesRepo';
 import { sessionLabel, type ReviewLine } from '../../lib/reviews/lines';
 
 /** The statuses a carried-over card can be moved to. The tracker's own four. */
@@ -70,7 +70,7 @@ const CarriedOverCards: React.FC<CarriedOverCardsProps> = ({ line, mayEdit, chan
       return;
     }
     let cancelled = false;
-    void listOpenLineItems(line).then((loaded) => {
+    void listCarriedOver(line).then((loaded) => {
       if (!cancelled) setItems(loaded);
     });
     return () => { cancelled = true; };
@@ -122,8 +122,11 @@ const CarriedOverCards: React.FC<CarriedOverCardsProps> = ({ line, mayEdit, chan
           {items.map((item) => {
             // "from S2" — the session it was raised in, on this line. A session with
             // no number (recorded before seq existed) is named by its card alone
-            // rather than as "from S0".
-            const from = sessionLabel(line, item.fromSeq);
+            // rather than as "from S0". The read answers the label itself where the
+            // card is on a DIFFERENT line — the parent line's open cards, which is
+            // what a variant that has never met starts with — because numbering one
+            // of those with this variant's letter would call S2 "A2".
+            const from = item.fromLabel ?? sessionLabel(line, item.fromSeq);
             const isOpen = openId === item.id;
             return (
               <div key={item.id} className="bg-white rounded border border-gray-200">

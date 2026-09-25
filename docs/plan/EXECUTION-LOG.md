@@ -933,9 +933,9 @@ admin) is the only one. The install is left in accounts mode, as the user asked.
 **Open:**
 - The disappearing Import button: resolved; the user retested after the
   import rework and it works.
-- Model transforms persist in room storage, not in the review row.
-- Adding a pin inside the room has no UI yet.
-- The main bundle is 1.2 MB, so lazy-load ReviewEditPanel.
+- ~~Model transforms persist in room storage, not in the review row.~~ Done: BI saves placement.
+- ~~Adding a pin inside the room has no UI yet.~~ Done: BI.
+- ~~The main bundle is 1.2 MB, so lazy-load ReviewEditPanel.~~ Done: BI.
 
 ### Resuming from a cold session
 
@@ -987,3 +987,41 @@ and needed one duplicated const removed plus the one test the run never reached.
 
 **Do not trust a green test run as evidence on its own.** The review method that
 actually found problems is written up in `delegation/README.md`.
+
+## Session 2026-09-25: empty rooms, Manager look, plan 15 (sessions and variants)
+
+- `c72070a` + `062b98c` BI: rooms start empty, and the headphones and bike are
+  samples on request. Adds pins in the room, placement saved on the review, and
+  the edit panel loaded on demand.
+- `1cdb681` BJ: the Manager view uses the app's own look (white, black tabs,
+  green only for meaning).
+- `d131d1b` plan 15, approved: the user's word is **Variant**, and adopting brings
+  over both the cards and the model.
+- `b9bdf1a` BK: lines of sessions per design review, the Sessions map (room top
+  bar and tracker), "Carried over" cards (the same tracker rows, folded by
+  default), and "Main line · S1" in the tracker. Tested live. The 4 older
+  meetings on the install have no design review, so the backfill correctly
+  gives them no line.
+- BL: Explore a variant from here, Adopt into main line, Drop variant.
+  - One endpoint, `api/reviews/lines.ts`, checks `editReview`. Adopting and
+    dropping are each one database function, run by the service role only.
+  - The browser may only insert the main line, and may never update a line.
+  - Tested live with two accounts: the variant opens its own room, and its
+    meeting is recorded as A1. Adopting moved the card to the main line, which
+    still says it came from Variant A. Dropping closed the open card with the
+    reason and wrote status history. The map shows the green rejoin and the grey
+    dashed drop. A non-member gets 403, no token gets 401, and the anon role
+    cannot update, insert a variant, or run the functions.
+  - Found live, fixed by me:
+    - The client parsed the endpoint's camelCase line as a snake_case row, so
+      Explore made the variant and never opened it.
+    - Opening a variant from the map remounts the room with a review config
+      already in the store, so the room never set `activeReviewId`, and the
+      variant's meetings were saved with no review and no line. It is now set
+      as soon as the row is found.
+  - The "both lines changed the model" question has only unit tests. The live
+    test had no models.
+  - Suite timeouts are raised (`testTimeout` 20s, `asyncUtilTimeout` 5s). Under
+    full load, lazy-chunk and install.sh tests were failing at random.
+- Test data: the reviews made by deleted accounts keep a NULL owner, so the
+  cleanup must delete by review id, not by owner.

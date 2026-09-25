@@ -16,6 +16,7 @@ import { useStore } from '../../../store';
 import { usePresence } from '../../../lib/PresenceContext';
 import SharePanel from '../SharePanel';
 import XRButton from '../XRButton';
+import LineChip from './LineChip';
 import PointerMenu from './PointerMenu';
 
 const WIDE_LABEL = 'hidden [@media(min-width:1500px)]:inline';
@@ -101,6 +102,11 @@ const TopBar: React.FC<TopBarProps> = ({
   const setLaserHighlightGranularity = useStore((s) => s.setLaserHighlightGranularity);
   const agents = useStore((s) => s.agents);
   const hideAgents = useStore((s) => s.hideAgents);
+  // The line this room resolved itself to, put in the store by pages/RoomPage.tsx.
+  // Null on the main line, for an ad-hoc room, and on an install with no database —
+  // and the chip renders nothing for all three, so every room that existed before
+  // lines did looks exactly as it did.
+  const activeLine = useStore((s) => s.activeLine);
   const { remoteParticipantList, broadcastPrivacyMode, broadcastBoardroomCountdown, broadcastArenaEntry } = usePresence();
 
   // The same count the participants panel shows in its header.
@@ -108,6 +114,12 @@ const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <div className="flex items-center gap-1.5 bg-white/90 backdrop-blur-md border border-gray-200 rounded-md shadow-sm p-1.5 pointer-events-auto">
+      {/* Which line of the design review this meeting is on. First, before anything
+          that can be changed, because it is the one thing here that says where the
+          changes will land: a variant meets in its own room and adopting from it or
+          dropping it are the two decisions the chip carries. */}
+      {roomId && <LineChip roomId={roomId} line={activeLine} mayEdit={canEditReview} isMeetingHost={isHost} />}
+
       {/* Into the review's own editing, leftmost because it is the one control here
           that changes the review rather than the meeting. Pressing it ASKS the room:
           if somebody already has Edit, the answer comes back as "Paco is editing —

@@ -579,7 +579,19 @@ create policy "public update model revisions" on model_revisions for update usin
 -- was not. Both are kept for the record rather than deleted — a dropped variant is
 -- an answer the review tried and rejected, and that is worth seeing on the map.
 -- `closed_at` is when it became one or the other. Batch BK only ever writes
--- 'active'; adopting and dropping are batch BL.
+-- 'active'; adopting and dropping are batch BL, and both go through
+-- api/reviews/lines.ts rather than through the browser — see the row level
+-- security below.
+--
+-- `adopted_revision_ids` is what the main line's scene became when this variant
+-- was adopted into it, as model_revisions ids: the variant's own newest
+-- revisions where only the variant had moved, and, where BOTH lines had uploaded
+-- a new revision of the same model, the ones the person adopting chose in answer
+-- to the one question api/reviews/lines.ts asks. It is a column on the VARIANT
+-- and not on the main line, so the main line's own scene is still derived from
+-- its last meeting: lib/reviews/linesRepo.originRevisionIds takes the adoption
+-- only while it is NEWER than that meeting, and a meeting held after it
+-- supersedes it without anything having to be written here again.
 --
 -- review_id has deliberately NO foreign key, for the same reason
 -- tracker_sessions.review_id has none: a line belongs to a review by id, and a
@@ -597,8 +609,14 @@ create table if not exists review_lines (
   created_by_name text not null default '',
   created_at timestamptz not null default now(),
   closed_at timestamptz,
+  adopted_revision_ids uuid[],
   unique (review_id, kind, letter)
 );
+
+-- For an install that applied this file at batch BK and is being upgraded: the
+-- column the two functions below write, added only where it is missing.
+alter table review_lines
+  add column if not exists adopted_revision_ids uuid[];
 
 -- Exactly one main line per design review. A partial index rather than a column
 -- constraint because `unique (review_id, kind, letter)` cannot express it: the
@@ -612,18 +630,42 @@ create index if not exists review_lines_review_idx
 
 alter table review_lines enable row level security;
 
--- Written exactly the way model_revisions is: open read, open insert, open
--- update, no delete (a line is the review's history). The role check — who may
--- start a variant, who may adopt or drop one — is in the app, not here, for the
--- reason set out in the model_revisions block below: a `mode: 'none'` install has
--- no signed-in callers, so an auth.uid()-keyed policy would refuse every write.
--- Batch BL is the one that tightens who may create a variant.
+-- WHO MAY WRITE A LINE (tightened 2026-09-25, docs/plan/15-sessions-and-variants.md
+-- batch BL). Batch BK copied model_revisions here — open read, open insert, open
+-- update — because the only write the browser made was `ensureMainLine`, and a
+-- main line is a fact about a review rather than a decision anybody could gain
+-- from making. Batch BL adds three writes that ARE decisions: starting a variant,
+-- adopting one into the main line and dropping one. Each of them moves other
+-- people's rows with it (adopting re-homes every card the variant raised, dropping
+-- closes them), and each is limited to the review's owners and editors by
+-- lib/reviews/roles.ts — a rule that cannot live here, because a `mode: 'none'`
+-- install has no signed-in callers and an auth.uid()-keyed policy would refuse
+-- every write on the deployment most people run.
+--
+-- So the browser keeps exactly the write it needs and loses the rest:
+--
+--   SELECT  open. The map, the tracker's line filter and the room's own chip all
+--           read lines, and a line row is a label and a date, not a secret.
+--   INSERT  `kind = 'main'` ONLY. That is lib/reviews/linesRepo.ensureMainLine,
+--           which has to work from the browser because a room writes it on open,
+--           before any meeting has been recorded. Creating a variant is NOT here:
+--           it goes through api/reviews/lines.ts, which holds the service role and
+--           checks the caller's role the way api/reviews/members.ts does.
+--   UPDATE  no policy at all, so every update is refused. Adopting and dropping
+--           are the two functions further down this file, called by the api.
+--   DELETE  no policy at all. A line is the review's history; it is dropped or
+--           adopted, never removed, so that a card can keep saying where it came
+--           from.
+--
+-- EVERY STATEMENT IS SAFE TO RUN TWICE: the drops are `if exists`, and the two
+-- policies batch BK created are dropped here and never re-created, so re-applying
+-- this file on an upgrade is what takes the old permissions away.
 drop policy if exists "public read review lines" on review_lines;
 drop policy if exists "public insert review lines" on review_lines;
 drop policy if exists "public update review lines" on review_lines;
-create policy "public read review lines"   on review_lines for select using (true);
-create policy "public insert review lines" on review_lines for insert with check (true);
-create policy "public update review lines" on review_lines for update using (true);
+drop policy if exists "public insert main review line" on review_lines;
+create policy "public read review lines"       on review_lines for select using (true);
+create policy "public insert main review line" on review_lines for insert with check (kind = 'main');
 
 -- Which line a meeting belongs to, and which number it is on that line
 -- (added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BK).
@@ -726,6 +768,171 @@ where s.id = i.session_id
   and s.line_id is not null
   and (i.line_id is null or i.origin_line_id is null);
 
+-- ─── Adopting and dropping a variant ─────────────────────────────────────────
+--
+-- Added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BL. Two
+-- functions, and the reason they are functions rather than two requests from
+-- api/reviews/lines.ts is that each one writes several tables that have to agree
+-- with each other:
+--
+--   adopt_review_line   moves every card the variant raised onto the main line,
+--                       stamps each one with the moment it was adopted, records
+--                       what the main line's scene became, and marks the variant
+--                       adopted — all of it or none of it.
+--   drop_review_line    marks the variant dropped, closes every card still open on
+--                       it with the reason, and writes the same status history the
+--                       tracker writes when somebody closes a card by hand, so
+--                       lib/trackerContinuity can still say WHEN it closed.
+--
+-- Half of either is worse than neither. A variant whose cards have moved but whose
+-- status is still 'active' can be adopted a second time and move them again; a
+-- dropped variant with open cards leaves risks sitting on a line nobody will ever
+-- meet on, which is the one thing "kept for the record" is not supposed to mean.
+--
+-- BOTH ARE `security definer` AND EXECUTABLE BY THE SERVICE ROLE ALONE (the
+-- revokes are immediately below). The published anon key can still read every row
+-- of review_lines and cannot adopt or drop one, and cannot update a line at all —
+-- which is what makes the role check in api/reviews/lines.ts the only thing that
+-- decides who may do it, rather than one of two things that might.
+--
+-- `create or replace` and revokes/grants that are safe to repeat: install.sh
+-- re-applies this whole file on every run, so an upgrade is exactly a second run
+-- of it.
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function adopt_review_line(
+  p_variant uuid,
+  p_revision_ids uuid[]
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_variant review_lines;
+  v_main review_lines;
+  v_moved int;
+begin
+  -- Locked, because two people adopting the same variant at the same moment must
+  -- produce one adoption: the second one waits, then reads a row whose status is
+  -- no longer 'active' and is told it has already been done.
+  select * into v_variant from review_lines where id = p_variant for update;
+  if not found or v_variant.kind <> 'variant' then
+    return jsonb_build_object('ok', false, 'error', 'no_such_variant');
+  end if;
+  if v_variant.status <> 'active' then
+    return jsonb_build_object('ok', false, 'error', 'already_closed', 'status', v_variant.status);
+  end if;
+
+  select * into v_main from review_lines
+   where review_id = v_variant.review_id and kind = 'main'
+   for update;
+  if not found then
+    -- The api creates the main line before it calls this, so getting here means
+    -- the review's lines are in a state nobody wrote on purpose. Refusing leaves
+    -- the variant exactly as it was, which is the answer that can be retried.
+    return jsonb_build_object('ok', false, 'error', 'no_main_line');
+  end if;
+
+  -- Every card the variant raised, open or not: a risk it found is a risk the main
+  -- line now owns, and an already-closed one still has to say where it came from.
+  -- origin_line_id is coalesced rather than left alone so a card that somehow never
+  -- got one still ends up naming the variant, and never overwritten, so a card
+  -- carried INTO the variant keeps the line it was raised on.
+  update tracker_items
+     set line_id = v_main.id,
+         origin_line_id = coalesce(origin_line_id, v_variant.id),
+         adopted_at = now(),
+         updated_at = now()
+   where line_id = v_variant.id;
+  get diagnostics v_moved = row_count;
+
+  update review_lines
+     set status = 'adopted',
+         closed_at = now(),
+         adopted_revision_ids = p_revision_ids
+   where id = v_variant.id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'moved', v_moved,
+    'mainLineId', v_main.id,
+    'variantId', v_variant.id,
+    'letter', v_variant.letter
+  );
+end;
+$$;
+
+create or replace function drop_review_line(
+  p_variant uuid,
+  p_closed_reason text,
+  p_actor_name text
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_variant review_lines;
+  v_closed int;
+begin
+  select * into v_variant from review_lines where id = p_variant for update;
+  if not found or v_variant.kind <> 'variant' then
+    return jsonb_build_object('ok', false, 'error', 'no_such_variant');
+  end if;
+  if v_variant.status <> 'active' then
+    return jsonb_build_object('ok', false, 'error', 'already_closed', 'status', v_variant.status);
+  end if;
+
+  -- 'Open' and 'In Review' are the two the app has always meant by still open
+  -- (lib/trackerContinuity.isClosed). A card already Approved or Rejected was
+  -- dealt with by the people exploring the variant and is left exactly as they
+  -- left it: rewriting a decision to 'Rejected because the variant was dropped'
+  -- would say something about the engineering that nobody decided.
+  with closing as (
+    update tracker_items
+       set status = 'Rejected',
+           closed_reason = p_closed_reason,
+           updated_at = now()
+     where line_id = v_variant.id
+       and status in ('Open', 'In Review')
+    returning id
+  )
+  insert into tracker_status_history (item_id, status, changed_by, note)
+  select closing.id, 'Rejected', coalesce(nullif(p_actor_name, ''), 'room'), p_closed_reason
+    from closing;
+  get diagnostics v_closed = row_count;
+
+  update review_lines
+     set status = 'dropped',
+         closed_at = now()
+   where id = v_variant.id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'closed', v_closed,
+    'variantId', v_variant.id,
+    'letter', v_variant.letter
+  );
+end;
+$$;
+
+-- The service role is the ONLY caller. `revoke … from public` matters because
+-- PostgreSQL grants EXECUTE on a new function to PUBLIC by default, and the
+-- table-level grants further down this file do not cover functions — so without
+-- these two lines the anon key the browser is built with could adopt or drop any
+-- variant of any review on the install.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on function public.adopt_review_line(uuid, uuid[]) from public, anon, authenticated;
+    revoke all on function public.drop_review_line(uuid, text, text) from public, anon, authenticated;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.adopt_review_line(uuid, uuid[]) to service_role;
+    grant execute on function public.drop_review_line(uuid, text, text) to service_role;
+  end if;
+end $$;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Application settings (added 2026-09-24, docs/plan/14-rooms-models-admin-ai.md
 -- batch BF). One row per setting, written from the admin console's AI section
@@ -799,6 +1006,29 @@ begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
     grant select, insert, update, delete on all tables in schema public to anon, authenticated;
     grant usage, select on all sequences in schema public to anon, authenticated;
+  end if;
+end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- …and review_lines loses its update and delete again, for the same reason and
+-- in the same position (added 2026-09-25, docs/plan/15-sessions-and-variants.md
+-- batch BL). The grant above is `on all tables`, so it has just handed the two
+-- browser roles an UPDATE that the row level security policies above refuse.
+-- Row level security alone is enough — a table with RLS enabled and no policy for
+-- a command denies it — but the block above is evaluated when it runs and would
+-- otherwise be the only thing between a re-applied schema and an anon caller that
+-- can re-open a variant somebody adopted last month. Two mechanisms agreeing is
+-- the pattern this file already uses for app_settings, and a table grant is
+-- checked before RLS, so the revoke has to come after the grant.
+--
+-- SELECT and INSERT stay: the map, the tracker's line filter and the room's chip
+-- all read lines, and lib/reviews/linesRepo.ensureMainLine inserts the one
+-- `kind = 'main'` row its policy allows.
+-- ─────────────────────────────────────────────────────────────────────────────
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke update, delete on public.review_lines from anon, authenticated;
   end if;
 end $$;
 

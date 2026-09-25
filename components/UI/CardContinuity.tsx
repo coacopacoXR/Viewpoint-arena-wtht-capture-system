@@ -19,7 +19,14 @@ import React, { createContext, useContext } from 'react';
 import type { TrackerItem } from '../../lib/supabase';
 import type { ModelRevision } from '../../lib/reviews/revisionsRepo';
 import { cardContinuity } from '../../lib/trackerContinuity';
-import { cardLineLabel, lineById, type ReviewLine } from '../../lib/reviews/lines';
+import {
+  adoptedCardLabel,
+  cardLineLabel,
+  closedCardLabel,
+  lineById,
+  shortLineLabel,
+  type ReviewLine,
+} from '../../lib/reviews/lines';
 
 export interface CardContinuityData {
   /** The stored revisions of each design review on screen, by review id. */
@@ -75,6 +82,18 @@ const CardContinuityLine: React.FC<{ item: TrackerItem; className?: string }> = 
  *
  * The line is the card's own, falling back to its meeting's: a card added by hand
  * through the tracker's own modal names a session and has never written a line_id.
+ *
+ * TWO EXCEPTIONS, both from batch BL, and both because a card that has been through
+ * a variant can no longer be described by the line it is on:
+ *
+ *   Adopted. Its `line_id` is the main line now but its meeting's `seq` is a number
+ *   on the VARIANT, so "Main line · S2" would name a meeting that has nothing to do
+ *   with this card. What it says instead is where it was raised and when the review
+ *   took it in: "Raised in Variant A · adopted 12 Oct".
+ *
+ *   Dropped with its variant. It was closed by the drop rather than by a decision
+ *   about the engineering, and the reason is the thing worth reading:
+ *   "Closed — dropped with Variant B: Too expensive to tool".
  */
 export const CardLineLabel: React.FC<{ item: TrackerItem; className?: string }> = ({ item, className }) => {
   const { linesByReview } = useContext(CardContinuityContext);
@@ -82,20 +101,32 @@ export const CardLineLabel: React.FC<{ item: TrackerItem; className?: string }> 
   const lineId = item.line_id ?? item.session?.line_id ?? null;
   const seq = item.session?.seq ?? null;
   if (!reviewId || !lineId) return null;
-  const line = lineById(linesByReview?.[reviewId] ?? [], lineId);
+  const reviewLines = linesByReview?.[reviewId] ?? [];
+  const origin = lineById(reviewLines, item.origin_line_id ?? null);
+  const style =
+    className ??
+    'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-500';
+
+  const dropped = closedCardLabel(item.closed_reason ?? null);
+  if (dropped) return <span title={dropped} className={style}>{dropped}</span>;
+
+  const moved = item.origin_line_id != null && item.origin_line_id !== lineId;
+  if (moved && origin) {
+    const adopted = adoptedCardLabel(origin, item.adopted_at ?? null);
+    if (adopted) return <span title={adopted} className={style}>{adopted}</span>;
+    // Adopted with no moment recorded — an install whose database predates the
+    // column. Where it was raised is still true and is still not this line.
+    const raised = shortLineLabel(origin);
+    if (raised) {
+      const label = `Raised in ${raised}`;
+      return <span title={label} className={style}>{label}</span>;
+    }
+  }
+
+  const line = lineById(reviewLines, lineId);
   const label = cardLineLabel(line, seq);
   if (!label) return null;
-  return (
-    <span
-      title={label}
-      className={
-        className ??
-        'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-500'
-      }
-    >
-      {label}
-    </span>
-  );
+  return <span title={label} className={style}>{label}</span>;
 };
 
 export default CardContinuityLine;

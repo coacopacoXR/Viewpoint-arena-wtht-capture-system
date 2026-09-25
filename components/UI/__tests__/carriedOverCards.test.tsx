@@ -33,7 +33,10 @@ const { db } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../lib/reviews/linesRepo', () => ({
-  listOpenLineItems: (line: { id: string } | null) => {
+  // The group asks `listCarriedOver`, not `listOpenLineItems`: for a variant that has
+  // never met the answer is the parent line's still-open cards, and that difference
+  // is pinned in lib/reviews/__tests__/carriedOverOrigin.test.ts.
+  listCarriedOver: (line: { id: string } | null) => {
     db.askedFor.push(line?.id ?? null);
     return Promise.resolve(db.items);
   },

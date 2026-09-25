@@ -23,7 +23,10 @@ import { supabase, type TrackerItem } from '../supabase';
 import { getStoredIdentity } from '../identity';
 import {
   MAIN_LINE_NAME,
+  isMainLine,
+  lineById,
   orderedLines,
+  sessionLabel,
   toReviewLine,
   type ReviewLine,
 } from './lines';
@@ -305,6 +308,92 @@ export async function lastSessionOnLine(lineId: string | null | undefined): Prom
   }
 }
 
+/** One meeting by id, or null. The session a variant left from. */
+export async function sessionById(id: string | null | undefined): Promise<LineSession | null> {
+  if (!id) return null;
+  try {
+    const { data, error } = await supabase
+      .from('tracker_sessions')
+      .select('*')
+      .eq('id', id)
+      .limit(1);
+    if (error || !data || data.length === 0) return null;
+    return toLineSession((data as Array<Record<string, unknown>>)[0]);
+  } catch (err) {
+    console.error('[linesRepo] sessionById threw:', err);
+    return null;
+  }
+}
+
+/**
+ * The meeting this line starts from.
+ *
+ * Its own newest one, which is batch BK's "a session starts where the line left
+ * off". For a variant that has NEVER met there is no such meeting, and the answer
+ * is the one it left: the session it was started from, whose scene and whose open
+ * cards are what the first meeting on a variant is a continuation of
+ * (docs/plan/15-sessions-and-variants.md batch BL). Without this a brand new
+ * variant opens on the review's whole history — whatever the main line uploaded
+ * last, which is exactly the model the people exploring the variant walked away
+ * from.
+ *
+ * A variant that HAS met answers its own last meeting and never the parent, so
+ * meeting A2 on a variant starts from A1 and not from the main line's S3.
+ */
+export async function lineOriginSession(line: ReviewLine | null | undefined): Promise<LineSession | null> {
+  if (!line) return null;
+  const last = await lastSessionOnLine(line.id);
+  if (last) return last;
+  if (line.kind === 'variant' && line.parentSessionId) return sessionById(line.parentSessionId);
+  return null;
+}
+
+/** One row of review_lines this read needs the adopted scene from. */
+interface AdoptedSceneRow {
+  closed_at: string | null;
+  adopted_revision_ids: string[] | null;
+}
+
+/**
+ * What the main line's scene became at the newest adoption, or null.
+ *
+ * Read as its own query rather than as a column on ReviewLine on purpose: an
+ * install that applied docs/supabase-schema.sql at batch BK has review_lines and
+ * no `adopted_revision_ids`, and naming the column in the shared select would fail
+ * the whole read and take the map with it. Here a 42703 answers null, which is
+ * "no adoption to honour", and everything else carries on.
+ *
+ * Only honoured while it is NEWER than the main line's last meeting. A meeting held
+ * after the adoption wrote its own revision_ids and is the newer fact about what
+ * the main line is looking at, so nothing has to clear the column afterwards.
+ */
+async function adoptedSceneFor(reviewId: string, mainLineId: string): Promise<string[] | null> {
+  try {
+    const { data, error } = await supabase
+      .from('review_lines')
+      .select('closed_at,adopted_revision_ids')
+      .eq('review_id', reviewId)
+      .eq('status', 'adopted');
+    if (error || !data) return null;
+    let newest: AdoptedSceneRow | null = null;
+    for (const row of data as AdoptedSceneRow[]) {
+      const ids = Array.isArray(row.adopted_revision_ids)
+        ? row.adopted_revision_ids.filter((id): id is string => typeof id === 'string')
+        : [];
+      if (ids.length === 0) continue;
+      if (!newest || (row.closed_at ?? '') > (newest.closed_at ?? '')) newest = { ...row, adopted_revision_ids: ids };
+    }
+    if (!newest) return null;
+    const ids = (newest.adopted_revision_ids ?? []).filter((id): id is string => typeof id === 'string');
+    const last = await lastSessionOnLine(mainLineId);
+    if (last?.endedAt && (newest.closed_at ?? '') <= last.endedAt) return null;
+    return ids.length > 0 ? ids : null;
+  } catch (err) {
+    console.error('[linesRepo] adoptedSceneFor threw:', err);
+    return null;
+  }
+}
+
 /**
  * What was on screen when this line last met, as revision ids.
  *
@@ -318,6 +407,11 @@ export async function lastSessionOnLine(lineId: string | null | undefined): Prom
  * An EMPTY list is answered as null too, and deliberately: `revision_ids` is empty
  * for every meeting held on a built-in preset or before batch BC, and treating that
  * as "show nothing" would open such a room on an empty scene.
+ *
+ * Two additions in batch BL, and both are about a line that has not met since
+ * something changed: a variant that has never met starts from the session it left
+ * (lineOriginSession), and the main line starts from what the newest adoption put
+ * on it while no meeting has superseded that.
  */
 export async function originRevisionIds(
   reviewId: string | null | undefined,
@@ -326,9 +420,13 @@ export async function originRevisionIds(
   if (!reviewId) return null;
   const line = await resolveLine(reviewId, lineId);
   if (!line) return null;
-  const last = await lastSessionOnLine(line.id);
-  if (!last || last.revisionIds.length === 0) return null;
-  return last.revisionIds;
+  if (isMainLine(line)) {
+    const adopted = await adoptedSceneFor(reviewId, line.id);
+    if (adopted) return adopted;
+  }
+  const origin = await lineOriginSession(line);
+  if (!origin || origin.revisionIds.length === 0) return null;
+  return origin.revisionIds;
 }
 
 /**
@@ -349,6 +447,16 @@ export interface CarriedOverItem {
   /** Where it was raised, as the group's "from S2". Null when it has no number. */
   fromSessionId: string | null;
   fromSeq: number | null;
+  /**
+   * The same "S2", already spelled — but by the line the card is actually ON.
+   *
+   * Optional, and only `listCarriedOver` fills it. A card carried into a variant
+   * that has never met comes from the main line, and numbering it with the
+   * variant's own letter would call S2 "A2" on a line that has held two meetings
+   * at most. A reader with no label falls back to `sessionLabel(line, fromSeq)`,
+   * which is right for every card the line raised itself.
+   */
+  fromLabel?: string | null;
   createdAt: string;
 }
 
@@ -380,6 +488,29 @@ function toCarriedOver(row: Record<string, unknown>): CarriedOverItem | null {
 }
 
 /**
+ * The still-open cards on one line, as raw rows, oldest first.
+ *
+ * Split out of `listOpenLineItems` because batch BL reads the same rows for a
+ * second purpose — the cards a brand new variant carries from the session it left
+ * — and has to filter them by WHEN they were raised before it can show them.
+ */
+async function readOpenRows(lineId: string): Promise<Array<Record<string, unknown>>> {
+  try {
+    const { data, error } = await supabase
+      .from('tracker_items')
+      .select('*, session:tracker_sessions(*)')
+      .eq('line_id', lineId)
+      .in('status', OPEN_STATUSES)
+      .order('created_at', { ascending: true });
+    if (error || !data) return [];
+    return data as Array<Record<string, unknown>>;
+  } catch (err) {
+    console.error('[linesRepo] could not read the line’s open cards:', err);
+    return [];
+  }
+}
+
+/**
  * The cards still open on this line, from every meeting before this one.
  *
  * "Still open" is the tracker's own definition (lib/trackerContinuity.isClosed):
@@ -394,25 +525,86 @@ function toCarriedOver(row: Record<string, unknown>): CarriedOverItem | null {
  */
 export async function listOpenLineItems(line: Pick<ReviewLine, 'id'> | null | undefined): Promise<CarriedOverItem[]> {
   if (!line?.id) return [];
-  try {
-    const { data, error } = await supabase
-      .from('tracker_items')
-      .select('*, session:tracker_sessions(*)')
-      .eq('line_id', line.id)
-      .in('status', OPEN_STATUSES)
-      .order('created_at', { ascending: true });
-    if (error || !data) return [];
-    const items: CarriedOverItem[] = [];
-    for (const row of data as Array<Record<string, unknown>>) {
-      const item = toCarriedOver(row);
-      if (item) items.push(item);
-    }
-    return items;
-  } catch (err) {
-    console.error('[linesRepo] listOpenLineItems threw:', err);
-    return [];
+  const rows = await readOpenRows(line.id);
+  const items: CarriedOverItem[] = [];
+  for (const row of rows) {
+    const item = toCarriedOver(row);
+    if (item) items.push(item);
   }
+  return items;
 }
+
+/**
+ * Whether this card was raised at or before a given meeting on its own line.
+ *
+ * By the meeting's number first, because `seq` is the order the line's history is
+ * numbered in and is what the map draws; by timestamp when either meeting has no
+ * number (recorded before `seq` existed); and by the card's own creation as a last
+ * resort for one added by hand through the tracker, which names no meeting at all.
+ *
+ * Unanswerable is FALSE, not true: carrying a card nobody can place would put a
+ * risk in front of a meeting that may have closed it twice already, and the cost
+ * of leaving one out is a card that is still in the tracker where anybody can see it.
+ */
+function raisedAtOrBefore(row: Record<string, unknown>, upto: LineSession): boolean {
+  const session = (row['session'] ?? null) as Record<string, unknown> | null;
+  const rawSeq = session?.['seq'];
+  const seq = typeof rawSeq === 'number' && Number.isInteger(rawSeq) ? rawSeq : null;
+  if (seq !== null && upto.seq !== null) return seq <= upto.seq;
+  const ended = typeof session?.['ended_at'] === 'string' ? (session?.['ended_at'] as string) : '';
+  if (ended !== '' && upto.endedAt !== '') return ended <= upto.endedAt;
+  const created = typeof row['created_at'] === 'string' ? row['created_at'] : '';
+  if (created !== '' && upto.endedAt !== '') return created <= upto.endedAt;
+  return false;
+}
+
+/**
+ * The cards this room's meeting is a continuation of — what the Capture panel's
+ * "Carried over" group shows.
+ *
+ * For a line that has met, exactly `listOpenLineItems`: its own still-open cards,
+ * each labelled by its own number. For a VARIANT THAT HAS NEVER MET, the cards its
+ * parent line was still carrying at the session it left from (batch BL), because
+ * the plan's rule is that a variant "begins with that session's model and open
+ * cards" — and those cards are on the parent line, not on it.
+ *
+ * They are the SAME tracker items, not copies: nothing here writes a row, and a
+ * card closed in the variant's room is closed in the tracker and on the main line
+ * too. Adopting the variant therefore does not move them either — they were never
+ * on it. Only the cards the variant's own meetings raised move.
+ *
+ * Once the variant has met, its own cards are what it carries and this answers them;
+ * a variant that has met and closed everything is a variant with nothing to carry,
+ * and reaching back to the parent would resurrect cards the people exploring it
+ * dealt with on purpose.
+ */
+export async function listCarriedOver(line: ReviewLine | null | undefined): Promise<CarriedOverItem[]> {
+  if (!line) return [];
+  const own = await listOpenLineItems(line);
+  const label = (items: CarriedOverItem[], from: ReviewLine | null): CarriedOverItem[] =>
+    items.map((item) => ({ ...item, fromLabel: sessionLabel(from, item.fromSeq) }));
+  if (own.length > 0) return label(own, line);
+  if (line.kind !== 'variant' || !line.parentSessionId) return own;
+
+  const met = await lastSessionOnLine(line.id);
+  if (met) return own;
+  const parent = await sessionById(line.parentSessionId);
+  if (!parent?.lineId) return own;
+
+  const rows = await readOpenRows(parent.lineId);
+  const carried: CarriedOverItem[] = [];
+  for (const row of rows) {
+    if (!raisedAtOrBefore(row, parent)) continue;
+    const item = toCarriedOver(row);
+    if (item) carried.push(item);
+  }
+  if (carried.length === 0) return own;
+  // The label is the PARENT line's, so a card raised in S3 reads "from S3" in a
+  // room that is on Variant A rather than "from A3".
+  const lines = await listLines(line.reviewId);
+  return label(carried, lineById(lines, parent.lineId));
+}
+
 
 /**
  * Change one carried-over card, in the tracker.

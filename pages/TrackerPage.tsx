@@ -11,7 +11,8 @@ import { listAllCurations, type CurationSummary } from '../lib/curationsRepo';
 import { listModelRevisions, type ModelRevision } from '../lib/reviews/revisionsRepo';
 import { listLines } from '../lib/reviews/linesRepo';
 import { useSessionMap } from '../lib/reviews/useSessionMap';
-import { lineLabel, type ReviewLine } from '../lib/reviews/lines';
+import { useReviewRole, isMeetingHostOf } from '../lib/reviews/useReviewRole';
+import { lineFilterLabel, type ReviewLine } from '../lib/reviews/lines';
 import { isClosed } from '../lib/trackerContinuity';
 import {
   groupSessions,
@@ -2077,13 +2078,17 @@ const TrackerPage: React.FC = () => {
   const stats = useMemo(() => computeStats(reviewItems), [reviewItems]);
 
   // What the line filter offers: the review's own lines, named the way the session
-  // map names them. Empty until the review's lines have been read, which is also when
-  // the select hides itself — a filter with one entry in it is not a filter.
+  // map names them, plus what became of each one. A variant that has been adopted or
+  // dropped stays in the list — its cards are still in the tracker and still say they
+  // came from it, so a filter that hid it would hide the only way to find them — but
+  // it says so, because "Variant B" on its own is an offer to look at a line nobody
+  // is meeting on any more. Empty until the review's lines have been read, which is
+  // also when the select hides itself — a filter with one entry in it is not a filter.
   const lineOptions = useMemo<ReviewOption[]>(() => {
     if (!selectedReviewId) return [];
     return (linesByReview[selectedReviewId] ?? []).map(line => ({
       id: line.id,
-      label: lineLabel(line) ?? 'Line',
+      label: lineFilterLabel(line) ?? 'Line',
     }));
   }, [selectedReviewId, linesByReview]);
 
@@ -2091,6 +2096,46 @@ const TrackerPage: React.FC = () => {
   // is open AND a review is selected: with 'All design reviews' there is no one
   // history to draw, and useSessionMap(null) makes no request at all.
   const sessionMap = useSessionMap(mapOpen ? selectedReviewId : null);
+  // Pulled out so `afterLineChange` below can depend on the stable callback rather
+  // than on the object the hook builds fresh on every render.
+  const refreshMap = sessionMap.refresh;
+
+  // Whether this person may start, adopt or drop a variant of the review being looked
+  // at. The same question the room asks, answered from the same table
+  // (lib/reviews/roles.ts): on a deployment with accounts it is their role in THIS
+  // review, and on the default install with no accounts it is the meeting host — and
+  // the tracker is holding no meeting, so useReviewRole's own reading of "nobody has
+  // been named, so you are the host" is the answer there. That is what lets the people
+  // who run a review on a self-hosted install run its variants from the tracker as
+  // well as from the room. Hiding the actions is not the enforcement: the endpoint
+  // checks the caller's own token against the roster, and would refuse the press.
+  const { can: mayDoInReview, loading: reviewRoleLoading } = useReviewRole({
+    reviewId: selectedReviewId,
+    sessionHostId: null,
+    localUserId: null,
+  });
+  const mayEditLines = mayDoInReview('editReview') && !reviewRoleLoading;
+  // The same two facts, handed to the endpoint as well: the tracker is holding no
+  // meeting, so nobody has been named as its host, and "nobody has been named" is the
+  // app's own spelling of "you are the host" (lib/reviews/useReviewRole.isMeetingHostOf
+  // — the reading every other screen in the app uses for a solo session). It decides
+  // anything only on an install with no accounts, where there is no token to check;
+  // with accounts the endpoint ignores it and asks the roster.
+  const trackerHostsTheMeeting = isMeetingHostOf(null, null);
+
+  // Adopting moves cards between lines and stamps them with the moment they were
+  // taken in; dropping closes the variant's open cards with a reason. Every one of
+  // those rows is already on screen — the board, the sidebar's counts, the line
+  // filter's own labels — so all of it is read again rather than patched: the
+  // endpoint is the only place that knows what the write did.
+  const afterLineChange = useCallback(() => {
+    refreshMap();
+    setLinesByReview({});
+    void fetchItems();
+    void fetchSessions();
+    // `refreshMap` rather than `sessionMap`: the hook answers a fresh object every
+    // render, so depending on it would make this callback new on every render too.
+  }, [refreshMap, fetchItems, fetchSessions]);
 
   const continuityData = useMemo(
     () => ({ revisionsByReview, closedAtByItem, linesByReview }),
@@ -2239,6 +2284,14 @@ const TrackerPage: React.FC = () => {
                         revisions={sessionMap.revisions}
                         cards={sessionMap.cards}
                         emptyMessage={sessionMap.loading ? 'Reading this design review’s sessions…' : undefined}
+                        // The same three actions the room's map offers, gated on the
+                        // same rule. Starting a variant from here opens its room; the
+                        // tracker has no meeting in it, so adopting and dropping are
+                        // what this copy of the map is mostly for.
+                        reviewId={selectedReviewId}
+                        mayEditLines={mayEditLines}
+                        isMeetingHost={trackerHostsTheMeeting}
+                        onChanged={afterLineChange}
                       />
                     </React.Suspense>
                   </div>

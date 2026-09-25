@@ -19,6 +19,8 @@
 // the people using this are hardware engineers and the plan is explicit that the
 // programming metaphor must not show through. Nothing in this file may print one.
 
+import { shortDate } from '../trackerContinuity';
+
 /** What kind of line this is. The main line is the review's own run of meetings. */
 export type LineKind = 'main' | 'variant';
 
@@ -292,3 +294,101 @@ export function orderedLines(lines: readonly ReviewLine[]): ReviewLine[] {
   const byCreated = [...lines].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   return [...byCreated.filter((line) => line.kind === 'main'), ...byCreated.filter((line) => line.kind === 'variant')];
 }
+
+// ─── A line that is finished with ───────────────────────────────────────────
+// docs/plan/15-sessions-and-variants.md batch BL. An adopted or dropped variant is
+// kept, greyed, for the record — and "kept for the record" only means something if
+// every place its name appears says what happened to it. A filter entry that reads
+// "Variant B" for a side line nobody is meeting on any more is an offer to look at
+// something that is over; a card that reads "Variant B · B4" for a card closed
+// because the variant was dropped hides the reason it was closed.
+
+/**
+ * 'adopted' or 'dropped' for a variant that is finished with, null for one still
+ * being explored and for the main line — which is never either, because a review
+ * that has stopped meeting has not adopted or dropped itself.
+ */
+export function lineStatusWord(line: Pick<ReviewLine, 'kind' | 'status'> | null | undefined): 'adopted' | 'dropped' | null {
+  if (!line || line.kind !== 'variant') return null;
+  return line.status === 'adopted' || line.status === 'dropped' ? line.status : null;
+}
+
+/**
+ * "Variant A · Steel hinge pin · adopted" — the full label plus what became of it.
+ *
+ * For the tracker's line filter, which lists every line of a review including the
+ * finished ones and has nowhere else to put the fact. Identical to `lineLabel` for
+ * a line still being explored and for the main line, so a filter that offers three
+ * live lines reads exactly as it did before this batch.
+ */
+export function lineFilterLabel(line: Pick<ReviewLine, 'kind' | 'letter' | 'name' | 'status'> | null | undefined): string | null {
+  const base = lineLabel(line);
+  if (!base) return null;
+  const status = lineStatusWord(line);
+  return status ? `${base}${SEPARATOR}${status}` : base;
+}
+
+/**
+ * "Raised in Variant A · adopted 12 Oct" — what a card says once the variant it was
+ * raised on has been taken into the main line.
+ *
+ * Null unless BOTH halves are there. A card with no origin line was raised on the
+ * line it is on and has nothing to say about coming from somewhere else — including
+ * a card that has always been on the main line, where "Raised in Main line" would
+ * be a sentence about nothing; a card whose `adopted_at` was never written says
+ * where it was raised and stops there, because a date invented from `updated_at`
+ * would be the date somebody last touched the card and not the date the review took
+ * it in.
+ */
+export function adoptedCardLabel(
+  originLine: Pick<ReviewLine, 'kind' | 'letter' | 'name'> | null | undefined,
+  adoptedAt: string | null | undefined,
+): string | null {
+  if (!originLine || originLine.kind !== 'variant') return null;
+  const where = shortLineLabel(originLine);
+  if (!where) return null;
+  const when = adoptedAt ? shortDate(adoptedAt) : null;
+  if (!when) return null;
+  return `Raised in ${where}${SEPARATOR}adopted ${when}`;
+}
+
+/**
+ * "Dropped with Variant A: Too expensive to tool" — the reason stored on every card
+ * a dropped variant left open.
+ *
+ * Written by api/reviews/lines.ts and handed to drop_review_line, which puts the
+ * same string on every card it closes: one reason, word for word, on all of them,
+ * so that a reviewer who finds one of these cards in six months' time is reading
+ * the sentence the meeting agreed rather than a summary of it. Null for a variant
+ * with no usable label or no reason, because "Dropped with : " is not a sentence —
+ * and null for the main line, which is never dropped and which would otherwise
+ * produce a card saying "Dropped with Main line" about the review's own history.
+ */
+export function droppedCardReason(
+  variant: Pick<ReviewLine, 'kind' | 'letter' | 'name'> | null | undefined,
+  reason: string | null | undefined,
+): string | null {
+  if (!variant || variant.kind !== 'variant') return null;
+  const where = shortLineLabel(variant);
+  const why = reason?.trim();
+  if (!where || !why) return null;
+  return `Dropped with ${where}: ${why}`;
+}
+
+/**
+ * "Closed — dropped with Variant A: Too expensive to tool" — how the tracker shows
+ * a card that was closed because the variant exploring it was dropped.
+ *
+ * The stored reason is a sentence of its own ("Dropped with …") and this is a
+ * clause after the word "Closed", so the first letter goes down: the alternative is
+ * "Closed — Dropped with", which reads as two headings that have collided. Null for
+ * a card with no reason, which is every card closed by hand — those are described by
+ * their status and by lib/trackerContinuity's own line, and inventing a reason for
+ * them would be inventing a decision.
+ */
+export function closedCardLabel(closedReason: string | null | undefined): string | null {
+  const reason = closedReason?.trim();
+  if (!reason) return null;
+  return `Closed — ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
+}
+

@@ -509,6 +509,14 @@ const Interface: React.FC = () => {
               cards={sessionMap.cards}
               onClose={() => setShowSessions(false)}
               emptyMessage={sessionMap.loading ? 'Reading this design review’s sessions…' : undefined}
+              // The three variant actions, offered to the same people the Edit button
+              // is offered to: starting, adopting and dropping a variant are all
+              // `editReview` in lib/reviews/roles.ts, and hiding them here is the
+              // panel not offering a tool the endpoint would refuse.
+              reviewId={roomId ?? null}
+              mayEditLines={mayEditReview && !roleLoading}
+              isMeetingHost={isHost}
+              onChanged={sessionMap.refresh}
             />
           </Suspense>
         </div>

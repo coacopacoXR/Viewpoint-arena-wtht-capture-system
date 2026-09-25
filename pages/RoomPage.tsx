@@ -233,6 +233,12 @@ const RoomPage: React.FC = () => {
         if (useReviewSetupStore.getState().draft?.reviewId === roomId) {
           useReviewSetupStore.getState().discardDraft();
         }
+        // The row exists, so this room holds the review whether or not the seed
+        // below runs. Found live (batch BL): opening a variant from the Sessions
+        // map remounts the room with a review config already in the store, the
+        // guard below returns, and without this the variant's meetings were
+        // recorded with no review and no line.
+        useStore.getState().setActiveReviewId(roomId);
         // Somebody in this room has already changed the review — a write made in
         // the moment before the read landed. That copy is what the subscriber
         // below is about to save, so the row must not replace it.

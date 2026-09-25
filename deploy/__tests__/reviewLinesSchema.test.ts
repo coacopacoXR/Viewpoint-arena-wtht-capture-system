@@ -76,24 +76,134 @@ describe('docs/supabase-schema.sql — review_lines', () => {
 });
 
 describe('docs/supabase-schema.sql — review_lines row level security', () => {
-  it('is enabled, and written the way model_revisions is', () => {
+  it('is enabled, and reads are open', () => {
     expect(SQL).toContain('alter table review_lines enable row level security');
-    expect(SQL).toContain('create policy "public read review lines"   on review_lines for select using (true)');
-    expect(SQL).toContain('create policy "public insert review lines" on review_lines for insert with check (true)');
-    expect(SQL).toContain('create policy "public update review lines" on review_lines for update using (true)');
+    expect(SQL).toContain('create policy "public read review lines"       on review_lines for select using (true)');
+  });
+
+  // Batch BL tightened what the published anon key may write. Starting a variant,
+  // adopting one and dropping one all move other people's rows, so they go through
+  // api/reviews/lines.ts and the two functions below; the browser keeps exactly the
+  // one insert it needs, which is lib/reviews/linesRepo.ensureMainLine on room open.
+  it('lets the browser insert a main line and nothing else', () => {
+    expect(SQL).toContain(
+      'create policy "public insert main review line" on review_lines for insert with check (kind = \'main\')',
+    );
+  });
+
+  it('no longer lets the browser insert any line it likes', () => {
+    // The policy batch BK copied from model_revisions. Dropped, and not re-created:
+    // re-applying this file on an upgrade is what takes it away.
+    expect(SQL).toContain('drop policy if exists "public insert review lines" on review_lines');
+    expect(SQL).not.toContain('create policy "public insert review lines"');
+  });
+
+  it('lets the browser update no line at all', () => {
+    expect(SQL).toContain('drop policy if exists "public update review lines" on review_lines');
+    expect(SQL).not.toContain('create policy "public update review lines"');
+    expect(SQL).not.toContain('on review_lines for update');
+  });
+
+  it('has no delete policy: a line is the review\'s history', () => {
+    expect(SQL).not.toContain('on review_lines for delete');
+  });
+
+  it('takes the table grants back after the block that hands them out', () => {
+    // `grant … on all tables in schema public` runs later in the file and is
+    // evaluated when it runs, so the revoke has to come after it — and a table grant
+    // is checked before row level security, which is why one mechanism is not enough.
+    const grants = SQL.indexOf('grant select, insert, update, delete on all tables in schema public');
+    const revoke = SQL.indexOf('revoke update, delete on public.review_lines from anon, authenticated');
+    expect(grants).toBeGreaterThanOrEqual(0);
+    expect(revoke).toBeGreaterThan(grants);
+    // Insert and select stay: the map reads lines and ensureMainLine writes one.
+    expect(SQL).not.toContain('revoke all on public.review_lines');
   });
 
   it('drops each policy before creating it, so a re-run cannot fail on a duplicate', () => {
-    for (const name of ['public read review lines', 'public insert review lines', 'public update review lines']) {
+    for (const name of ['public read review lines', 'public insert main review line']) {
       const drop = SQL.indexOf(`drop policy if exists "${name}" on review_lines`);
       const create = SQL.indexOf(`create policy "${name}"`);
       expect(drop, `no drop for "${name}"`).toBeGreaterThanOrEqual(0);
       expect(create, `no create for "${name}"`).toBeGreaterThan(drop);
     }
   });
+});
 
-  it('has no delete policy: a line is the review\'s history', () => {
-    expect(SQL).not.toContain('on review_lines for delete');
+// ─── The two functions the api calls ────────────────────────────────────────
+
+describe('docs/supabase-schema.sql — adopting and dropping a variant', () => {
+  const ADOPT = SQL.slice(SQL.indexOf('create or replace function adopt_review_line'));
+  const DROP = SQL.slice(SQL.indexOf('create or replace function drop_review_line'));
+
+  it('creates both with `or replace`, so a re-run cannot fail', () => {
+    expect(SQL).toContain('create or replace function adopt_review_line');
+    expect(SQL).toContain('create or replace function drop_review_line');
+    expect(SQL).not.toMatch(/create function (?:public\.)?(?:adopt|drop)_review_line/);
+  });
+
+  it('adopts in one transaction: the cards move AND the variant is marked', () => {
+    // Half an adoption is the failure these functions exist to make impossible — a
+    // variant whose cards have moved but whose status is still 'active' can be
+    // adopted a second time and move them again.
+    expect(ADOPT).toContain('update tracker_items');
+    expect(ADOPT).toContain('set line_id = v_main.id');
+    expect(ADOPT).toContain('adopted_at = now()');
+    expect(ADOPT).toContain("set status = 'adopted'");
+    expect(ADOPT).toContain('closed_at = now()');
+    expect(ADOPT).toContain('adopted_revision_ids = p_revision_ids');
+  });
+
+  it('keeps where an adopted card was raised, which is the whole point of two columns', () => {
+    expect(ADOPT).toContain('origin_line_id = coalesce(origin_line_id, v_variant.id)');
+  });
+
+  it('refuses to adopt a variant that is already finished with, rather than doing it twice', () => {
+    expect(ADOPT).toContain("if v_variant.status <> 'active' then");
+    expect(ADOPT).toContain("'error', 'already_closed'");
+    expect(ADOPT).toContain("if not found or v_variant.kind <> 'variant' then");
+  });
+
+  it('drops in one transaction: the variant is marked AND its open cards close with the reason', () => {
+    expect(DROP).toContain("set status = 'dropped'");
+    expect(DROP).toContain('closed_at = now()');
+    expect(DROP).toContain("set status = 'Rejected'");
+    expect(DROP).toContain('closed_reason = p_closed_reason');
+  });
+
+  it('closes only the cards that were still open, and leaves a decision alone', () => {
+    expect(DROP).toContain("and status in ('Open', 'In Review')");
+  });
+
+  it('writes the same status history the tracker writes, so a card can still say when it closed', () => {
+    expect(DROP).toContain('insert into tracker_status_history (item_id, status, changed_by, note)');
+  });
+
+  it('never deletes the variant: it stays on the map, greyed, for the record', () => {
+    expect(ADOPT).not.toContain('delete from review_lines');
+    expect(DROP).not.toContain('delete from review_lines');
+  });
+
+  it('runs as its owner and cannot be reached by the browser', () => {
+    // EXECUTE goes to PUBLIC by default on a new function, and the table-level grants
+    // further down the file do not cover functions — so without these revokes the
+    // anon key the browser is built with could adopt or drop any variant of any review.
+    for (const name of ['adopt_review_line', 'drop_review_line']) {
+      expect(SQL).toContain(`revoke all on function public.${name}`);
+      expect(SQL).toMatch(new RegExp(`revoke all on function public\\.${name}[^;]*from public, anon, authenticated`));
+      expect(SQL).toContain(`grant execute on function public.${name}`);
+    }
+    expect(ADOPT).toContain('security definer');
+    expect(DROP).toContain('security definer');
+    // A definer function with no search_path is one that can be hijacked by a schema
+    // an attacker created first.
+    expect(ADOPT).toContain('set search_path = public');
+    expect(DROP).toContain('set search_path = public');
+  });
+
+  it('adds the column the adoption records, only where it is missing', () => {
+    expect(SQL).toContain('alter table review_lines\n  add column if not exists adopted_revision_ids uuid[];');
+    expect(LINES_TABLE).toContain('adopted_revision_ids uuid[]');
   });
 });
 
