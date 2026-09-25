@@ -216,11 +216,18 @@ export function layoutSessionMap(
     const own = inOrder(sessions.filter((s) => s.lineId === variant.id));
 
     // Where it leaves from: the session it was started at, or the main line's last
-    // meeting when that session is gone, or the start of the row when the review has
-    // never met on the main line at all.
+    // meeting when that session is gone, or the START of the row for a variant that
+    // was started with no meeting to leave from — batch BQ, a review that had not met
+    // yet — or the start of the row when the review has never met on the main line at
+    // all. A parentless variant leaves at the start rather than at the last meeting
+    // because it did not leave from that meeting: drawing it from there would say the
+    // variant continues a scene it was never given.
     const parent = variant.parentSessionId ? bySession.get(variant.parentSessionId) ?? null : null;
     const parentStop = parent ? mainStops.find((stop) => stop.session.id === parent.id) ?? null : null;
-    const originX = parentStop?.x ?? (mainStops.length > 0 ? mainStops[mainStops.length - 1].x : PAD_X);
+    const originX = parentStop?.x
+      ?? (variant.parentSessionId === null || mainStops.length === 0
+        ? PAD_X
+        : mainStops[mainStops.length - 1].x);
     const originY = MAIN_Y;
 
     const variantStops = own.map((session, index) =>

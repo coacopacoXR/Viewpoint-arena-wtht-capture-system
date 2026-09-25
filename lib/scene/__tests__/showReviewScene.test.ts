@@ -17,6 +17,9 @@ const { state } = vi.hoisted(() => ({
   state: {
     scene: { models: [], builtIn: null } as RoomScene,
     stored: [] as ModelRevision[],
+    // Which line of the review the room is on. Batch BQ2 made the once-per-open guard per
+    // LINE, so a test has to be able to move the room to another one.
+    activeLine: null as { id: string } | null,
     setRoomScene: vi.fn(),
     upsertSceneModel: vi.fn(),
   },
@@ -27,6 +30,9 @@ vi.mock('../../../store', () => ({
     getState: () => ({
       get scene() {
         return state.scene;
+      },
+      get activeLine() {
+        return state.activeLine;
       },
       setRoomScene: (scene: RoomScene) => {
         state.scene = scene;
@@ -89,6 +95,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   state.scene = { models: [], builtIn: null };
   state.stored = [];
+  state.activeLine = null;
   origin.revisionIds = null;
   forgetReviewScene('review-1');
   forgetReviewScene('review-2');
@@ -140,7 +147,10 @@ describe('showReviewScene — the line the room is on', () => {
 });
 
 describe('showReviewScene — the fallback every existing review takes', () => {
-  it('answers false for a preset, and reads no revisions', async () => {
+  it('answers false for a preset in a review with no stored revisions', async () => {
+    // Batch BQ2 made this function read the history whatever the asset names, so the
+    // preset fallback is now the answer for a review with NOTHING stored rather than for
+    // any asset that is not an imported model. Same false, same reason for the caller.
     expect(await showReviewScene('review-1', { modelType: 'headphones' }, 'test')).toBe(false);
     expect(state.setRoomScene).not.toHaveBeenCalled();
   });
@@ -323,5 +333,146 @@ describe('showReviewScene — the placement the review kept', () => {
       expect(model.rotation).toBeUndefined();
       expect(model.scale).toBeUndefined();
     }
+  });
+});
+
+// ─── A review whose models are only in its history (batch BQ2) ────────────────
+//
+// The live repro this batch exists for: a review created empty and filled by imports made
+// inside the room. Its models are in model_revisions and nowhere else — the asset still says
+// modelType 'none', because nothing writes an imported asset for a model a meeting added
+// after the review was set up. showReviewScene used to return false on its first line for
+// any asset that was not an imported model, so that history was never read at all and the
+// room opened on nothing.
+
+describe('showReviewScene — a review whose asset is not an imported model', () => {
+  beforeEach(() => {
+    state.stored = [
+      revision({ id: 'rev-1', line: 'headphones', revision: 'A', hash: HASH_A, fileName: 'headphones.glb' }),
+      revision({ id: 'rev-2', line: 'bicycle', revision: 'A', hash: HASH_B, fileName: 'bicycle.glb' }),
+    ];
+  });
+
+  it('builds the scene from the stored revisions anyway', async () => {
+    expect(await showReviewScene('review-1', { modelType: 'none' }, 'test')).toBe(true);
+
+    expect(state.scene.models.map((model) => model.line).sort()).toEqual(['bicycle', 'headphones']);
+    expect(state.scene.models.every((model) => model.visible)).toBe(true);
+  });
+
+  it('narrows to the line the room is on, the way it does for an imported asset', async () => {
+    state.activeLine = { id: 'line-a' };
+    origin.revisionIds = ['rev-2'];
+
+    await showReviewScene('review-1', { modelType: 'none' }, 'test');
+
+    expect(state.scene.models).toHaveLength(1);
+    expect(state.scene.models[0]).toMatchObject({ line: 'bicycle', revision: 'A' });
+  });
+
+  it('keeps the placements the review stored', async () => {
+    await showReviewScene('review-1', {
+      modelType: 'none',
+      placements: [{ line: 'bicycle', revision: 'A', offset: [3, 0, 0], rotation: [0, 1, 0], scale: 1.5 }],
+    }, 'test');
+
+    expect(state.scene.models.find((model) => model.line === 'bicycle')?.offset).toEqual([3, 0, 0]);
+    expect(state.scene.models.find((model) => model.line === 'bicycle')?.scale).toBe(1.5);
+  });
+
+  it('answers false, and leaves the preset to its caller, when the review has no history', async () => {
+    state.stored = [];
+
+    expect(await showReviewScene('review-1', { modelType: 'headphones' }, 'test')).toBe(false);
+    expect(await showReviewScene('review-1', undefined, 'test')).toBe(false);
+    expect(state.setRoomScene).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Once per open, and an open is a review AND a line ────────────────────────
+//
+// The guard that stops a realtime echo from rebuilding the scene over what somebody has
+// since hidden or moved used to be keyed by review id alone. A page that walks from a
+// review's main room into one of its variants opens the SAME review on a different model,
+// so the variant skipped the build and kept whatever the main line had left on screen —
+// which in a variant room whose server has never held a scene is nothing at all.
+
+describe('showReviewScene — once per review AND per line', () => {
+  beforeEach(() => {
+    state.stored = [
+      revision({ id: 'rev-1', revision: 'A', hash: HASH_A }),
+      revision({ id: 'rev-2', revision: 'B', hash: HASH_B, fileName: 'bracket-v2.step' }),
+    ];
+  });
+
+  it('builds again when the same review is opened on another line', async () => {
+    const { listModelRevisions } = await import('../../reviews/revisionsRepo');
+    const { originRevisionIds } = await import('../../reviews/linesRepo');
+
+    await showReviewScene('review-1', ASSET, 'test');
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(1);
+
+    // The variant's room: same page, same review, a server that has never held a scene and
+    // has just said so by emptying this one.
+    state.activeLine = { id: 'line-a' };
+    state.scene = { models: [], builtIn: null };
+
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(2);
+    // And the read it makes is for the line the room is on, not for the review as a whole.
+    expect(vi.mocked(originRevisionIds).mock.calls[1]?.[1]).toBe('line-a');
+    expect(state.scene.models).toHaveLength(2);
+  });
+
+  it('does not build twice for the line it is already on', async () => {
+    const { listModelRevisions } = await import('../../reviews/revisionsRepo');
+    state.activeLine = { id: 'line-a' };
+
+    await showReviewScene('review-1', ASSET, 'test');
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(1);
+  });
+
+  it('answers a preset review false both times, rather than claiming a scene it did not build', async () => {
+    // The guard's answer has to match the first one's: a caller reads false as "fall back to
+    // a preset", and true would have told activeReviewStore's syncMainModel to leave the
+    // screen alone after something else had already emptied it.
+    state.stored = [];
+
+    expect(await showReviewScene('review-1', { modelType: 'bicycle' }, 'test')).toBe(false);
+    expect(await showReviewScene('review-1', { modelType: 'bicycle' }, 'test')).toBe(false);
+  });
+
+  it('rebuilds on demand for a room whose server has never held a scene', async () => {
+    const { listModelRevisions } = await import('../../reviews/revisionsRepo');
+
+    await showReviewScene('review-1', ASSET, 'test');
+    state.scene = { models: [], builtIn: null };
+
+    await showReviewScene('review-1', ASSET, 'test', { force: true });
+
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(2);
+    expect(state.scene.models).toHaveLength(2);
+  });
+
+  it('forgets every line of a review when the review is left', async () => {
+    const { listModelRevisions } = await import('../../reviews/revisionsRepo');
+
+    await showReviewScene('review-1', ASSET, 'test');
+    state.activeLine = { id: 'line-a' };
+    await showReviewScene('review-1', ASSET, 'test');
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(2);
+
+    // Leaving the review leaves all of its lines, so coming back opens both like the first
+    // time rather than only whichever one was last on screen.
+    forgetReviewScene('review-1');
+    state.activeLine = null;
+    state.scene = { models: [], builtIn: null };
+
+    await showReviewScene('review-1', ASSET, 'test');
+
+    expect(vi.mocked(listModelRevisions).mock.calls).toHaveLength(3);
   });
 });

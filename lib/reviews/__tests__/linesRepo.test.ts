@@ -127,6 +127,31 @@ function answerByTable(tableData: Record<string, unknown>): void {
   route.current = (table) => ({ data: tableData[table] ?? [], error: null });
 }
 
+/**
+ * A router keyed on the table AND on which line a tracker_sessions read asked for.
+ *
+ * Needed by the parentless-variant case below, where `originRevisionIds` reads one
+ * line's meetings, finds none, and then reads the MAIN line's — and a single canned
+ * answer per table would hand it the same rows both times, so the second read would
+ * look like the first had succeeded and the fallback would never be reached.
+ *
+ * The line is read off `calls`, which records every chained method with its arguments:
+ * the router runs on a microtask after the whole expression has been built, so the last
+ * `eq` recorded for that table is this query's.
+ */
+function answerByTableAndLine(
+  tableData: Record<string, unknown>,
+  sessionsByLine: Record<string, unknown[]>,
+): void {
+  route.current = (table) => {
+    if (table !== 'tracker_sessions') return { data: tableData[table] ?? [], error: null };
+    const filters = calls.filter((call) => call.table === table && call.op === 'eq');
+    const last = filters[filters.length - 1];
+    const lineId = last ? String(last.args[1] ?? '') : '';
+    return { data: sessionsByLine[lineId] ?? [], error: null };
+  };
+}
+
 beforeEach(() => {
   calls.length = 0;
   identity.value = null;
@@ -448,6 +473,70 @@ describe('originRevisionIds — what a session starts from', () => {
   it('answers null for an ad-hoc room, which has no review to have lines', async () => {
     await expect(originRevisionIds(null, null)).resolves.toBeNull();
     expect(calls).toHaveLength(0);
+  });
+
+  // ─── A variant with no meeting to leave from (batch BQ) ─────────────────────
+  //
+  // api/reviews/lines.ts writes parent_session_id NULL for a variant started in a
+  // review that had never met. Such a variant has no session of its own and no parent
+  // session, so lineOriginSession answers null for it — and null here means "rebuild
+  // from the review's whole history", which is NOT what the main line's room would be
+  // showing if the main line has met since. So the main line's own answer is asked for.
+
+  it('answers what the main line is showing for a variant with no meeting to leave from', async () => {
+    answerByTableAndLine(
+      { review_lines: [mainRow(), variantRow({ id: 'line-new', letter: 'B', parent_session_id: null })] },
+      {
+        // The variant itself has never met.
+        'line-new': [],
+        // The main line met after the variant was started, and was looking at Rev C.
+        'line-main': [{
+          id: 'sess-3', title: 'Third look', ended_at: '2026-09-09T16:00:00.000Z',
+          participant_count: 4, line_id: 'line-main', seq: 3, revision_ids: ['rev-c'],
+        }],
+      },
+    );
+
+    await expect(originRevisionIds(REVIEW, 'line-new')).resolves.toEqual(['rev-c']);
+  });
+
+  it('answers null for such a variant in a review that has STILL never met, so the room rebuilds from its own revisions', async () => {
+    answerByTableAndLine(
+      { review_lines: [mainRow(), variantRow({ id: 'line-new', letter: 'B', parent_session_id: null })] },
+      { 'line-new': [], 'line-main': [] },
+    );
+
+    // Which is the honest answer: there is no scene to inherit, so the room shows the
+    // newest revision of every line the review has stored — the same thing the main
+    // line's own room would show.
+    await expect(originRevisionIds(REVIEW, 'line-new')).resolves.toBeNull();
+  });
+
+  it('still leaves from the meeting it was started at, for a variant that HAS one', async () => {
+    // The fallback above is for a line with no origin at all. A variant started from a
+    // meeting keeps leaving from that meeting even after the main line has moved on —
+    // that is the whole point of a variant, and it is what the room's "Carried over"
+    // cards are the cards of.
+    const parent = {
+      id: 'sess-2', title: 'Second look', ended_at: '2026-09-08T16:00:00.000Z',
+      participant_count: 5, line_id: 'line-main', seq: 2, revision_ids: ['rev-b'],
+    };
+    answerByTableAndLine(
+      { review_lines: [mainRow(), variantRow()] },
+      {
+        // The variant has never met, so its origin is the meeting it left from…
+        'line-a': [],
+        // …asked for by id, which is the read sessionById makes.
+        'sess-2': [parent],
+        // …and NOT what the main line is on now, which has moved on to Rev C since.
+        'line-main': [parent, {
+          id: 'sess-3', title: 'Third look', ended_at: '2026-09-09T16:00:00.000Z',
+          participant_count: 4, line_id: 'line-main', seq: 3, revision_ids: ['rev-c'],
+        }],
+      },
+    );
+
+    await expect(originRevisionIds(REVIEW, 'line-a')).resolves.toEqual(['rev-b']);
   });
 });
 

@@ -254,6 +254,30 @@ describe('layoutSessionMap — a variant that is finished with', () => {
     const lastMain = layout.stops.find((stop) => stop.session.id === 'sess-3');
     expect(variantStop?.x).toBeGreaterThan(lastMain?.x ?? 0);
   });
+
+  it('leaves a variant with no meeting to leave from at the START of the main line', () => {
+    // Batch BQ: api/reviews/lines.ts writes parent_session_id NULL for a variant started
+    // in a review that had never met, and the main line may have met since. Drawing the
+    // leave from the main line's last stop — which is what a missing parent used to mean,
+    // because a missing parent could only be a deleted one — would say the variant
+    // continues a scene it was never given.
+    const parentless: ReviewLine = { ...VARIANT_A, id: 'line-new', letter: 'B', parentSessionId: null };
+    const layout = layoutSessionMap(
+      [MAIN, parentless],
+      [...MAIN_SESSIONS, session('v-1', 1, parentless.id)],
+      REVISIONS,
+      [],
+    );
+
+    const firstMain = layout.stops.find((stop) => stop.session.id === 'sess-1');
+    const leave = layout.edges.find((edge) => edge.kind === 'leave');
+    expect(leave?.from.x).toBe(firstMain?.x);
+    expect(leave?.from.y).toBe(firstMain?.y);
+    // And its own first stop is still to the right of that, so the row reads left to
+    // right rather than back on itself.
+    const variantStop = layout.stops.find((stop) => stop.session.id === 'v-1');
+    expect(variantStop?.x).toBeGreaterThan(leave?.from.x ?? 0);
+  });
 });
 
 // ─── The drawing ────────────────────────────────────────────────────────────

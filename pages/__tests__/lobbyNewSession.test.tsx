@@ -195,6 +195,21 @@ function newReviewButton(): HTMLElement {
   return screen.getByTestId('new-design-review');
 }
 
+/**
+ * Start a review, which since batch BQ is two presses: the button opens onto the name
+ * field in its place, and Enter in that field creates. An empty field is the answer
+ * "nobody named it", so the review created is the untitled one this file has always
+ * been asserting on.
+ */
+async function startReview() {
+  // Two fireEvent calls and then a tick, rather than both inside one `await act(async…)`:
+  // an async act scope does not flush between events, so the field the first click
+  // renders would not be in the DOM for the second.
+  fireEvent.click(newReviewButton());
+  fireEvent.keyDown(screen.getByTestId('new-design-review-field'), { key: 'Enter' });
+  await act(async () => {});
+}
+
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
@@ -218,9 +233,7 @@ describe('the lobby has one button that starts a design review', () => {
     expect(screen.queryByRole('button', { name: /new session/i })).toBeNull();
     expect(screen.getByRole('button', { name: 'New design review' })).toBeInTheDocument();
 
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
+    await startReview();
 
     expect(createReviewMock).toHaveBeenCalledTimes(1);
     const reviewId = createReviewMock.mock.calls[0][0];
@@ -237,9 +250,7 @@ describe('the lobby has one button that starts a design review', () => {
     createReviewMock.mockResolvedValue(written);
     await renderLobby();
 
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
+    await startReview();
 
     // RoomPage reads the handover draft FIRST, so the side panel has a review to show
     // rather than a panel with nothing in it.
@@ -250,9 +261,7 @@ describe('the lobby has one button that starts a design review', () => {
     createReviewMock.mockResolvedValue(null);
     await renderLobby();
 
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
+    await startReview();
 
     // The default self-hosted install has no database configured, so a refused write is
     // its NORMAL answer, not an incident. Blocking the room there would take this button
@@ -270,16 +279,14 @@ describe('the lobby has one button that starts a design review', () => {
     localStorage.clear();
     await renderLobby();
 
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
+    await startReview();
 
     expect(screen.getByText('Enter your name first.')).toBeInTheDocument();
     expect(createReviewMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId('room-path')).toBeNull();
   });
 
-  it('makes one review when the button is clicked twice', async () => {
+  it('makes one review when Create is pressed twice', async () => {
     let release: ((value: unknown) => void) | null = null;
     createReviewMock.mockReturnValue(
       new Promise<unknown>((resolve) => {
@@ -288,16 +295,19 @@ describe('the lobby has one button that starts a design review', () => {
     );
     await renderLobby();
 
-    const button = newReviewButton();
     await act(async () => {
-      fireEvent.click(button);
+      fireEvent.click(newReviewButton());
     });
-    expect(button).toBeDisabled();
+    const create = screen.getByTestId('new-design-review-create');
+    await act(async () => {
+      fireEvent.click(create);
+    });
+    expect(create).toBeDisabled();
 
     // Either the disabled button or the handler's own early return would stop the second
     // row, and a second row is a review nobody will ever open again.
     await act(async () => {
-      fireEvent.click(button);
+      fireEvent.click(create);
     });
     expect(createReviewMock).toHaveBeenCalledTimes(1);
 

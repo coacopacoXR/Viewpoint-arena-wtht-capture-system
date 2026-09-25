@@ -126,7 +126,8 @@ export function asRoomScene(value: unknown): RoomScene | null {
 }
 
 /**
- * What SCENE_STATE carries, rebuilt — the scene and who may change it.
+ * What SCENE_STATE carries, rebuilt — the scene, who may change it, and whether the
+ * room has ever held one.
  *
  * The client validates it too, even though its own room server built it: a
  * SCENE_STATE that threw would take the rest of the message loop with it, and
@@ -137,7 +138,32 @@ export function asSceneStatePayload(value: unknown): SceneStatePayload | null {
   const scene = asRoomScene(value);
   if (!scene) return null;
   const record = value as Record<string, unknown>;
-  return { ...scene, modelEditors: asModelEditors(record.modelEditors) ?? 'host' };
+  return {
+    ...scene,
+    modelEditors: asModelEditors(record.modelEditors) ?? 'host',
+    // ABSENT reads as seeded, and that asymmetry is deliberate: a room server that
+    // has not been updated sends no flag at all, and a client that read that as
+    // "never seeded" would rebuild its scene from the database over whatever that
+    // server was actually holding. Only an explicit false — which only a server that
+    // can accept a SCENE_SEED ever sends — asks a client to seed one.
+    seeded: record.seeded !== false,
+  };
+}
+
+/**
+ * Whether a record this room server finds in its OWN storage means "already seeded".
+ *
+ * A record written by this build carries `seeded` and is believed. One written by an
+ * older build does not, and there the content is the evidence: a build with no seed
+ * path only ever persisted a scene it had been handed, so a record holding any model —
+ * or a chosen sample — came from an import or a change, which is what seeded means. An
+ * older record holding NOTHING is the one case that reads as unseeded, and correctly:
+ * that room was empty when it was written and is empty now, so starting it from its
+ * design review's stored models is still the thing nobody has done.
+ */
+export function seededFromStorage(record: Record<string, unknown>, scene: RoomScene): boolean {
+  if (typeof record.seeded === 'boolean') return record.seeded;
+  return scene.models.length > 0 || scene.builtIn !== null;
 }
 
 /** One operation, rebuilt. Null means "this server cannot apply that". */

@@ -147,6 +147,33 @@ async function readLastSession(lineId: string): Promise<SessionRow | null> {
   return toSessionRow(Array.isArray(rows) ? rows[0] : undefined);
 }
 
+/**
+ * Whether the main line has ever met.
+ *
+ * Meetings recorded before review_lines existed have `line_id` NULL, and they are the
+ * main line's: that is where components/review/SessionMap.layoutSessionMap draws them
+ * and where the backfill in docs/supabase-schema.sql puts them. Counting them here is
+ * what stops a variant being started "from nowhere" in a review that HAS met, which
+ * would leave the map with a line leaving from nothing and the room opening on the
+ * wrong model.
+ *
+ * Every session of the review is read and filtered rather than asked for with an
+ * `or=(line_id.eq.X,line_id.is.null)`: a review has tens of meetings, and one plain
+ * read is easier to get right than PostgREST's embedded-or syntax.
+ */
+async function mainLineHasSessions(reviewId: string, mainLineId: string): Promise<boolean> {
+  const rows = (await json(
+    await postgrestFetch(`tracker_sessions?review_id=eq.${enc(reviewId)}&select=line_id`),
+    'the main line session read',
+    TAG,
+  )) as Array<Record<string, unknown>>;
+  if (!Array.isArray(rows)) return false;
+  return rows.some((row) => {
+    const line = row['line_id'];
+    return line === null || line === undefined || line === mainLineId;
+  });
+}
+
 async function readRevisions(reviewId: string): Promise<AdoptableRevision[]> {
   const rows = (await json(
     await postgrestFetch(`model_revisions?review_id=eq.${enc(reviewId)}&select=id,line,revision&order=created_at.asc`),
@@ -272,23 +299,30 @@ async function explore(
     res.status(400).json({ error: `That name is longer than ${MAX_NAME} characters.` });
     return;
   }
+  const lines = await readLines(reviewId);
+  const main = await ensureMainLine(reviewId, lines, caller.name);
+
   const parentSessionId = bodyString(body, 'parentSessionId');
-  if (!parentSessionId) {
+  if (parentSessionId) {
+    const parent = await readSession(parentSessionId);
+    // A session of ANOTHER review is refused rather than ignored: the map draws a
+    // variant leaving from a stop it names, and a stop from somewhere else is a line
+    // floating in mid-air with nothing attached to it.
+    if (!parent || (parent.reviewId !== null && parent.reviewId !== reviewId)) {
+      res.status(404).json({ error: 'That session is not part of this design review.' });
+      return;
+    }
+  } else if (!main || (await mainLineHasSessions(reviewId, main.id))) {
+    // NO MEETING NAMED (batch BQ). A review that has been curated but has never met has
+    // no session to leave from, and its variant is still worth starting: the line is
+    // written with parent_session_id NULL and lib/reviews/linesRepo.originRevisionIds
+    // opens its room on what the main line is showing now, which for a review that has
+    // not met is the review's own stored revisions. A review that HAS met is refused,
+    // because there the missing id is a client that did not read rather than a line
+    // with nothing to leave from — and the variant would open on the wrong model.
     res.status(400).json({ error: 'A variant leaves from one of this review’s sessions.' });
     return;
   }
-
-  const parent = await readSession(parentSessionId);
-  // A session of ANOTHER review is refused rather than ignored: the map draws a
-  // variant leaving from a stop it names, and a stop from somewhere else is a line
-  // floating in mid-air with nothing attached to it.
-  if (!parent || (parent.reviewId !== null && parent.reviewId !== reviewId)) {
-    res.status(404).json({ error: 'That session is not part of this design review.' });
-    return;
-  }
-
-  const lines = await readLines(reviewId);
-  await ensureMainLine(reviewId, lines, caller.name);
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const known = attempt === 0 ? lines : await readLines(reviewId);
@@ -301,7 +335,9 @@ async function explore(
         kind: 'variant',
         name,
         letter,
-        parent_session_id: parentSessionId,
+        // NULL for a variant started in a review that has never met: it leaves from
+        // the model as it is now, which is what originRevisionIds then resolves.
+        parent_session_id: parentSessionId || null,
         status: 'active',
         created_by: caller.accountId,
         created_by_name: caller.name,

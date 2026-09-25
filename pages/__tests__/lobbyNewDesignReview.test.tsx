@@ -114,15 +114,17 @@ vi.mock('../../lib/supabase', () => {
 });
 
 const { createReviewMock, configHolder } = vi.hoisted(() => ({
-  createReviewMock: vi.fn<(reviewId: string) => Promise<unknown>>(),
+  createReviewMock: vi.fn<(reviewId: string, title?: string) => Promise<unknown>>(),
   configHolder: { current: null as Record<string, unknown> | null },
 }));
 
 // Only the two functions LobbyPage imports. The grid does NOT come out of
 // curationsRepo any more — lib/lobby/useLobbyData reads review_curations itself — so
-// listRecentCurations is no longer part of this page's surface.
+// listRecentCurations is no longer part of this page's surface. The title argument is
+// forwarded because naming the review is what batch BQ added, and "the row was written
+// with the name that was typed" is only assertable if the mock keeps it.
 vi.mock('../../lib/curationsRepo', () => ({
-  createReview: (reviewId: string) => createReviewMock(reviewId),
+  createReview: (reviewId: string, title?: string) => createReviewMock(reviewId, title),
   getCurationSummary: vi.fn(async () => null),
 }));
 
@@ -211,6 +213,29 @@ function newReviewButton(): HTMLElement {
   return screen.getByTestId('new-design-review');
 }
 
+/**
+ * Start a review, which since batch BQ is TWO presses: the button opens onto the name
+ * field in its place, and Enter in that field creates.
+ *
+ * `name` defaults to '' — an empty field — because that is what every test that was
+ * written before the field existed means by "press the button", and the answer has to
+ * stay the review it always was.
+ */
+async function startReview(name = '') {
+  // NOT wrapped in one `await act(async () => …)`: inside an async act scope React does
+  // not flush between events, so the field the first click renders would not be in the
+  // DOM for the second, and the key handler would still be the closure from the render
+  // before the typed value. fireEvent wraps itself in a synchronous act, which is what
+  // makes the three presses see each other.
+  fireEvent.click(newReviewButton());
+  const field = screen.getByTestId('new-design-review-field');
+  if (name !== '') fireEvent.change(field, { target: { value: name } });
+  fireEvent.keyDown(field, { key: 'Enter' });
+  // The create is async — a row is written and a navigation happens — so the assertions
+  // that follow need the tick.
+  await act(async () => {});
+}
+
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
@@ -257,9 +282,7 @@ describe('creating a review', () => {
     // the identity chip's menu where nobody would find it.
     expect(screen.getByTestId('lobby-name-field')).toBeInTheDocument();
 
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
+    await startReview();
 
     expect(screen.getByText('Enter your name first.')).toBeInTheDocument();
     expect(createReviewMock).not.toHaveBeenCalled();
@@ -269,9 +292,7 @@ describe('creating a review', () => {
   it('writes the row first, then opens that same review with Edit on', async () => {
     await renderLobby();
 
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
+    await startReview();
 
     expect(createReviewMock).toHaveBeenCalledTimes(1);
     const reviewId = createReviewMock.mock.calls[0][0];
@@ -291,9 +312,7 @@ describe('creating a review', () => {
     createReviewMock.mockResolvedValue(null);
     await renderLobby();
 
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
+    await startReview();
 
     // The default self-hosted install has no database configured, so a refused write is
     // its NORMAL answer, not an incident. Blocking the room there would take this
@@ -314,14 +333,12 @@ describe('creating a review', () => {
     createReviewMock.mockResolvedValue(written);
     await renderLobby();
 
-    await act(async () => {
-      fireEvent.click(newReviewButton());
-    });
+    await startReview();
 
     expect(useReviewSetupStore.getState().draft).toEqual(written);
   });
 
-  it('makes one review when the button is clicked twice', async () => {
+  it('makes one review when Create is pressed twice', async () => {
     let release: ((value: unknown) => void) | null = null;
     createReviewMock.mockReturnValue(
       new Promise<unknown>((resolve) => {
@@ -330,18 +347,21 @@ describe('creating a review', () => {
     );
     await renderLobby();
 
-    const button = newReviewButton();
     await act(async () => {
-      fireEvent.click(button);
+      fireEvent.click(newReviewButton());
     });
-    expect(button).toBeDisabled();
-    expect(button).toHaveTextContent('Creating…');
+    const create = screen.getByTestId('new-design-review-create');
+    await act(async () => {
+      fireEvent.click(create);
+    });
+    expect(create).toBeDisabled();
+    expect(create).toHaveTextContent('Creating…');
 
     // The button is disabled while a create is in flight, and the handler also returns
     // early on `creating` — either one alone would stop the second row, and a second
     // row is a review nobody will ever open again.
     await act(async () => {
-      fireEvent.click(button);
+      fireEvent.click(create);
     });
     expect(createReviewMock).toHaveBeenCalledTimes(1);
 
@@ -354,6 +374,65 @@ describe('creating a review', () => {
       `/room/${createReviewMock.mock.calls[0][0]}`,
     );
     expect(screen.getByTestId('room-search').textContent).toBe('?edit=1');
+  });
+});
+
+// ─── Naming it (batch BQ) ─────────────────────────────────────────────────────
+//
+// Nothing anywhere wrote review_curations.title before this, so every review the lobby
+// created was "Untitled design review" and the grid was a wall of identical cards. The
+// button now opens onto the name, in place, and the name is what the row is written with.
+
+describe('naming the review', () => {
+  it('asks for the name in place of the button, and writes the one that was typed', async () => {
+    await renderLobby();
+
+    fireEvent.click(newReviewButton());
+    const field = screen.getByTestId('new-design-review-field');
+    expect(field).toHaveAttribute('placeholder', 'e.g. Door hinge, rev C');
+    // Nothing is written by asking.
+    expect(createReviewMock).not.toHaveBeenCalled();
+
+    fireEvent.change(field, { target: { value: '  Door hinge, rev C  ' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await act(async () => {});
+
+    expect(createReviewMock).toHaveBeenCalledTimes(1);
+    // Trimmed: a name with spaces either side is the same name.
+    expect(createReviewMock.mock.calls[0][1]).toBe('Door hinge, rev C');
+    expect(screen.getByTestId('room-search').textContent).toBe('?edit=1');
+  });
+
+  it('creates the untitled review when the field is left empty, which is what the button did before it asked', async () => {
+    await renderLobby();
+
+    await startReview();
+
+    expect(createReviewMock).toHaveBeenCalledTimes(1);
+    expect(createReviewMock.mock.calls[0][1]).toBe('Untitled design review');
+    expect(screen.getByTestId('room-search').textContent).toBe('?edit=1');
+  });
+
+  it('caps the name at 120 characters, because a card and a room corner have to show it', async () => {
+    await renderLobby();
+    const long = 'x'.repeat(200);
+
+    await startReview(long);
+
+    expect(createReviewMock.mock.calls[0][1]).toHaveLength(120);
+  });
+
+  it('leaves the button as it was when the question is escaped, and creates nothing', async () => {
+    await renderLobby();
+
+    fireEvent.click(newReviewButton());
+    fireEvent.keyDown(screen.getByTestId('new-design-review-field'), { key: 'Escape' });
+    await act(async () => {});
+
+    expect(screen.queryByTestId('new-design-review-field')).toBeNull();
+    expect(newReviewButton()).toBeInTheDocument();
+    expect(createReviewMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('room-path')).toBeNull();
   });
 });
 

@@ -13,11 +13,18 @@ import { clearModelFileCache } from './modelsClient';
 import {
   describeSceneRefusal,
   emptyScene,
+  scenePermissions,
+  type BuiltInModel,
   type ModelEditors,
+  type RoomScene,
   type SceneRefusalReason,
   type SceneStatePayload,
   type SceneUpdate,
 } from './scene/roomScene';
+import { showReviewScene } from './scene/showCurationModel';
+import { useReviewRole } from './reviews/useReviewRole';
+import { reviewIdOfPartyRoom } from './reviews/partyRoom';
+import type { Role } from './reviews/roles';
 import { asSceneStatePayload, sceneFromLegacyReference } from './scene/sceneWire';
 import { usePointingTimelineStore } from './pointingTimelineStore';
 import type { PointingSegment } from './pointingTimelineStore';
@@ -47,6 +54,10 @@ type RoomMessage =
   | { type: 'MODEL_CHANGE'; payload: ModelReference }
   | { type: 'SCENE_STATE'; payload: SceneStatePayload }
   | { type: 'SCENE_UPDATE'; payload: SceneUpdate }
+  // The scene a client computed from its design review's history, offered to a room
+  // whose server says it has never held one. Accepted once, by a connection that may
+  // change the models; see seedScene in party/room.server.ts.
+  | { type: 'SCENE_SEED'; payload: RoomScene }
   | { type: 'SCENE_REFUSED'; payload: { reason: SceneRefusalReason } }
   | { type: 'SET_MODEL_EDITORS'; payload: { modelEditors: ModelEditors } }
   | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
@@ -344,6 +355,132 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     );
   }
 
+  // ─── Starting a room that has never held a scene (batch BQ2) ───────────────────
+  //
+  // The room server sends its scene on connect even when it is empty, and the handler
+  // below replaces this browser's copy with what arrives — batch BB's rule, and the
+  // right one for a room that IS the live space. But "empty" was two different facts
+  // with no way to tell them apart: a room somebody cleared, and a room nobody has ever
+  // put anything into. Every new variant room is the second kind, and so is any main
+  // room whose server storage is gone, and both wiped the models this browser had just
+  // built from the review's history. That is how the variant of a review holding two
+  // imported models came to show "No model yet", and went on showing it after a reload.
+  //
+  // `seeded: false` is the server saying it is the second kind. The answer is not to
+  // keep the empty scene but to compute the review's and offer it back — once, and only
+  // from a connection the SAME rule as SCENE_UPDATE lets change the models. Everybody
+  // else waits for the seeded SCENE_STATE that offer causes, so a participant and a
+  // late joiner both get the scene without being able to choose it.
+  const sessionHostId = useStore((state) => state.sessionHostId);
+  const { role, rolesApply, loading: roleLoading } = useReviewRole({
+    // The REVIEW's roles, also in a variant's room (`<reviewId>~A`).
+    reviewId: roomId ? reviewIdOfPartyRoom(roomId) : null,
+    sessionHostId,
+    localUserId: userRef.current.userId,
+  });
+  // Read through a ref inside the message handler, because nothing derived from a render
+  // may become a dependency of the effect that owns the socket: this hook hands back a
+  // fresh object literal every render, and an effect that re-ran on every render
+  // reopened the room (the trap pages/RoomPage.tsx's seed effect documents).
+  //
+  // `ready` is the part that matters. On a deployment with accounts the role is the SAFE
+  // one until the roster lands, so answering from it would have a participant who
+  // happened to arrive first offer a seed the server would then refuse. Waiting costs
+  // one round trip, and only on an install that has accounts.
+  const sceneRoleRef = useRef<{ role: Role | null; ready: boolean }>({ role: null, ready: false });
+  useEffect(() => {
+    sceneRoleRef.current = rolesApply
+      ? { role: roleLoading ? null : role, ready: !roleLoading }
+      : { role: null, ready: true };
+  });
+  const sceneSeedRef = useRef({ unseeded: false, attemptedKey: null as string | null, inFlight: false });
+
+  function attemptSceneSeed() {
+    const seed = sceneSeedRef.current;
+    if (!seed.unseeded || seed.inFlight) return;
+    const config = useActiveReviewStore.getState().config;
+    // No review in the store yet — and on a reload that is the common case rather than
+    // an edge one, because the room's SCENE_STATE beats the row read that fills it. The
+    // subscription the socket effect installs asks again the moment the config arrives.
+    const reviewId = config?.reviewId ?? null;
+    if (!reviewId) return;
+    const lineId = useStore.getState().activeLine?.id ?? null;
+    // Per line, the way showReviewScene's own once-per-open guard is keyed: one review
+    // opened on its main line and on a variant is two different scenes.
+    const key = lineId === null ? reviewId : `${reviewId} ${lineId}`;
+    if (seed.attemptedKey === key) return;
+    const authority = sceneRoleRef.current;
+    if (!authority.ready) return;
+
+    const { mayChangeModels } = scenePermissions({
+      role: authority.role,
+      modelEditors: useStore.getState().modelEditors,
+      userId: userRef.current.userId || null,
+      hostId: useStore.getState().sessionHostId,
+    });
+    // A "no" is NOT remembered. Found live (batch BQ2): in a fresh variant room the
+    // first render asks before HOST_CHANGE has arrived, so the host — the only one who
+    // may change models under "Host only" — was judged a participant, the answer was
+    // remembered, and the room stayed empty for good. Asking again on the next render
+    // is two ref reads. The room server checks the same rule on the way in — this is
+    // the client not offering what would be refused.
+    if (!mayChangeModels) return;
+    seed.attemptedKey = key;
+
+    seed.inFlight = true;
+    void (async () => {
+      try {
+        // `force`, because the once-per-open guard protects a scene this room says it
+        // does not have. And COMPUTED rather than read from the store first: the copy in
+        // the store is the empty one the SCENE_STATE just put there.
+        await showReviewScene(reviewId, config.asset, 'scene-seed', { force: true });
+      } catch (err) {
+        console.warn('[scene-seed] could not build this review’s scene:', err);
+      }
+      seed.inFlight = false;
+      // Asked again after the read: somebody else's seed can land while this one is in
+      // flight, and the room's answer to that is a SCENE_STATE with `seeded: true`.
+      if (!seed.unseeded) return;
+      const built = useStore.getState().scene;
+      // A preset the review names is part of the scene record too (`builtIn`), so a room
+      // that has never held anything starts from the same sample its review does. Read
+      // from the ASSET rather than from the store when the store has nothing: the config's
+      // own sync is what puts a preset on screen, and on a reload it runs a moment AFTER
+      // the SCENE_STATE that wiped it.
+      const named = config.asset?.modelType;
+      const preset: BuiltInModel | null =
+        named === 'synth' || named === 'headphones' || named === 'bicycle' ? named : null;
+      // Nothing to offer — a review with no revisions, no model and no preset. The room
+      // stays unseeded, which costs nothing and leaves the question open for a client that
+      // can answer it.
+      const offer: RoomScene | null =
+        built.models.length > 0 || built.builtIn !== null
+          ? built
+          : preset === null
+            ? null
+            : { models: [], builtIn: preset };
+      if (!offer) return;
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        seed.attemptedKey = null;
+        return;
+      }
+      // Cleared before the send rather than on the answer, so a second SCENE_STATE that
+      // crosses the relay cannot produce a second offer from this connection.
+      seed.unseeded = false;
+      socket.send(JSON.stringify({ type: 'SCENE_SEED', payload: offer } as RoomMessage));
+    })();
+  }
+
+  // Repeated on every render until it lands or is refused, because the three things it
+  // waits for each arrive on their own schedule: the review's row, the line this room
+  // resolved to, and — on a deployment with accounts — the roster the role is read from.
+  // Every check above is a ref read or two and the first one ends it for a room that is
+  // already seeded, which is every room but one nobody has put a model in yet.
+  useEffect(() => {
+    attemptSceneSeed();
+  });
+
   // Declared before the socket effect on purpose: effects run in order, so this
   // one is already asking for the session while the socket is still
   // handshaking, and the first knock usually carries the token.
@@ -391,6 +528,16 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     notifyJoinStateSubscribers();
     joinRequestsRef.current = [];
     notifyJoinRequestsSubscribers();
+
+    // A new room is a new question about its scene, so nothing the last one answered
+    // carries over — including "this browser may not change the models".
+    sceneSeedRef.current = { unseeded: false, attemptedKey: null, inFlight: false };
+    // The review's row lands AFTER the room's SCENE_STATE on a reload, and the seed is
+    // built from that row. A zustand write does not re-render this hook, so the question
+    // is asked again from a subscription rather than waited for.
+    const stopSceneSeedWatch = useActiveReviewStore.subscribe((state) => {
+      if (state.config) attemptSceneSeed();
+    });
 
     // The previous room's models are of no use here and can be hundreds of
     // megabytes, so they go rather than waiting to be evicted. The scene goes
@@ -585,6 +732,13 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         // reason to keep showing it would be that the room is still saying no,
         // and it just said yes.
         setSceneRefusal(null);
+        // Batch BQ2: this room has never held a scene, so the empty list above is an
+        // absence rather than a decision, and the clients in it are being asked what it
+        // shows. Answered from the review's own history for the LINE this room is on —
+        // see attemptSceneSeed, which is also what decides whether this connection may
+        // answer at all.
+        sceneSeedRef.current.unseeded = !state.seeded;
+        if (!state.seeded) attemptSceneSeed();
       } else if (msg.type === 'SCENE_REFUSED') {
         // Told to this connection only, because it is the only one that tried.
         // Surfaced in the model tree rather than logged: the alternative is a
@@ -592,6 +746,12 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
         // broken, when what actually happened is that the host has not let them
         // change what the room is looking at.
         const reason = msg.payload.reason;
+        // Unless what happened is that two connections offered the same empty room its
+        // review's models at the same moment and the first one won. Nobody pressed
+        // anything that was turned down, and the winner's SCENE_STATE is already on its
+        // way, so this is dropped: a banner about a race the room settled correctly
+        // would be noise about nothing.
+        if (reason === 'already_seeded') return;
         useStore.getState().setSceneRefusal(describeSceneRefusal(reason));
       } else if (msg.type === 'MODEL_CHANGE') {
         // A room server that has not been updated still relays the one model it
@@ -752,6 +912,8 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
 
     return () => {
       clearInterval(knockTimer);
+      stopSceneSeedWatch();
+      sceneSeedRef.current = { unseeded: false, attemptedKey: null, inFlight: false };
       socket.removeEventListener('open', knock);
       knockRef.current = null;
       socket.close();

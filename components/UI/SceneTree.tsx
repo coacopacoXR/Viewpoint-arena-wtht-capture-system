@@ -251,6 +251,22 @@ const SceneModelRow: React.FC<{ model: SceneModel; onCompare: (line: string) => 
                     {sceneModelLabel(model)}
                 </span>
 
+                {/* SAID IN WORDS, not only drawn. A revision an import superseded goes
+                    dark rather than being deleted — it is the version the older cards
+                    were raised against, and Compare needs it — and grey with a strike
+                    through it was the only thing saying so. To the person who just
+                    imported "Rev B" that looked like "Rev A is gone", which is the
+                    report batch BQ answers: a row that is still here says it is hidden,
+                    and the eye beside it is one click from bringing it back. */}
+                {!isVisible && (
+                    <span
+                        data-testid={`scene-model-hidden-${model.id}`}
+                        className="ml-1 shrink-0 px-1 py-px rounded bg-gray-100 font-mono text-[8px] font-bold uppercase tracking-wide text-gray-500"
+                    >
+                        hidden
+                    </span>
+                )}
+
                 {!entry && <Loader2 size={10} className="animate-spin text-gray-400 mr-1" />}
 
                 {canChangeModels && revisionsInLine > 1 && (
@@ -277,8 +293,14 @@ const SceneModelRow: React.FC<{ model: SceneModel; onCompare: (line: string) => 
                 )}
 
                 <div
-                    title={canChangeModels ? 'Hide or show for everyone' : (reason ?? 'Hide or show on your screen only')}
-                    className="w-5 h-5 flex items-center justify-center rounded hover:bg-gray-200 text-gray-400 hover:text-gray-700 ml-1"
+                    title={isVisible
+                        ? (canChangeModels ? 'Hide this model for everyone' : (reason ?? 'Hide this model on your screen only'))
+                        : 'Show this model again'}
+                    data-testid={`scene-model-eye-${model.id}`}
+                    className={clsx(
+                        "w-5 h-5 flex items-center justify-center rounded hover:bg-gray-200 ml-1",
+                        isVisible ? "text-gray-400 hover:text-gray-700" : "text-gray-500 hover:text-black"
+                    )}
                     onClick={handleToggleVis}
                 >
                     {isVisible ? <Eye size={10} /> : <EyeOff size={10} />}
@@ -1027,6 +1049,28 @@ const SceneTree: React.FC = () => {
                             </button>
                         </div>
                         <div className="flex flex-col gap-1">
+                            {/* FIRST, AND THE ONLY BLACK ONE.
+                                Batch BQ. The three answers used to be ordered revision ·
+                                beside · replace, and "New revision of Bracket — becomes Rev B
+                                and hides the one before it" was the one at the top in the
+                                boldest type. Read as an instruction rather than as an option,
+                                it says "the old model goes", and the user's report was exactly
+                                that: "importing one 3d model deletes the last". Nothing was
+                                deleted — a revision is kept and can be shown again — but the
+                                first thing on offer was the one that changes what is on
+                                screen, and the one that changes nothing about the models
+                                already there was second. So the safe answer leads, and the
+                                one that removes things is last and in red. */}
+                            <button
+                                onClick={() => finishImport(pending, 'beside')}
+                                data-testid="import-choice-beside"
+                                className="px-2 py-1.5 rounded border border-black bg-black hover:bg-gray-800 text-left"
+                            >
+                                <span className="block font-bold text-[9px] text-white">Add next to it</span>
+                                <span className="block text-[8px] text-gray-300">
+                                    Both models stay on screen.
+                                </span>
+                            </button>
                             {revisionTargets(scene.models, pending.fileName, activeLine).map(line => {
                                 // Marked, not chosen for them: the picker cannot know
                                 // whether the file really is the next revision of the
@@ -1034,10 +1078,12 @@ const SceneTree: React.FC = () => {
                                 // "hides the one before it" to the wrong line is the
                                 // kind of undo nobody expects to need.
                                 const suggested = revisionIntent && line === activeLine;
+                                const superseded = latestOfLine(scene.models, line)?.revision ?? null;
                                 return (
                                 <button
                                     key={line}
                                     onClick={() => finishImport(pending, 'revision', line)}
+                                    data-testid={`import-choice-revision-${line}`}
                                     className={clsx(
                                         "px-2 py-1 rounded border text-left",
                                         suggested
@@ -1053,28 +1099,26 @@ const SceneTree: React.FC = () => {
                                             </span>
                                         )}
                                     </span>
+                                    {/* Named, and said to be KEPT. "Hides the one before it"
+                                        was true and still read as a deletion, so the sentence
+                                        now names the revision going dark and says where it
+                                        comes back from. */}
                                     <span className="block text-[8px] text-gray-500">
-                                        Becomes Rev {nextRevisionFor(scene.models, line)} and hides the one before it
+                                        {superseded
+                                            ? `Shown instead of Rev ${superseded}. Rev ${superseded} is kept; show it again from the tree.`
+                                            : 'Shown instead of the one before it, which is kept; show it again from the tree.'}
                                     </span>
                                 </button>
                                 );
                             })}
                             <button
-                                onClick={() => finishImport(pending, 'beside')}
-                                className="px-2 py-1 rounded border border-gray-200 hover:bg-blue-50 hover:border-blue-300 text-left"
-                            >
-                                <span className="block font-bold text-[9px] text-gray-800">Add next to it</span>
-                                <span className="block text-[8px] text-gray-500">
-                                    A new line, placed beside what is there. Nothing is hidden.
-                                </span>
-                            </button>
-                            <button
                                 onClick={() => finishImport(pending, 'replace')}
+                                data-testid="import-choice-replace"
                                 className="px-2 py-1 rounded border border-gray-200 hover:bg-red-50 hover:border-red-300 text-left"
                             >
-                                <span className="block font-bold text-[9px] text-gray-800">Replace everything</span>
+                                <span className="block font-bold text-[9px] text-red-700">Replace everything</span>
                                 <span className="block text-[8px] text-gray-500">
-                                    Clears the scene and this meeting's comments, chat and cards
+                                    Removes all models from the scene and clears this meeting’s comments, chat and cards.
                                 </span>
                             </button>
                         </div>

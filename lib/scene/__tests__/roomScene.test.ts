@@ -581,6 +581,10 @@ const EVERY_REFUSAL: Record<SceneRefusalReason, true> = {
   'role-forbidden': true,
   'role-forbidden-setting': true,
   'scene-full': true,
+  // Batch BQ2: two connections offered the same never-seeded room its review's models
+  // at the same moment. It has a sentence like any other reason, and the client drops
+  // it without showing it — see the SCENE_REFUSED handler in lib/usePartyPresence.
+  'already_seeded': true,
   'unreadable-update': true,
 };
 const REFUSAL_REASONS = Object.keys(EVERY_REFUSAL) as SceneRefusalReason[];

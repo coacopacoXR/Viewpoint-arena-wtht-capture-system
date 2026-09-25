@@ -114,9 +114,30 @@ export interface RoomScene {
  */
 export type ModelEditors = 'host' | 'everyone' | string[];
 
-/** What SCENE_STATE carries: the scene, and who is allowed to change it. */
+/** What SCENE_STATE carries: the scene, who may change it, and whether it was ever set. */
 export interface SceneStatePayload extends RoomScene {
   modelEditors: ModelEditors;
+  /**
+   * Whether this room's scene has EVER been set — by an import, by a change, or by
+   * a seed. Batch BQ2.
+   *
+   * A room server that has never held a scene sends an empty one, and the client
+   * replaces its own with whatever arrives (that is batch BB's rule and it does not
+   * change). So "empty" used to mean two different things with no way to tell them
+   * apart: a room somebody deliberately cleared, and a room nobody has ever put
+   * anything in — every new variant room, and any main room whose server storage is
+   * gone. The second one is a room that should start from the design review's stored
+   * models, and until this flag existed nothing ever put them there: the variant of a
+   * review with two imported models opened on "No model yet", and stayed that way
+   * after a reload.
+   *
+   * False therefore means "this room is waiting for somebody to say what it shows",
+   * which is a request a client that may change models answers with SCENE_SEED. It is
+   * a fact about the ROOM rather than about the models: once anything has been
+   * accepted it is true for ever, so an emptied room stays emptied instead of being
+   * refilled from the database behind the person who emptied it.
+   */
+  seeded: boolean;
 }
 
 /**
@@ -165,6 +186,12 @@ export type SceneRefusalReason =
   | 'role-forbidden'
   | 'role-forbidden-setting'
   | 'scene-full'
+  // A SCENE_SEED that arrived after the room had already been seeded — two people
+  // opened the same empty variant room at the same moment and both offered its
+  // review's models. Not a refusal anybody did anything wrong, which is why the
+  // client drops it instead of showing it: the winner's SCENE_STATE is already on
+  // its way and says the same thing.
+  | 'already_seeded'
   | 'unreadable-update';
 
 /**
@@ -453,6 +480,9 @@ export function describeSceneRefusal(reason: SceneRefusalReason): string {
   }
   if (reason === 'scene-full') {
     return `This room is already showing ${MAX_SCENE_MODELS} models. Hide or remove one before adding another.`;
+  }
+  if (reason === 'already_seeded') {
+    return 'Somebody else already put this review’s models up, so this room kept theirs.';
   }
   return 'The room server could not read that scene change, so nothing was changed for anybody.';
 }

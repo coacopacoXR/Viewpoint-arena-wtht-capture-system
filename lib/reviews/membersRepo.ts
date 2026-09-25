@@ -17,6 +17,7 @@
 // module holds the reads a browser does for itself, and the one membership write
 // BC needs.
 
+import { announceReviewRosterChanged } from './rosterEvents';
 import { supabase } from '../supabase';
 import { getStoredIdentity } from '../identity';
 import { asMemberRole, type MemberRole, type ReviewMember } from './roles';
@@ -103,8 +104,10 @@ export async function ensureReviewOwner(reviewId: string): Promise<boolean> {
       // ownerless — but the roster is short a row, and the People tab in BH
       // would render an owner who is not listed. Worth a line.
       console.error('[membersRepo] owner_id is set but the roster row failed:', memberError.message);
+      announceReviewRosterChanged(reviewId);
       return false;
     }
+    announceReviewRosterChanged(reviewId);
     return true;
   } catch (err) {
     console.error('[membersRepo] ensureReviewOwner threw:', err);

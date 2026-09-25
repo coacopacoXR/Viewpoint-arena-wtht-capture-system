@@ -1,5 +1,13 @@
 import { create } from 'zustand';
-import type { AgendaItem, NewAgendaItem, ReviewAssetReference, ReviewDraft, ReviewViewpoint, ReviewPin } from './reviewSetupStore';
+import {
+  reviewTitleFrom,
+  type AgendaItem,
+  type NewAgendaItem,
+  type ReviewAssetReference,
+  type ReviewDraft,
+  type ReviewViewpoint,
+  type ReviewPin,
+} from './reviewSetupStore';
 import type { SpatialComment, Requirement } from '../types';
 import type { TeamMember } from './people';
 import { useStore } from '../store';
@@ -234,6 +242,16 @@ interface ActiveReviewState {
   updateViewpoint: (id: string, patch: Partial<ReviewViewpoint>) => ReviewDraft | null;
   updatePin: (id: string, patch: Partial<ReviewPin>) => ReviewDraft | null;
   /**
+   * Name this design review (batch BQ).
+   *
+   * The name is a field of the review like any other, so it travels the same way:
+   * marked as THIS browser's edit, so RoomPage's subscriber saves it, and returned
+   * as a draft so the caller broadcasts it and everybody else in the room is
+   * looking at the same name a moment later. An empty answer keeps the name the
+   * review already had — see lib/reviewSetupStore.reviewTitleFrom.
+   */
+  setTitle: (title: string) => ReviewDraft | null;
+  /**
    * The writes the curation tabs need, which batch BH moved into the room.
    *
    * The room read this review before and could rename a viewpoint or a pin in it,
@@ -405,6 +423,16 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     };
     applyEdit(set, next);
     syncMainComments(next);
+    return next;
+  },
+
+  setTitle: (title) => {
+    const cfg = get().config;
+    if (!cfg) return null;
+    // The name it already had when the answer is empty, so pressing Enter in a
+    // field nobody filled in changes nothing rather than un-naming the review.
+    const next = edited(cfg, { title: reviewTitleFrom(title, cfg.title) });
+    applyEdit(set, next);
     return next;
   },
 

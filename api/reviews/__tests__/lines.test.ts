@@ -203,6 +203,18 @@ function stubBackend(state: World) {
         const newest = [...onLine].sort((a, b) => String(b['ended_at']).localeCompare(String(a['ended_at'])))[0];
         return new Response(JSON.stringify(newest ? [newest] : []), { status: 200 });
       }
+      // Every meeting of one review, which is how the handler asks "has the main line
+      // ever met?" when no parent session was named. Routed explicitly: without it this
+      // read falls through to the `id=eq.` branch below, answers [], and a review that
+      // HAS met looks like one that has not — so the refusal it exists to make would
+      // pass for the wrong reason.
+      if (url.includes('review_id=eq.')) {
+        const wanted = new URL(url).searchParams.get('review_id')?.replace('eq.', '') ?? '';
+        return new Response(
+          JSON.stringify(state.sessions.filter((s) => s['review_id'] === wanted)),
+          { status: 200 },
+        );
+      }
       const id = new URL(url).searchParams.get('id')?.replace('eq.', '') ?? '';
       return new Response(JSON.stringify(state.sessions.filter((s) => s['id'] === id)), { status: 200 });
     }
@@ -393,6 +405,71 @@ describe('api/reviews/lines', () => {
       createMockRes(),
     );
     expect(res.statusCode).toBe(400);
+  });
+
+  // A review that has been curated but has never recorded a meeting has no session to
+  // leave from, and batch BQ made its variant startable anyway: the room's new "Variant"
+  // button and the lobby's "+ Variant" both offer it, and refusing there would leave the
+  // button offering something the endpoint would not do.
+  it('starts a variant with no meeting named, when the line has never met', async () => {
+    const { calls } = stubBackend(world({ lines: [mainLine()], sessions: [] }));
+    const res = await callHandler(
+      req({ action: 'explore', reviewId: REVIEW_ID, name: 'Glass-filled nylon' }),
+      createMockRes(),
+    );
+    expect(res.statusCode).toBe(200);
+
+    const insert = calls.find((c) => c.method === 'POST' && c.url.endsWith('review_lines'));
+    const body = insert?.body as Record<string, unknown>;
+    // NULL, not an empty string: lib/reviews/linesRepo.originRevisionIds reads a null
+    // parent as "start from what the main line is showing now", and the map draws such a
+    // variant leaving from the START of the main line rather than from its last stop.
+    expect(body['parent_session_id']).toBeNull();
+    expect(body['kind']).toBe('variant');
+    // No variant exists yet, so this one is A.
+    expect(body['letter']).toBe('A');
+    expect(body['name']).toBe('Glass-filled nylon');
+  });
+
+  it('refuses a missing meeting in a review that HAS met, and writes nothing', async () => {
+    const { calls } = stubBackend(world());
+    const res = await callHandler(
+      req({ action: 'explore', reviewId: REVIEW_ID, name: 'Glass-filled nylon' }),
+      createMockRes(),
+    );
+    // The missing id there is a client that did not read, not a line with nothing to
+    // leave from — and the variant would open on the wrong model.
+    expect(res.statusCode).toBe(400);
+    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('review_lines'))).toBe(false);
+  });
+
+  it('counts a meeting recorded before lines existed as the main line’s, and refuses', async () => {
+    // `line_id` NULL is the main line's: that is where SessionMap draws such a meeting
+    // and where the schema's backfill puts it. Ignoring it would let a variant be started
+    // "from nowhere" in a review that has met three times.
+    const { calls } = stubBackend(world({
+      lines: [mainLine()],
+      sessions: [
+        { id: 'sess-old', review_id: REVIEW_ID, line_id: null, ended_at: '2026-04-01T16:00:00.000Z', revision_ids: ['r-a'], seq: 1 },
+      ],
+    }));
+    const res = await callHandler(
+      req({ action: 'explore', reviewId: REVIEW_ID, name: 'Glass-filled nylon' }),
+      createMockRes(),
+    );
+    expect(res.statusCode).toBe(400);
+    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('review_lines'))).toBe(false);
+  });
+
+  it('still checks the caller when no meeting was named', async () => {
+    // The relaxed parent rule is about the LINE, not about the person: a participant in a
+    // review that has never met may not start a variant of it either.
+    stubBackend(world({ lines: [mainLine()], sessions: [] }));
+    const res = await callHandler(
+      req({ action: 'explore', reviewId: REVIEW_ID, name: 'Glass-filled nylon' }, { token: jwtFor(PARTICIPANT) }),
+      createMockRes(),
+    );
+    expect(res.statusCode).toBe(403);
   });
 
   // ─── Adopt into main line ─────────────────────────────────────────────────

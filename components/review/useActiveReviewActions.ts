@@ -34,16 +34,19 @@ import type { ReviewDraftActions } from './draftActions';
  * The room's writes that no curation tab makes.
  *
  * Deliberately NOT part of draftActions.ts: that interface is the contract a tab is
- * rendered against and every caller has to satisfy it, whereas this has one caller
- * — the PLM launch, recording the document the review was opened from — and one
- * store. Widening the tab contract for it would mean inventing a no-op for every
- * test that builds one, to describe a write no tab can make.
+ * rendered against and every caller has to satisfy it, whereas these have callers
+ * outside the tabs — the PLM launch, recording the document the review was opened
+ * from, and the Edit panel's own header, naming the review (batch BQ). Widening the
+ * tab contract for them would mean inventing a no-op for every test that builds one,
+ * to describe a write no tab can make.
  *
- * It goes through the same `publish` as the rest, so the reference reaches
- * everybody else in the room and not only this screen.
+ * Both go through the same `publish` as the rest, so the reference and the name
+ * reach everybody else in the room and not only this screen.
  */
 export interface ReviewLaunchActions {
   addReference(ref: Omit<ReviewAssetReference, 'id'>): void;
+  /** Name the review. An empty name keeps the one it has. */
+  setTitle(title: string): void;
 }
 
 export function useActiveReviewActions(): ReviewDraftActions & ReviewLaunchActions {
@@ -70,6 +73,7 @@ export function useActiveReviewActions(): ReviewDraftActions & ReviewLaunchActio
     const store = useActiveReviewStore.getState;
 
     return {
+      setTitle: (title: string) => publish(store().setTitle(title)),
       updateViewpoint: (id: string, updates: Partial<ReviewViewpoint>) => publish(store().updateViewpoint(id, updates)),
       removeViewpoint: (id: string) => publish(store().removeViewpoint(id)),
       updatePin: (id: string, updates: Partial<ReviewPin>) => publish(store().updatePin(id, updates)),

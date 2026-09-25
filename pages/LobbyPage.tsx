@@ -39,8 +39,9 @@ import { signOutOfAccount } from '../lib/auth/useAuth';
 import { identityRequired, publicIdentityOf } from '../lib/auth/authRules';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
 import { getCurationSummary, createReview, type CurationSummary } from '../lib/curationsRepo';
-import { useReviewSetupStore, createReviewDraft } from '../lib/reviewSetupStore';
+import { useReviewSetupStore, createReviewDraft, reviewTitleFrom, NEW_REVIEW_TITLE } from '../lib/reviewSetupStore';
 import { roomPath } from '../lib/reviews/lines';
+import { can, resolveRole } from '../lib/reviews/roles';
 import LobbyTopBar from '../components/lobby/LobbyTopBar';
 import LobbyActions from '../components/lobby/LobbyActions';
 import ReviewCard from '../components/lobby/ReviewCard';
@@ -245,15 +246,19 @@ const LobbyPage: React.FC = () => {
    * RoomPage looks FIRST, and the room's own save-on-edit upserts the row later if a
    * database ever answers.
    */
-  async function handleNewDesignReview() {
+  async function handleNewDesignReview(title: string) {
     if (!name.trim()) { setError('Enter your name first.'); return; }
     if (creating) return;
     setCreating(true);
     setError('');
     const reviewId = crypto.randomUUID();
-    const created = await createReview(reviewId);
+    // '' — Enter on a field nobody filled in — creates the untitled review, which is
+    // what this button did before it asked. Naming is offered, never required: the
+    // person who wants a room now can name it from inside, in the Edit panel.
+    const wanted = reviewTitleFrom(title, NEW_REVIEW_TITLE);
+    const created = await createReview(reviewId, wanted);
     setCreating(false);
-    useReviewSetupStore.getState().hydrateDraft(created ?? createReviewDraft(reviewId));
+    useReviewSetupStore.getState().hydrateDraft(created ?? createReviewDraft(reviewId, wanted));
     enterRoom(reviewId, { edit: true });
   }
 
@@ -287,6 +292,36 @@ const LobbyPage: React.FC = () => {
   // already allowed; the difference is that now the whole review goes.
   const mayDelete = (review: LobbyReview): boolean => !accountsOn || review.mine || installAdmin;
 
+  /**
+   * Who may NAME this review, and who may START A VARIANT of it — the same people,
+   * because both are `editReview` in lib/reviews/roles.ts, and neither is `deleteReview`
+   * (which is the owner's and this install's admins', and NOT its editors').
+   *
+   * Asked of that table rather than worked out here, for the reason
+   * components/UI/Interface.tsx gives: `can('editReview')` keeps the four levels of
+   * trust written down in one file, and a lobby that re-derived them would be a second
+   * copy to drift. What the lobby cannot know is the meeting's host — there is no
+   * meeting — so on a deployment with no accounts, where the host IS the editor, the
+   * answer is the same one `mayDelete` already takes: whoever got past this install's
+   * front door.
+   */
+  const mayEditReview = (review: LobbyReview): boolean => {
+    if (isGuest) return false;
+    if (!accountsOn) return true;
+    return can(
+      resolveRole({
+        identityMode: deployment.mode,
+        accountId: signedIn ? accountId : null,
+        isGuest,
+        members: accountId && review.memberRole ? [{ userId: accountId, role: review.memberRole }] : [],
+        ownerId: review.mine && accountId ? accountId : null,
+        isAdmin: installAdmin,
+        isMeetingHost: false,
+      }),
+      'editReview',
+    );
+  };
+
   return (
     <div
       className="min-h-screen bg-[#f3f4f6] font-sans text-gray-900"
@@ -316,7 +351,7 @@ const LobbyPage: React.FC = () => {
               type="text"
               value={name}
               onChange={(event) => { setName(event.target.value); setError(''); }}
-              onKeyDown={(event) => { if (event.key === 'Enter') void handleNewDesignReview(); }}
+              onKeyDown={(event) => { if (event.key === 'Enter') void handleNewDesignReview(''); }}
               placeholder="e.g. Alex Chen"
               maxLength={40}
               autoFocus
@@ -338,7 +373,7 @@ const LobbyPage: React.FC = () => {
           joinValue={joinCode}
           onJoinValue={(next) => { setJoinCode(next); setError(''); }}
           onJoin={handleJoin}
-          onNewReview={() => void handleNewDesignReview()}
+          onNewReview={(title) => void handleNewDesignReview(title)}
           creating={creating}
           mayStart={!isGuest}
           showFilters={!isGuest}
@@ -405,6 +440,7 @@ const LobbyPage: React.FC = () => {
                 review={selected}
                 invited={!!joinRoomId && selected.id === joinRoomId}
                 mayDelete={mayDelete(selected)}
+                mayEdit={mayEditReview(selected)}
                 isMeetingHost={!accountsOn}
                 onOpen={() => enterRoom(selected.id)}
                 onDeleted={() => {

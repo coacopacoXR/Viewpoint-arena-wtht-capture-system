@@ -93,7 +93,7 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
 // ─── The whole review, not just the model its curation names ────────────────
 
 /**
- * Reviews this browser has already rebuilt a scene for.
+ * Which review AND which line of it this browser has already rebuilt a scene for.
  *
  * A guard on OPENING rather than on correctness. setConfig runs on every
  * realtime echo and every poll of the curation row, and rebuilding the scene
@@ -102,11 +102,35 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
  * design review" means; after that the scene belongs to the room server (in a
  * room) and to the person using it (everywhere).
  *
+ * Per LINE, not per review: a page that walks from a review's main room into one of
+ * its variants opens the SAME review on a different model, and a review-wide key had
+ * the variant skip the build altogether and keep whatever the main line had left on
+ * screen — which in a variant room whose server has never held a scene is nothing.
+ *
  * Cleared by forgetReviewScene when the review is left, so opening it again in
  * the same page session opens it properly rather than showing the single model
- * its curation row names.
+ * its curation row names. One call clears every line of that review: leaving a
+ * review leaves all of them.
  */
-const rebuilt = new Set<string>();
+const rebuilt = new Map<string, Set<string>>();
+
+/**
+ * The line's own key inside a review's set. The main line — and an install with no
+ * database, where there are no lines — has no id, and gets the empty one.
+ */
+function lineKeyOf(lineId: string | null | undefined): string {
+  return lineId ?? '';
+}
+
+function alreadyRebuilt(reviewId: string, key: string): boolean {
+  return rebuilt.get(reviewId)?.has(key) ?? false;
+}
+
+function rememberRebuilt(reviewId: string, key: string): void {
+  const lines = rebuilt.get(reviewId);
+  if (lines) lines.add(key);
+  else rebuilt.set(reviewId, new Set([key]));
+}
 
 /**
  * Forget that a review's scene was rebuilt, because the review is being left.
@@ -135,20 +159,34 @@ export function forgetReviewScene(reviewId: string | null | undefined): void {
  * In a room this is the opening move and not the final word: the room server owns
  * the scene and relays SCENE_STATE once this connection is admitted, which
  * replaces whatever is here. That is batch BB's rule and it does not change —
- * the room is the live space, and what is on screen in it is the server's.
+ * the room is the live space, and what is on screen in it is the server's. The one
+ * exception is a server that says it has NEVER held a scene (`seeded: false`): there
+ * is nothing of its own to defer to, so lib/usePartyPresence calls this with `force`
+ * and offers the answer back as SCENE_SEED.
  *
- * @returns false when the asset is not an imported model, which is the caller's
- *          cue to fall back to a preset, exactly as showCurationModel answers.
+ * @returns false when there is nothing to show — an asset that is not an imported
+ *          model in a review that has no stored revisions either — which is the
+ *          caller's cue to fall back to a preset, exactly as showCurationModel
+ *          answers. A review WITH revisions builds its scene from them whatever its
+ *          asset names, and answers true.
  */
 export async function showReviewScene(
   reviewId: string | null | undefined,
   asset: CurationAssetModel | undefined,
   logAs: string,
+  options?: { force?: boolean },
 ): Promise<boolean> {
   const shown = showCurationModel(asset, logAs);
-  if (!shown) return false;
-  if (!reviewId || rebuilt.has(reviewId)) return true;
-  rebuilt.add(reviewId);
+  if (!reviewId) return shown;
+
+  const lineId = useStore.getState().activeLine?.id ?? null;
+  const key = lineKeyOf(lineId);
+  // `force` is a room whose server has just said it has NEVER held a scene, so there
+  // is nothing on screen for the guard to protect: the reason it exists — not putting
+  // the database's copy back over a model somebody has since hidden or moved — cannot
+  // apply to a scene the room itself says is empty and nobody owns yet.
+  if (!options?.force && alreadyRebuilt(reviewId, key)) return shown;
+  rememberRebuilt(reviewId, key);
 
   const before = useStore.getState().scene;
   // Two reads, together: the review's whole history, and the part of it the LINE
@@ -161,9 +199,16 @@ export async function showReviewScene(
   // exactly what it did before this batch.
   const [revisions, origin] = await Promise.all([
     listModelRevisions(reviewId),
-    originRevisionIds(reviewId, useStore.getState().activeLine?.id ?? null),
+    originRevisionIds(reviewId, lineId),
   ]);
-  if (revisions.length === 0) return true;
+  // No history to build from, so the synchronous half is the whole answer — and for an
+  // asset that is not an imported model that half showed nothing, which is what `false`
+  // tells the caller: fall back to a preset. Batch BQ2 moved this from an unconditional
+  // `true`, and with it the case that was broken: a review created empty and filled by
+  // imports made inside the room has its models ONLY in model_revisions, so the early
+  // return this function used to take on a non-imported asset meant its history was
+  // never read at all.
+  if (revisions.length === 0) return shown;
 
   const state = useStore.getState();
   // Somebody changed the scene while the read was in flight — an import, a

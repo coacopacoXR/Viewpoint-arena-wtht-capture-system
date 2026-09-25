@@ -66,7 +66,15 @@ const HoverRow: React.FC = () => {
   );
 };
 
-const PointerMenu: React.FC<{ onOpenExplainer: () => void }> = ({ onOpenExplainer }) => {
+const PointerMenu: React.FC<{
+  onOpenExplainer: () => void;
+  /**
+   * False when the top bar has run out of room and is shedding labels — the icon and
+   * the `title` below stay, so the button is still findable and still says what it is
+   * on a hover. See TOP_BAR_DROP_ORDER in components/UI/room/TopBar.tsx.
+   */
+  showLabel?: boolean;
+}> = ({ onOpenExplainer, showLabel = true }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const mode = useFingerPointerStore((s) => s.mode);
@@ -103,7 +111,7 @@ const PointerMenu: React.FC<{ onOpenExplainer: () => void }> = ({ onOpenExplaine
         )}
       >
         <MousePointer size={14} />
-        <span className="text-[10px] font-bold uppercase tracking-wide">Pointer</span>
+        {showLabel && <span className="text-[10px] font-bold uppercase tracking-wide">Pointer</span>}
         <ChevronDown size={12} className={clsx('transition-transform', open && 'rotate-180')} />
         {anyOn && (
           <span

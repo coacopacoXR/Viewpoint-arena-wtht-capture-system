@@ -18,10 +18,11 @@
 // have, and unpicking it by hand before it can be used is the reason the box was
 // avoided.
 
-import React from 'react';
-import { Plus } from 'lucide-react';
+import React, { useState } from 'react';
+import { Plus, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { LOBBY_FILTERS, type LobbyFilter } from '../../lib/lobby/useLobbyData';
+import { MAX_REVIEW_TITLE } from '../../lib/reviewSetupStore';
 
 export interface LobbyActionsProps {
   filter: LobbyFilter;
@@ -31,7 +32,15 @@ export interface LobbyActionsProps {
   joinValue: string;
   onJoinValue: (value: string) => void;
   onJoin: () => void;
-  onNewReview: () => void;
+  /**
+   * Create a review, with the name typed in the field the button opens.
+   *
+   * '' is a valid answer and means "nobody named it": the row is created as
+   * "Untitled design review" exactly as it was before the field existed, because
+   * the button has to keep working for the person who just wants a room and will
+   * name it later from inside it.
+   */
+  onNewReview: (name: string) => void;
   /** True while the review row is being written, so a second click cannot make a second one. */
   creating: boolean;
   /**
@@ -49,6 +58,85 @@ export interface LobbyActionsProps {
   showFilters: boolean;
 }
 
+/**
+ * "+ New design review", which opens into the one question worth asking first.
+ *
+ * Batch BQ. Every review this lobby ever created was called "Untitled design review"
+ * and nothing anywhere wrote `review_curations.title`, so the grid was a wall of
+ * identical cards and the only way to tell two reviews apart was to open them. The
+ * name is asked for HERE rather than in the room, because the lobby is where the
+ * review is born and the card it becomes is the first thing anybody sees of it —
+ * and it is asked INLINE, in place of the button, rather than in a dialog: a dialog
+ * cannot be styled to the row that offered it and hides the grid behind the question.
+ *
+ * Skippable. Enter on an empty field creates the untitled review, which is what the
+ * button did before, so nobody who just wants a room has to think of a name for it.
+ */
+const NewReviewButton: React.FC<{ creating: boolean; onNewReview: (name: string) => void }> = ({
+  creating,
+  onNewReview,
+}) => {
+  const [naming, setNaming] = useState(false);
+  const [value, setValue] = useState('');
+
+  if (!naming) {
+    return (
+      <button
+        onClick={() => { setValue(''); setNaming(true); }}
+        disabled={creating}
+        data-testid="new-design-review"
+        className={clsx(
+          'inline-flex items-center gap-1.5 h-11 px-4 rounded-md text-sm font-semibold transition-colors',
+          'bg-black text-white hover:bg-gray-800 disabled:opacity-50',
+        )}
+      >
+        <Plus size={15} />
+        {creating ? 'Creating…' : 'New design review'}
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex h-11 items-stretch rounded-md border border-black bg-white overflow-hidden" data-testid="new-design-review-name">
+      <input
+        type="text"
+        value={value}
+        autoFocus
+        disabled={creating}
+        maxLength={MAX_REVIEW_TITLE}
+        aria-label="Name this design review"
+        data-testid="new-design-review-field"
+        placeholder="e.g. Door hinge, rev C"
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') onNewReview(value);
+          // Cancelling leaves nothing behind: no row was written, so there is
+          // nothing to undo and no second button to press.
+          if (event.key === 'Escape' && !creating) setNaming(false);
+        }}
+        className="w-56 max-w-[52vw] px-3 text-[13px] text-gray-900 outline-none placeholder:text-gray-400 bg-transparent"
+      />
+      <button
+        onClick={() => onNewReview(value)}
+        disabled={creating}
+        data-testid="new-design-review-create"
+        className="px-3.5 border-l border-gray-200 bg-black text-[13px] font-semibold text-white hover:bg-gray-800 transition-colors disabled:opacity-50"
+      >
+        {creating ? 'Creating…' : 'Create'}
+      </button>
+      <button
+        onClick={() => setNaming(false)}
+        disabled={creating}
+        title="Cancel"
+        aria-label="Cancel"
+        className="px-2.5 border-l border-gray-200 bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-black transition-colors disabled:opacity-50"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+};
+
 const LobbyActions: React.FC<LobbyActionsProps> = ({
   filter,
   onFilter,
@@ -62,20 +150,7 @@ const LobbyActions: React.FC<LobbyActionsProps> = ({
   showFilters,
 }) => (
   <div className="flex items-stretch gap-2.5 flex-wrap">
-    {mayStart && (
-      <button
-        onClick={onNewReview}
-        disabled={creating}
-        data-testid="new-design-review"
-        className={clsx(
-          'inline-flex items-center gap-1.5 h-11 px-4 rounded-md text-sm font-semibold transition-colors',
-          'bg-black text-white hover:bg-gray-800 disabled:opacity-50',
-        )}
-      >
-        <Plus size={15} />
-        {creating ? 'Creating…' : 'New design review'}
-      </button>
-    )}
+    {mayStart && <NewReviewButton creating={creating} onNewReview={onNewReview} />}
 
     <div className="flex h-11 rounded-md border border-gray-200 bg-white overflow-hidden focus-within:border-black transition-colors">
       <input

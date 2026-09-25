@@ -997,7 +997,9 @@ describe('room.server — the model on screen, by reference', () => {
     }],
     builtIn: null,
   };
-  const PAYLOAD = { ...SCENE, modelEditors: 'host' };
+  // `seeded` travels with the scene (batch BQ2): a room that has held one says so, and
+  // a room that never has is asking a client to start it from its design review.
+  const PAYLOAD = { ...SCENE, modelEditors: 'host', seeded: true };
 
   function admittedHost(server: ReturnType<typeof createServer>) {
     const conn = fakeConn('c-host');
@@ -1966,5 +1968,289 @@ describe('room.server — identity off (the default install)', () => {
 
     expect(server.admitted.has('host-1')).toBe(true);
     expect(server.participants.has('host-1')).toBe(true);
+  });
+});
+
+// ─── A room that has never held a scene (batch BQ2) ──────────────────────────
+//
+// The server sends its scene on connect even when it is empty, and the client replaces
+// its own copy with what arrives. For a room that has never held one — every new variant
+// room, and any main room whose server storage is gone — that wiped the models the client
+// had just built from the review's history, and nothing ever put them back: the variant of
+// a review holding two imported models showed "No model yet", and went on showing it after
+// a reload. `seeded` is the flag that tells the two kinds of empty apart, and SCENE_SEED is
+// how a client that may change the models answers it.
+
+describe('room.server — a room that has never held a scene', () => {
+  const SCENE_KEY = 'room-scene';
+  const HASH_A = 'a1'.repeat(32);
+  const MODEL_A = {
+    id: `model-${HASH_A}`,
+    hash: HASH_A,
+    fileName: 'headphones.glb',
+    line: 'headphones',
+    revision: 'A',
+    visible: true,
+    offset: [0, 0, 0],
+  };
+  /** What a client that read its review's history offers an empty room. */
+  const SEED = { models: [MODEL_A], builtIn: null };
+
+  function host(server: ReturnType<typeof createServer>) {
+    const conn = fakeConn('c-host');
+    admitUser(server, conn, 'host-1', 'Alice');
+    conn.send.mockClear();
+    server.room.broadcast.mockClear();
+    return conn;
+  }
+
+  function member(server: ReturnType<typeof createServer>, hostConn: FakeConnection, userId = 'member-1') {
+    const conn = fakeConn(`c-${userId}`);
+    admitViaHost(server, hostConn, conn, userId, 'Bob');
+    conn.send.mockClear();
+    server.room.broadcast.mockClear();
+    return conn;
+  }
+
+  function seed(server: ReturnType<typeof createServer>, conn: FakeConnection, payload: unknown) {
+    return server.onMessage(
+      JSON.stringify({ type: 'SCENE_SEED', payload }),
+      conn as unknown as Party.Connection,
+    );
+  }
+
+  function update(server: ReturnType<typeof createServer>, conn: FakeConnection, payload: unknown) {
+    return server.onMessage(
+      JSON.stringify({ type: 'SCENE_UPDATE', payload }),
+      conn as unknown as Party.Connection,
+    );
+  }
+
+  /** The SCENE_STATE messages one connection was sent, parsed. */
+  function states(conn: FakeConnection) {
+    return sent(conn).filter((m) => m.type === 'SCENE_STATE');
+  }
+
+  async function fresh() {
+    const storage = fakeStorage();
+    const server = createServer(storage);
+    await server.onStart();
+    return { storage, server };
+  }
+
+  it('says it has never been seeded while it is fresh', async () => {
+    const { server } = await fresh();
+    const conn = fakeConn('c-host');
+    admitUser(server, conn, 'host-1', 'Alice');
+
+    // Empty AND unseeded, which is the two facts a client has to be able to tell apart:
+    // the first says what is on screen, the second says nobody has said what should be.
+    expect(states(conn)).toHaveLength(1);
+    expect(states(conn)[0].payload).toMatchObject({ models: [], builtIn: null, seeded: false });
+  });
+
+  it('counts an accepted change as the room having been seeded', async () => {
+    const { storage, server } = await fresh();
+    const hostConn = host(server);
+
+    await update(server, hostConn, { op: 'add', model: MODEL_A });
+
+    expect(server.sceneSeeded).toBe(true);
+    // Persisted with the scene, so a restart does not turn a room somebody has been
+    // working in back into one anybody's client may overwrite from the database.
+    expect(storage._data.get(SCENE_KEY)).toMatchObject({ seeded: true });
+
+    const late = fakeConn('c-late');
+    admitViaHost(server, hostConn, late, 'late-1', 'Carol');
+    expect(states(late)[0].payload).toMatchObject({ models: [{ id: MODEL_A.id }], seeded: true });
+  });
+
+  it('counts a preset with no models as seeded too', async () => {
+    const { server } = await fresh();
+    const hostConn = host(server);
+
+    await update(server, hostConn, { op: 'setBuiltIn', builtIn: 'bicycle' });
+
+    expect(server.scene).toEqual({ models: [], builtIn: 'bicycle' });
+    expect(server.sceneSeeded).toBe(true);
+  });
+
+  it('takes one seed from a client that may change the models, and relays it as its own scene', async () => {
+    const { storage, server } = await fresh();
+    const hostConn = host(server);
+
+    await seed(server, hostConn, SEED);
+
+    expect(server.scene.models).toEqual([MODEL_A]);
+    expect(server.sceneSeeded).toBe(true);
+    expect(storage._data.get(SCENE_KEY)).toMatchObject({ models: [{ id: MODEL_A.id }], seeded: true });
+    const relayed = broadcast(server).filter((m) => m.type === 'SCENE_STATE');
+    expect(relayed).toHaveLength(1);
+    expect(relayed[0].payload).toMatchObject({ models: [{ id: MODEL_A.id }], seeded: true });
+    // Relayed to the sender as well, the way every scene change is: the seeder's own
+    // screen is then showing what the room says rather than what it computed.
+    expect(server.room.broadcast.mock.calls[0][1] as string[] | undefined ?? []).not.toContain(hostConn.id);
+    expect(sent(hostConn).filter((m) => m.type === 'SCENE_REFUSED')).toHaveLength(0);
+  });
+
+  it('refuses a second seed, and changes nothing for anybody', async () => {
+    const { server } = await fresh();
+    const hostConn = host(server);
+    await seed(server, hostConn, SEED);
+    server.room.broadcast.mockClear();
+    hostConn.send.mockClear();
+
+    await seed(server, hostConn, { models: [{ ...MODEL_A, id: 'other', hash: 'b2'.repeat(32) }], builtIn: null });
+
+    // Two people opened the same empty variant room at the same moment and both offered
+    // its review's models. The first one won; the second is told, in a reason its client
+    // drops without showing, and the room keeps the scene it already had.
+    expect(server.scene.models).toEqual([MODEL_A]);
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    expect(sent(hostConn).filter((m) => m.type === 'SCENE_REFUSED')[0].payload).toEqual({ reason: 'already_seeded' });
+  });
+
+  it('refuses a seed from somebody who may not change the models', async () => {
+    const { storage, server } = await fresh();
+    const hostConn = host(server);
+    const memberConn = member(server, hostConn);
+
+    await seed(server, memberConn, SEED);
+
+    // A seed is a scene change that happens to be the first one. A participant who could
+    // put a model up by joining an empty room could put one up at all, so the question is
+    // the one SCENE_UPDATE already asks — and the room stays unseeded, for somebody who
+    // may answer it.
+    expect(server.scene).toEqual({ models: [], builtIn: null });
+    expect(server.sceneSeeded).toBe(false);
+    expect(storage._data.has(SCENE_KEY)).toBe(false);
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    expect(sent(memberConn).filter((m) => m.type === 'SCENE_REFUSED')[0].payload).toEqual({ reason: 'host-only' });
+  });
+
+  it('lets a named person seed, the same setting that lets them change the models', async () => {
+    const { server } = await fresh();
+    const hostConn = host(server);
+    const namedConn = member(server, hostConn, 'named-1');
+    await server.onMessage(
+      JSON.stringify({ type: 'SET_MODEL_EDITORS', payload: { modelEditors: ['named-1'] } }),
+      hostConn as unknown as Party.Connection,
+    );
+    server.room.broadcast.mockClear();
+
+    await seed(server, namedConn, SEED);
+
+    expect(server.scene.models).toEqual([MODEL_A]);
+    expect(sent(namedConn).filter((m) => m.type === 'SCENE_REFUSED')).toHaveLength(0);
+  });
+
+  it('ignores a seed with nothing in it, and stays open to a better answer', async () => {
+    const { server } = await fresh();
+    const hostConn = host(server);
+
+    await seed(server, hostConn, { models: [], builtIn: null });
+
+    // A client whose read of the review came back empty has not seeded the room. Accepting
+    // the offer would have closed the question with "nothing", and every later arrival
+    // would have been told the room was already started.
+    expect(server.sceneSeeded).toBe(false);
+    expect(server.room.broadcast).not.toHaveBeenCalled();
+    expect(sent(hostConn).filter((m) => m.type === 'SCENE_REFUSED')).toHaveLength(0);
+
+    await seed(server, hostConn, SEED);
+    expect(server.scene.models).toEqual([MODEL_A]);
+  });
+
+  it('rebuilds a seed rather than storing what it was sent', async () => {
+    const { server } = await fresh();
+    const hostConn = host(server);
+
+    await seed(server, hostConn, {
+      models: [{ ...MODEL_A, admin: true, rotation: [0, 1.5, 0], scale: 2 }],
+      builtIn: 'synth',
+      modelEditors: 'everyone',
+    });
+
+    // The transform rides along — it is what the review stored — but a field this server
+    // has never heard of does not, and neither does a `modelEditors` the seed has no
+    // business setting: who may change the models is SET_MODEL_EDITORS' answer alone.
+    expect(server.scene.models[0]).toEqual({ ...MODEL_A, rotation: [0, 1.5, 0], scale: 2 });
+    expect(server.scene.builtIn).toBe('synth');
+    expect(server.modelEditors).toBe('host');
+  });
+
+  it('refuses a seed it cannot read, and stays unseeded', async () => {
+    const { server } = await fresh();
+    const hostConn = host(server);
+
+    await seed(server, hostConn, { models: 'not-a-list' });
+
+    // Not a scene at all, so nothing is rescued and nothing is stored — the same answer
+    // an unreadable SCENE_UPDATE gets — and the room is still open to one that can be read.
+    expect(server.sceneSeeded).toBe(false);
+    expect(sent(hostConn).filter((m) => m.type === 'SCENE_REFUSED')[0].payload).toEqual({ reason: 'unreadable-update' });
+  });
+
+  it('drops a model in a seed that has nothing to fetch for it', async () => {
+    const { server } = await fresh();
+    const hostConn = host(server);
+
+    await seed(server, hostConn, { models: [{ id: 'x', fileName: 'x.glb' }, MODEL_A], builtIn: null });
+
+    // No hash on the first one: accepting it would tell every participant to render a
+    // model that does not exist. It is dropped and the readable one beside it is kept,
+    // because a model somebody can no longer see is recoverable and an empty room in the
+    // middle of a review is not.
+    expect(server.scene.models).toEqual([MODEL_A]);
+  });
+
+  it('caps a seed at the scene’s limit', async () => {
+    const { server } = await fresh();
+    const hostConn = host(server);
+    const models = Array.from({ length: 30 }, (_, i) => ({
+      ...MODEL_A, id: `m${i}`, hash: `${i}`.padStart(64, '0'), line: `line-${i}`,
+    }));
+
+    await seed(server, hostConn, { models, builtIn: null });
+
+    expect(server.scene.models).toHaveLength(24);
+  });
+
+  it('counts a scene an older build stored with models in it as seeded', async () => {
+    // The record has no `seeded` field: it was written before the flag existed. What it
+    // holds is the evidence — a build with no seed path only persisted a scene it had been
+    // given, so a room with models in it has been started already.
+    const storage = fakeStorage({ [SCENE_KEY]: { models: [MODEL_A], builtIn: null, modelEditors: 'host' } });
+    const server = createServer(storage);
+    await server.onStart();
+
+    expect(server.sceneSeeded).toBe(true);
+    const conn = fakeConn('c-late');
+    admitUser(server, conn, 'late-1', 'Carol');
+    expect(states(conn)[0].payload).toMatchObject({ models: [{ id: MODEL_A.id }], seeded: true });
+  });
+
+  it('leaves an older build’s EMPTY record unseeded, so a client can still start the room', async () => {
+    const storage = fakeStorage({ [SCENE_KEY]: { models: [], builtIn: null } });
+    const server = createServer(storage);
+    await server.onStart();
+
+    expect(server.sceneSeeded).toBe(false);
+    const conn = fakeConn('c-host');
+    admitUser(server, conn, 'host-1', 'Alice');
+    expect(states(conn)[0].payload).toMatchObject({ models: [], seeded: false });
+  });
+
+  it('keeps the flag across a restart, so a seeded room is not seeded again', async () => {
+    const storage = fakeStorage();
+    const before = createServer(storage);
+    await before.onStart();
+    await seed(before, host(before), SEED);
+
+    const after = createServer(storage);
+    await after.onStart();
+
+    expect(after.scene.models).toEqual([MODEL_A]);
+    expect(after.sceneSeeded).toBe(true);
   });
 });

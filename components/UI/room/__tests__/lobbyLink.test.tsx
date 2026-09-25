@@ -18,6 +18,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import type { ReviewLine } from '../../../../lib/reviews/lines';
 import LobbyLink from '../LobbyLink';
 
 // vi.mock factories are hoisted above the imports, so anything they read has to come
@@ -43,6 +44,11 @@ vi.mock('../../../Scene/ViewpointCanvas', () => ({ default: () => <div data-test
 // Imported after the mocks are registered.
 const { default: Interface } = await import('../../Interface');
 const { default: MobileRoomView } = await import('../../MobileRoomView');
+// The same registries Interface itself resolved them from, so the stores set here are
+// the stores the room reads.
+const { useActiveReviewStore } = await import('../../../../lib/activeReviewStore');
+const { createReviewDraft } = await import('../../../../lib/reviewSetupStore');
+const { useStore } = await import('../../../../store');
 
 /** Where the room went, which is the only thing this control has to prove. */
 const PathProbe: React.FC = () => <div data-testid="path">{useLocation().pathname}</div>;
@@ -140,5 +146,89 @@ describe('the mobile room', () => {
     const lobby = screen.getByRole('link', { name: 'Back to the lobby' });
     fireEvent.click(lobby);
     expect(screen.getByTestId('path').textContent).toBe('/');
+  });
+});
+
+// ─── The corner this control sits in (batch BQ) ───────────────────────────────
+//
+// Naming a review is only half of the user's complaint: a name nobody can see during
+// the meeting is a name that exists in a database. So the name is shown here, in the
+// block the logo and the Lobby link are in — the corner every other screen in this app
+// uses to say what it is looking at — and it is shown to everybody in the room, not only
+// to whoever may edit the review.
+
+describe('the desktop room — which design review it is holding', () => {
+  const VARIANT: ReviewLine = {
+    id: 'line-a', reviewId: 'room-1', kind: 'variant', name: 'Steel hinge pin', letter: 'A',
+    parentSessionId: 'sess-3', status: 'active', createdBy: null, createdByName: 'Coaco',
+    createdAt: '2026-09-20T09:00:00.000Z', closedAt: null,
+  };
+
+  beforeEach(() => {
+    useActiveReviewStore.setState({ config: createReviewDraft('room-1', 'Door hinge, rev C') });
+    useStore.setState({ activeLine: null });
+  });
+
+  afterEach(() => {
+    useActiveReviewStore.setState({ config: null });
+    useStore.setState({ activeLine: null });
+  });
+
+  it('names the review beside the way back to the lobby', () => {
+    inRoom(<Interface />);
+
+    const tag = screen.getByTestId('review-name-tag');
+    expect(tag).toHaveTextContent('Door hinge, rev C');
+    // In the SAME block, not somewhere else on the screen: the logo, the way out and the
+    // name of what is being looked at are one thing. On the line UNDER the logo rather
+    // than inside the h1 with it, because batch BQ2 made this whole block the first item
+    // of the header row the top bar sits in — a name inside the h1 was a name the bar
+    // covered.
+    expect(tag.closest('header')).toBe(
+      screen.getByRole('link', { name: 'Back to the lobby' }).closest('header'),
+    );
+    // And the stopwatch whose line it took is gone: a room that can say what it is
+    // looking at has no use for a clock nobody in a meeting was racing.
+    expect(screen.queryByText(/Design Review Sim/)).toBeNull();
+    // Truncated on screen, whole in the tooltip.
+    expect(tag).toHaveAttribute('title', 'Door hinge, rev C');
+  });
+
+  it('shares its row with the top bar, which is what stops the two overlapping', () => {
+    inRoom(<Interface />);
+
+    const row = screen.getByTestId('review-name-tag').closest('header')?.parentElement;
+    expect(row).toBeTruthy();
+    // ONE absolutely placed row, inset from the right by exactly what the canvas is
+    // inset, with the name plate first and the bar taking what is left. The bar used to
+    // be a second absolute block centred from `left-[300px]`, which is how it came to
+    // cover the name plate and run under the side panel at 1600x900: it was centred on a
+    // space it did not own, and nothing told it how wide the block beside it was.
+    expect(row?.className).toContain('absolute');
+    expect(row?.className).toContain('left-6');
+    expect(row?.className).toMatch(/right-\[364px\]|right-\[72px\]|right-6/);
+    expect(row?.querySelector('[data-testid="top-bar-box"]')).toBeTruthy();
+  });
+
+  it('says which review a variant\'s room belongs to', () => {
+    useStore.setState({ activeLine: VARIANT });
+    inRoom(<Interface />);
+
+    const tag = screen.getByTestId('review-name-tag');
+    expect(tag).toHaveTextContent('Door hinge, rev C · Variant A');
+    // LineChip, on the same bar, already carries the variant's own name and its two
+    // decisions; the corner says the thing the chip cannot, which review it is a variant
+    // OF, because two reviews can each have a Variant A.
+    expect(tag.textContent).not.toContain('Steel hinge pin');
+  });
+
+  it('shows no tag at all in a room holding no review', () => {
+    useActiveReviewStore.setState({ config: null });
+    inRoom(<Interface />);
+
+    // An empty chip in the corner would look like a rendering bug rather than like a
+    // review nobody named.
+    expect(screen.queryByTestId('review-name-tag')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Back to the lobby' })).toBeInTheDocument();
   });
 });

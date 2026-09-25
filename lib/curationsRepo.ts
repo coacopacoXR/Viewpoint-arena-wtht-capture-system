@@ -17,7 +17,7 @@ import { supabase, supabaseConfigured } from './supabase';
 import { migrateCurationAsset } from './migrateCurationAsset';
 import { ensureReviewOwner } from './reviews/membersRepo';
 import { deleteReview as deleteReviewRequest } from './reviews/deleteClient';
-import { createReviewDraft, NEW_REVIEW_TITLE } from './reviewSetupStore';
+import { createReviewDraft, NEW_REVIEW_TITLE, reviewTitleFrom } from './reviewSetupStore';
 import type { ReviewDraft } from './reviewSetupStore';
 
 export interface CurationSummary {
@@ -180,7 +180,10 @@ export async function createReview(
   reviewId: string,
   title: string = NEW_REVIEW_TITLE,
 ): Promise<ReviewDraft | null> {
-  const draft = createReviewDraft(reviewId, title);
+  // Normalised here rather than at each caller so "a name nobody typed creates the
+  // untitled review" is one rule and not three: the lobby's inline field, the Edit
+  // panel's create-if-absent and a PLM launch all reach this function.
+  const draft = createReviewDraft(reviewId, reviewTitleFrom(title, NEW_REVIEW_TITLE));
   const saved = await saveCuration(draft);
   if (!saved.ok) return null;
   // Not awaited into the result: a review whose owner row failed to write is
@@ -398,6 +401,34 @@ export async function setCurationListed(id: string, listed: boolean): Promise<bo
     return false;
   }
   return true;
+}
+
+/**
+ * Name a design review, and nothing else about it.
+ *
+ * ONE COLUMN, deliberately, and not `saveCuration({...draft, title})`: the lobby's
+ * preview panel renames a review it has only a summary of, and a whole-row upsert
+ * from a summary would write back the viewpoints, pins and agenda it never read.
+ * A rename made while a meeting is in progress then lands as the name and leaves
+ * the meeting's own save to land the rest — which is the same last-writer-wins the
+ * room already relies on, narrowed to the one field being changed.
+ *
+ * An empty name is refused rather than written: a review called "" is a card in the
+ * lobby with nothing on it, and the person who pressed Enter in a field they did
+ * not fill in meant to change nothing.
+ */
+export async function renameCuration(id: string, title: string): Promise<{ ok: boolean; error?: string }> {
+  const wanted = reviewTitleFrom(title, '');
+  if (wanted === '') return { ok: false, error: 'Give the design review a name.' };
+  const { error } = await supabase
+    .from('review_curations')
+    .update({ title: wanted })
+    .eq('id', id);
+  if (error) {
+    console.error('[curationsRepo] renameCuration failed:', error);
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
 }
 
 // Fetch a single curation summary by id — used when a contributor lands on

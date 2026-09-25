@@ -19,8 +19,10 @@ import {
   asRoomScene,
   asSceneUpdate,
   sceneFromLegacyReference,
+  seededFromStorage,
 } from '../lib/scene/sceneWire';
 import { can, type Role } from '../lib/reviews/roles';
+import { reviewIdOfPartyRoom } from '../lib/reviews/partyRoom';
 import { ReviewFactsCache, roleFromFacts, type ReviewFactsSource } from './reviewRoles';
 
 export type WebRTCSignalData =
@@ -112,6 +114,10 @@ type RoomMessage =
   | { type: 'MODEL_CHANGE'; payload: IncomingModelChange }
   | { type: 'SCENE_STATE'; payload: SceneStatePayload }
   | { type: 'SCENE_UPDATE'; payload: SceneUpdate }
+  // "This room has never held a scene; here is the one its design review says it
+  // should start from." Accepted once, and only from a connection that may change
+  // the models — see the SCENE_SEED branch in onMessage.
+  | { type: 'SCENE_SEED'; payload: RoomScene }
   | { type: 'SCENE_REFUSED'; payload: { reason: SceneRefusalReason } }
   | { type: 'SET_MODEL_EDITORS'; payload: { modelEditors: ModelEditors } }
   | { type: 'REVIEW_CONFIG'; payload: { config: ReviewDraft } }
@@ -225,6 +231,14 @@ export default class RoomServer implements Party.Server {
   // "the scene is this list" and the second one silently undoes the first: they
   // were both working from a list that was already out of date.
   scene: RoomScene = emptyScene();
+  // Whether this room's scene has EVER been set. Persisted with the scene, and sent
+  // with it, so a client can tell "a room somebody cleared" from "a room nobody has
+  // put anything in yet" — which an empty list alone cannot say. The second one is a
+  // room that should start from its design review's stored models, and a client that
+  // may change the models is what puts them there (SCENE_SEED). Once true it stays
+  // true: a room emptied on purpose must not be refilled from the database behind the
+  // person who emptied it. See SceneStatePayload.seeded.
+  sceneSeeded = false;
   // Who may change the models. Enforced here rather than only by hiding a
   // button: the websocket is the thing that has to say no, because a button
   // anybody can put back with devtools is not a permission.
@@ -361,6 +375,9 @@ export default class RoomServer implements Party.Server {
           // and the safe direction: a room that comes back permissive is a room
           // where anybody can swap the product under discussion.
           this.modelEditors = asModelEditors(record.modelEditors) ?? 'host';
+          // A record from a build that had no seed path infers the flag from what it
+          // holds; see seededFromStorage.
+          this.sceneSeeded = seededFromStorage(record, scene);
         }
       }
     } catch {
@@ -371,7 +388,12 @@ export default class RoomServer implements Party.Server {
     try {
       const legacy = asModelReference(await this.room.storage.get(MODEL_KEY));
       const translated = legacy ? sceneFromLegacyReference(legacy) : null;
-      if (translated) this.scene = translated;
+      if (translated) {
+        this.scene = translated;
+        // A batch-BA record is a room that was holding a model, so it is not a room
+        // waiting to be started from its review.
+        this.sceneSeeded = true;
+      }
     } catch {
       // Same as above: nothing to restore from, so the room starts empty.
     }
@@ -424,12 +446,13 @@ export default class RoomServer implements Party.Server {
     console.log(`[room] dropped a MODEL_CHANGE: ${reason}`);
   }
 
-  /** The scene plus who may change it — what SCENE_STATE carries and storage keeps. */
+  /** The scene, who may change it, and whether it was ever set — what SCENE_STATE carries and storage keeps. */
   private sceneStatePayload(): SceneStatePayload {
     return {
       models: this.scene.models,
       builtIn: this.scene.builtIn,
       modelEditors: this.modelEditors,
+      seeded: this.sceneSeeded,
     };
   }
 
@@ -468,7 +491,8 @@ export default class RoomServer implements Party.Server {
       return { restUrl, anonKey };
     };
 
-    this.reviewFactsCache = new ReviewFactsCache(this.room.id, source);
+    // The review's roster, also in a variant's room (`<reviewId>~A`).
+    this.reviewFactsCache = new ReviewFactsCache(reviewIdOfPartyRoom(this.room.id), source);
     return this.reviewFactsCache;
   }
 
@@ -577,6 +601,65 @@ export default class RoomServer implements Party.Server {
     // copy differs from would redraw every participant's model tree for nothing.
     if (next === this.scene) return;
     this.scene = next;
+    // Whatever this room was before, it is a room that has now held a scene.
+    this.sceneSeeded = true;
+    this.persistScene();
+    this.relay(JSON.stringify({ type: 'SCENE_STATE', payload: this.sceneStatePayload() } as RoomMessage));
+  }
+
+  /**
+   * Start a room that has NEVER held a scene from the one a client computed for it.
+   *
+   * The gap this closes: a room server sends its scene on connect even when it is
+   * empty, and the client replaces its own with what arrives — batch BB's rule, and
+   * the right one for a room that is the live space. But a brand new variant room has
+   * never held anything, and neither has a main room whose server storage is gone, so
+   * "empty" arrived as an order rather than as an absence, and the models the review
+   * has in its history were wiped off the client that had just built them. Nothing
+   * ever put them back: the variant of a review with two imported models showed "No
+   * model yet", and went on showing it after a reload.
+   *
+   * So the flag travels with the scene, and an unseeded room is a room that asks. The
+   * asking is answered by a client that may change the models — the SAME permission
+   * SCENE_UPDATE is judged by, because a seed is a scene change that happens to be the
+   * first one, and a participant who could put a model up by joining an empty room
+   * could put one up at all. It is accepted once, because the point of the flag is that
+   * the room's first scene is a fact about the room rather than about whoever asked
+   * last; later seeds are refused with a reason the client drops without showing it.
+   *
+   * The payload is rebuilt field by field like every other one (lib/scene/sceneWire),
+   * capped like an `add`, and an empty offer is ignored rather than accepted: a client
+   * whose read of the review came back with nothing has not seeded the room, and one
+   * that can answer better must still be able to.
+   */
+  private async seedScene(payload: unknown, sender: Party.Connection): Promise<void> {
+    if (this.sceneSeeded) {
+      this.refuseScene(sender, 'already_seeded');
+      return;
+    }
+    const refusal = await this.sceneRefusalFor(sender.id);
+    if (refusal) {
+      this.refuseScene(sender, refusal);
+      return;
+    }
+    if (!this.stillAdmitted(sender.id)) return;
+    // Asked again, and here it matters: judging the sender can take a round trip to the
+    // database the first time, and two people opening the same empty variant room at
+    // the same moment both offer its review's models. The first one in wins and the
+    // second is told — its own screen is then corrected by the SCENE_STATE the winner
+    // caused, which is relayed to everybody including them.
+    if (this.sceneSeeded) {
+      this.refuseScene(sender, 'already_seeded');
+      return;
+    }
+    const scene = asRoomScene(payload);
+    if (!scene) {
+      this.refuseScene(sender, 'unreadable-update');
+      return;
+    }
+    if (scene.models.length === 0 && scene.builtIn === null) return;
+    this.scene = { models: scene.models.slice(0, MAX_SCENE_MODELS), builtIn: scene.builtIn };
+    this.sceneSeeded = true;
     this.persistScene();
     this.relay(JSON.stringify({ type: 'SCENE_STATE', payload: this.sceneStatePayload() } as RoomMessage));
   }
@@ -722,7 +805,9 @@ export default class RoomServer implements Party.Server {
     } as RoomMessage));
     // The scene always goes, even when it is empty: it carries `modelEditors`
     // too, and a participant who arrives before anybody has imported anything
-    // still needs to know whether the import button is theirs to press.
+    // still needs to know whether the import button is theirs to press. Empty AND
+    // never seeded is also how a room asks a client to start it from its design
+    // review's stored models — see seedScene.
     conn.send(JSON.stringify({
       type: 'SCENE_STATE',
       payload: this.sceneStatePayload(),
@@ -1279,6 +1364,11 @@ export default class RoomServer implements Party.Server {
       }
       this.applySceneUpdate(update, sender);
 
+    } else if (msg.type === 'SCENE_SEED') {
+      // A client answering the "this room has never held a scene" that its own
+      // SCENE_STATE carried. Judged, validated and applied in one place; see seedScene.
+      await this.seedScene(msg.payload, sender);
+
     } else if (msg.type === 'SET_MODEL_EDITORS') {
       // A step above the scene itself: whoever may change the models decides what
       // everybody else's import button does, so letting somebody without the
@@ -1362,6 +1452,7 @@ export default class RoomServer implements Party.Server {
       // when the scene could only hold one. Replaces whatever was there, so a
       // room with an old client in it behaves the way that client expects.
       this.scene = translated;
+      this.sceneSeeded = true;
       this.persistScene();
       this.relay(JSON.stringify({
         type: 'SCENE_STATE',

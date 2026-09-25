@@ -24,13 +24,16 @@
 
 import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Box, X } from 'lucide-react';
+import { Box, Check, Pencil, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import SessionMap, { summaryLines } from '../review/SessionMap';
+import StartVariant from '../review/StartVariant';
 import { Avatar } from './IdentityChip';
 import { useSessionMap } from '../../lib/reviews/useSessionMap';
 import { sessionLabel } from '../../lib/reviews/lines';
 import { deleteReview, deleteSession } from '../../lib/reviews/deleteClient';
+import { renameCuration } from '../../lib/curationsRepo';
+import { MAX_REVIEW_TITLE } from '../../lib/reviewSetupStore';
 import { shortDate } from '../../lib/trackerContinuity';
 import { AVATAR_COLORS } from '../../lib/identity';
 import { peopleOf, variantCountOf, type LobbyReview } from '../../lib/lobby/useLobbyData';
@@ -52,6 +55,17 @@ export interface ReviewPreviewProps {
   invited?: boolean;
   /** Whether this person may delete this review and its sessions. Decided by the caller. */
   mayDelete: boolean;
+  /**
+   * Whether this person may CHANGE this review — `can(role, 'editReview')` in
+   * lib/reviews/roles.ts, decided by the caller the way `mayDelete` is.
+   *
+   * Narrower than `mayDelete` on one side and wider on the other, and both differences
+   * are the table's: an editor may name the review and start a variant of it but may
+   * not delete it, and on a deployment with no accounts the person who got past the
+   * front door may do all three. Batch BQ, which is what put a name field and a
+   * "+ Variant" on this panel.
+   */
+  mayEdit?: boolean;
   /** Read on a deployment with no accounts, where there is no token to verify. */
   isMeetingHost?: boolean;
   onOpen: () => void;
@@ -160,6 +174,7 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
   review,
   invited = false,
   mayDelete,
+  mayEdit = false,
   isMeetingHost = false,
   onOpen,
   onDeleted,
@@ -170,6 +185,11 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Naming the review, inline in its own heading (batch BQ).
+  const [renaming, setRenaming] = useState(false);
+  const [nameValue, setNameValue] = useState('');
+  const [nameBusy, setNameBusy] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   // Another review selected: the 3D viewer of the last one must go, along with any
   // confirmation that was open on it. Unmounting is what disposes its geometry.
@@ -177,6 +197,8 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
     setTurned(false);
     setConfirming(false);
     setError(null);
+    setRenaming(false);
+    setNameError(null);
   }, [review.id]);
 
   // The grid's summaries are already in hand, so they stand in until this review's own
@@ -211,6 +233,34 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
 
   const title = review.title.trim() === '' ? `Design review ${review.id.slice(0, 8)}` : review.title;
 
+  /**
+   * Name this design review.
+   *
+   * ONE COLUMN, through lib/curationsRepo.renameCuration, and not a whole-draft save:
+   * this panel holds a SUMMARY of the review and not its viewpoints, pins and agenda,
+   * and upserting the row from a summary would empty every field it never read. A
+   * meeting in progress in this review keeps its own write path — RoomPage's
+   * save-on-local-edit — and the two cannot disagree about anything but the name.
+   */
+  const saveName = async () => {
+    const wanted = nameValue.trim().slice(0, MAX_REVIEW_TITLE);
+    setRenaming(false);
+    setNameError(null);
+    // An empty field keeps the name the review has: pressing Enter in a field nobody
+    // filled in is not a decision to call it nothing.
+    if (wanted === '' || wanted === review.title.trim()) return;
+    setNameBusy(true);
+    const result = await renameCuration(review.id, wanted);
+    setNameBusy(false);
+    if (!result.ok) {
+      setNameError(result.error ?? 'That name could not be saved.');
+      return;
+    }
+    // The card in the grid and this heading both read the name out of the grid's rows,
+    // so the re-read is what makes the two agree.
+    onChanged();
+  };
+
   return (
     <aside
       aria-label="Preview"
@@ -220,7 +270,63 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
       {/* Heading */}
       <div className="flex flex-col gap-1.5 px-4 py-3.5 border-b border-gray-100">
         <p className={LABEL}>Design review</p>
-        <h2 className="text-[17px] font-semibold text-gray-900 leading-snug [text-wrap:balance]" data-testid="preview-title">{title}</h2>
+        <h2 className="text-[17px] font-semibold text-gray-900 leading-snug [text-wrap:balance]" data-testid="preview-title">
+          {renaming ? (
+            <span className="flex items-center gap-1.5">
+              <input
+                value={nameValue}
+                autoFocus
+                disabled={nameBusy}
+                maxLength={MAX_REVIEW_TITLE}
+                aria-label="Name this design review"
+                data-testid="preview-title-field"
+                placeholder="e.g. Door hinge, rev C"
+                onChange={(event) => setNameValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void saveName();
+                  if (event.key === 'Escape' && !nameBusy) setRenaming(false);
+                }}
+                className="flex-1 min-w-0 rounded border border-gray-300 px-2 py-1 text-[14px] font-semibold text-gray-900 outline-none focus:ring-1 focus:ring-black"
+              />
+              <button
+                onClick={() => void saveName()}
+                disabled={nameBusy}
+                data-testid="preview-title-save"
+                title="Save this name"
+                aria-label="Save this name"
+                className="w-7 h-7 shrink-0 grid place-items-center rounded border border-black bg-black text-white hover:bg-gray-800 transition-colors disabled:opacity-40"
+              >
+                <Check size={13} />
+              </button>
+              <button
+                onClick={() => setRenaming(false)}
+                disabled={nameBusy}
+                title="Cancel"
+                aria-label="Cancel"
+                className="w-7 h-7 shrink-0 grid place-items-center rounded border border-gray-200 text-gray-400 hover:text-black transition-colors disabled:opacity-40"
+              >
+                <X size={13} />
+              </button>
+            </span>
+          ) : mayEdit ? (
+            /* The name is a button rather than a pencil beside it: the whole point of
+               batch BQ is that naming a review is something a person looks for, and a
+               control you have to notice a 12px icon to find is not one. */
+            <button
+              onClick={() => { setNameValue(review.title); setNameError(null); setRenaming(true); }}
+              disabled={nameBusy}
+              data-testid="preview-title-edit"
+              title="Rename this design review"
+              className="group flex items-center gap-1.5 text-left"
+            >
+              <span className="min-w-0">{title}</span>
+              <Pencil size={13} className="shrink-0 text-gray-300 group-hover:text-gray-600 transition-colors" />
+            </button>
+          ) : (
+            title
+          )}
+        </h2>
+        {nameError && <p className="text-[10px] text-red-600 leading-snug" role="status">{nameError}</p>}
         <div className="flex items-center gap-2 mt-0.5">
           {/* The names this review's meetings recorded. The colours are picked by
               position because a name in a meeting's attendee list has no colour stored
@@ -369,6 +475,23 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
         >
           {invited ? 'Join' : 'Open room'}
         </button>
+        {/* Start a variant from the lobby, for the same people the room's top bar
+            offers it to and through the same write. Somebody reading a review from
+            outside it is exactly the person who decides it needs a second line, and
+            making them enter the room, open Sessions and click a meeting to find the
+            action is why nobody found it (batch BQ). */}
+        {mayEdit && (
+          <StartVariant
+            reviewId={review.id}
+            mayEdit={mayEdit}
+            isMeetingHost={isMeetingHost}
+            label="+ Variant"
+            look="row"
+            inFlow
+            data-testid="preview-variant"
+            onStarted={onChanged}
+          />
+        )}
         {/* Filtered to this review: the tracker reads ?review= the way it reads
             ?session=, and a card on the map already links in with both. */}
         <Link

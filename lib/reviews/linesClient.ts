@@ -166,17 +166,25 @@ async function post(body: Record<string, unknown>): Promise<LineActionResult> {
  * parent_session_id, and lib/reviews/linesRepo then gives the new room that
  * session's model and its line's still-open cards rather than the review's newest
  * of either. The caller navigates to `roomPath(reviewId, result.line.id)`.
+ *
+ * NULL for a review that has never recorded a meeting (batch BQ): there is no
+ * session to leave from, and the variant starts from what the main line is showing
+ * now. The endpoint accepts that only when the line really has no sessions — a
+ * variant that leaves from nowhere in a review that HAS met would be a line the map
+ * cannot draw and a room that opens on the wrong model.
  */
 export async function exploreVariant(
   reviewId: string,
-  parentSessionId: string,
+  parentSessionId: string | null,
   name: string,
   context: LineActionContext = {},
 ): Promise<LineActionResult> {
   return post({
     action: 'explore',
     reviewId,
-    parentSessionId,
+    // Omitted rather than sent as null, so the endpoint's `bodyString` sees the one
+    // thing it has to distinguish: no meeting named.
+    ...(parentSessionId ? { parentSessionId } : {}),
     name,
     isMeetingHost: context.isMeetingHost === true,
   });

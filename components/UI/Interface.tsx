@@ -39,6 +39,7 @@ import CallBar from './room/CallBar';
 import ManageButton from './room/ManageButton';
 import EmptyScenePrompt from './room/EmptyScenePrompt';
 import LobbyLink from './room/LobbyLink';
+import ReviewNameTag from './room/ReviewNameTag';
 import EditingStrip from '../review/EditingStrip';
 import PlmLaunch from '../review/PlmLaunch';
 import ReviewEditingNotice from '../review/ReviewEditingNotice';
@@ -125,6 +126,10 @@ const Interface: React.FC = () => {
   // that never looks at the map never asks the database for it.
   const [showSessions, setShowSessions] = useState(false);
   const reviewTitle = useActiveReviewStore((s) => s.config?.title ?? null);
+  // The line this room resolved itself to, put in the store by pages/RoomPage.tsx.
+  // Read here as well as in the top bar because the name in the corner says which
+  // review a VARIANT belongs to, and only this knows which line the room is on.
+  const activeLine = useStore((s) => s.activeLine);
   const sessionMap = useSessionMap(showSessions ? (roomId ?? null) : null);
 
   // Sync sameRoom flag with presence broadcasting
@@ -359,16 +364,26 @@ const Interface: React.FC = () => {
       {/* ── 3D Arena UI — hidden when Boardroom mode is active ── */}
       {!isBoardroomMode && <>
 
-      {/* Header / Meta / Tree */}
-      <div className="flex flex-col items-start pointer-events-none z-[30] absolute top-6 left-6 max-h-[90vh]">
+      {/* Header row: the room's name plate on the left, then the top bar in whatever
+          canvas is left before the side panel. ONE flex row rather than two absolutely
+          placed blocks, and that is the fix: the bar used to be centred from
+          `left-[300px]` with no idea how wide the block beside it had grown, so a full
+          bar ran back over the logo and forward under the panel, and the review's name
+          — which batch BQ put inside the h1 — sat exactly where the bar covered it.
+          Now the bar starts where the name plate ends and stops where the canvas does,
+          and sheds its own labels when that is not enough (see TopBar). */}
+      <div className={clsx(
+        "absolute top-6 left-6 flex items-start gap-4 pointer-events-none z-[45]",
+        canvasRightClass
+      )}>
           {/* The way back to the lobby. The logo is the link — it is what every other
               screen in this app means by home, and until now it went nowhere — and
               the word beside it is there because a link nobody knows is a link is not
               a control anybody finds twice. Leaving this way LEAVES the meeting: it
               does not end it, does not record it, and does not end it for everybody
               else. See components/UI/room/LobbyLink.tsx. */}
-          <header className="flex flex-col gap-1 mb-2 shrink-0">
-            <h1 className="font-bold tracking-tight text-lg text-neutral-900 flex items-center gap-2">
+          <header className="flex flex-col gap-1 shrink-0">
+            <h1 className="font-bold tracking-tight text-lg text-neutral-900 flex items-center gap-2 whitespace-nowrap">
                 <RouterLink
                   to="/"
                   title="Back to the lobby"
@@ -379,11 +394,50 @@ const Interface: React.FC = () => {
                 </RouterLink>
                 <LobbyLink />
             </h1>
+            {/* Which design review this room is holding, where the sim's stopwatch used
+                to be. Everybody in the room sees it, not only whoever may edit the
+                review — knowing which one you are in is what makes it possible to take
+                part in it, and a variant's room says which review its variant belongs
+                to. It REPLACES "Design Review Sim // 56.4s", which counted a clock
+                nobody in a meeting was ever racing, in the one line of the room's own
+                chrome that could have said what the meeting was about. A room holding
+                no review — an ad-hoc session, or one from before reviews — has no name
+                to show and keeps the stopwatch rather than an empty row. */}
             <div className="font-mono text-xs text-neutral-500 uppercase tracking-wide">
-                Design Review Sim // {Math.floor(time * 10) / 10}s
+                {(reviewTitle ?? '').trim() === ''
+                  ? <>Design Review Sim // {Math.floor(time * 10) / 10}s</>
+                  : <ReviewNameTag title={reviewTitle} line={activeLine} />}
             </div>
           </header>
-          
+
+          {/* The bar, in what is left of the canvas. TopBar centres itself and measures
+              the box this wrapper gives it, so the same element is both the thing laid
+              out and the thing that decides how much of itself fits. While THIS person
+              has Edit on, the bar is the amber strip instead: the meeting's controls are
+              not what they are here to use, and swapping them out is what makes that
+              obvious to everybody watching the shared screen. */}
+          <div className="flex-1 min-w-0 flex justify-center">
+            {iAmEditing ? (
+              <EditingStrip onDone={endReviewEdit} />
+            ) : (
+              <TopBar
+                isHost={isHost}
+                roomId={roomId}
+                showShare={showShare}
+                onToggleShare={() => setShowShare(v => !v)}
+                showParticipants={showParticipants}
+                onToggleParticipants={() => setShowParticipants(v => !v)}
+                onOpenDeicticExplainer={() => setShowDeicticExplainer(true)}
+                canEditReview={mayEditReview && !roleLoading && roomId !== undefined}
+                onEditReview={() => requestReviewEdit()}
+                onOpenSessions={roomId ? () => setShowSessions(v => !v) : undefined}
+              />
+            )}
+          </div>
+      </div>
+
+      {/* Meta / Tree — the left column, under the name plate rather than beside it. */}
+      <div className="flex flex-col items-start pointer-events-none z-[30] absolute top-[80px] left-6 max-h-[90vh]">
           {/* Scene Tree Integration - Expandable */}
           <div className="mt-2 pointer-events-auto">
             <button
@@ -486,34 +540,6 @@ const Interface: React.FC = () => {
                 </div>
               </div>
           )}
-      </div>
-
-      {/* TOP BAR: pointing (Highlight granularity + Pointer ▾) and the room
-          controls that used to be a row in the top-right corner. Centred on the
-          free canvas, not on the window, so it never runs under the side panel.
-          While THIS person has Edit on the bar is the amber strip instead: the
-          meeting's controls are not what they are here to use, and swapping them
-          out is what makes that obvious to everybody watching the shared screen. */}
-      <div className={clsx(
-        "absolute top-6 left-[300px] flex justify-center pointer-events-none z-[45]",
-        canvasRightClass
-      )}>
-        {iAmEditing ? (
-          <EditingStrip onDone={endReviewEdit} />
-        ) : (
-          <TopBar
-            isHost={isHost}
-            roomId={roomId}
-            showShare={showShare}
-            onToggleShare={() => setShowShare(v => !v)}
-            showParticipants={showParticipants}
-            onToggleParticipants={() => setShowParticipants(v => !v)}
-            onOpenDeicticExplainer={() => setShowDeicticExplainer(true)}
-            canEditReview={mayEditReview && !roleLoading && roomId !== undefined}
-            onEditReview={() => requestReviewEdit()}
-            onOpenSessions={roomId ? () => setShowSessions(v => !v) : undefined}
-          />
-        )}
       </div>
 
       {/* The session map, over the canvas and centred on the same free space the

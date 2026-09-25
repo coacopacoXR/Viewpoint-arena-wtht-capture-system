@@ -62,6 +62,10 @@ describe('the chip in a variant’s room', () => {
 
   it('links back to the main line’s room, which is the address with no ?line= in it', () => {
     renderChip();
+    // In the panel the chip opens, not beside it: batch BQ2 moved it there because the
+    // top bar had run out of room, and the way back is a choice you make once you know
+    // you are somewhere else — which is what the chip has just told you.
+    fireEvent.click(screen.getByText('You are on Variant A · Steel hinge pin'));
     const back = screen.getByTitle('Go to the main line’s room');
     expect(back.getAttribute('href')).toBe(`/room/${REVIEW}`);
     expect(back.textContent).toContain('Main line');
@@ -80,6 +84,16 @@ describe('the chip in a variant’s room', () => {
     renderChip({ mayEdit: false });
     expect(screen.getByText('You are on Variant A · Steel hinge pin')).toBeTruthy();
     expect(screen.queryByTitle(/Adopt it into the main line/)).toBeNull();
+    expect(screen.queryByText('Adopt into main line')).toBeNull();
+  });
+
+  it('still lets somebody who may not change the review get back to the main line', () => {
+    // The two decisions need a role; the way out does not. A participant who arrived by
+    // a variant's link and has no route back to the main line is a participant editing
+    // an address bar.
+    renderChip({ mayEdit: false });
+    fireEvent.click(screen.getByText('You are on Variant A · Steel hinge pin'));
+    expect(screen.getByTitle('Go to the main line’s room').getAttribute('href')).toBe(`/room/${REVIEW}`);
     expect(screen.queryByText('Adopt into main line')).toBeNull();
   });
 });

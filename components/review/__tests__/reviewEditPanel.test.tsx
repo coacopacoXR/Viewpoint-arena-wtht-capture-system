@@ -28,6 +28,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { useActiveReviewStore } from '../../../lib/activeReviewStore';
+import { consumeLocalEdit, forgetLocalEdit } from '../../../lib/reviewLocalEdit';
 import { createReviewDraft } from '../../../lib/reviewSetupStore';
 import type { ReviewDraft } from '../../../lib/reviewSetupStore';
 
@@ -122,6 +123,9 @@ function selectedTabs(): string[] {
 beforeEach(() => {
   configHolder.current = ACCOUNTS;
   useActiveReviewStore.setState({ config: seededDraft() });
+  // The edit mark is a module singleton, so a rename made by one test would licence
+  // the next one's save assertion.
+  forgetLocalEdit();
   curationsMock.load.mockReset().mockResolvedValue(null);
   curationsMock.create.mockReset().mockResolvedValue(null);
   deleteMock.review.mockReset().mockResolvedValue({ ok: true });
@@ -299,8 +303,12 @@ describe('deleting the design review', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Delete design review/ }));
 
-    expect(screen.getByTestId('delete-review')).toBeInTheDocument();
-    expect(screen.getByText(/Landing gear review/)).toBeInTheDocument();
+    const ask = screen.getByTestId('delete-review');
+    expect(ask).toBeInTheDocument();
+    // Scoped to the question: since batch BQ the review's name is also in the panel's
+    // own header, where it is the field that renames it, so an unscoped text query
+    // finds two and says nothing about which one is the confirmation.
+    expect(ask).toHaveTextContent(/Landing gear review/);
     expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument();
     expect(deleteMock.review).not.toHaveBeenCalled();
   });
@@ -343,5 +351,83 @@ describe('deleting the design review', () => {
 
     expect(deleteMock.review).not.toHaveBeenCalled();
     expect(screen.queryByTestId('delete-review')).toBeNull();
+  });
+});
+
+// ─── Naming the review (batch BQ) ─────────────────────────────────────────────
+//
+// The name is the first field in the panel, above the tabs. What matters here is not
+// that a field exists but WHERE THE WRITE GOES: through an activeReviewStore mutator,
+// so it is marked as this browser's edit (batch BH3) and RoomPage's subscriber saves
+// it — and returned as a draft, so the caller broadcasts it and everybody else in the
+// room is looking at the same name. A rename that reached the store without marking
+// would change this screen and no one else's, and would never be written to the row.
+
+describe('naming the design review', () => {
+  it('shows the name as the first field, above the tabs', () => {
+    render(<ReviewEditPanel reviewId="rev-1" />);
+
+    const row = screen.getByTestId('review-title-row');
+    expect(row).toHaveTextContent('Landing gear review');
+    // First, not last: the tabs are sections of the review, the name is what the
+    // review is called.
+    const panel = row.parentElement;
+    expect(panel?.firstElementChild).toBe(row);
+    expect(screen.getByRole('tablist', { name: 'Review sections' })).toBeInTheDocument();
+  });
+
+  it('renames the review inline, and marks it as this browser\'s edit so it is saved and broadcast', () => {
+    render(<ReviewEditPanel reviewId="rev-1" />);
+
+    fireEvent.click(screen.getByTestId('review-title-edit'));
+    const field = screen.getByTestId('review-title-field');
+    expect(field).toHaveAttribute('placeholder', 'e.g. Door hinge, rev C');
+    // Opening the field writes nothing.
+    expect(consumeLocalEdit()).toBe(false);
+
+    fireEvent.change(field, { target: { value: '  Door hinge, rev C  ' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    const config = useActiveReviewStore.getState().config;
+    expect(config?.title).toBe('Door hinge, rev C');
+    // The mark is what RoomPage's subscriber saves on. Consuming it here also leaves
+    // the flag clear for the next test.
+    expect(consumeLocalEdit()).toBe(true);
+    // And the field closed, showing the new name.
+    expect(screen.queryByTestId('review-title-field')).toBeNull();
+    expect(screen.getByTestId('review-title-row')).toHaveTextContent('Door hinge, rev C');
+  });
+
+  it('caps the name at 120 characters', () => {
+    render(<ReviewEditPanel reviewId="rev-1" />);
+
+    fireEvent.click(screen.getByTestId('review-title-edit'));
+    expect(screen.getByTestId('review-title-field')).toHaveAttribute('maxlength', '120');
+    fireEvent.change(screen.getByTestId('review-title-field'), { target: { value: 'y'.repeat(200) } });
+    fireEvent.click(screen.getByTestId('review-title-save'));
+
+    expect(useActiveReviewStore.getState().config?.title).toHaveLength(120);
+  });
+
+  it('keeps the name it had when the field is emptied, because that is not an answer', () => {
+    render(<ReviewEditPanel reviewId="rev-1" />);
+
+    fireEvent.click(screen.getByTestId('review-title-edit'));
+    fireEvent.change(screen.getByTestId('review-title-field'), { target: { value: '   ' } });
+    fireEvent.keyDown(screen.getByTestId('review-title-field'), { key: 'Enter' });
+
+    expect(useActiveReviewStore.getState().config?.title).toBe('Landing gear review');
+  });
+
+  it('changes nothing when the rename is escaped', () => {
+    render(<ReviewEditPanel reviewId="rev-1" />);
+
+    fireEvent.click(screen.getByTestId('review-title-edit'));
+    fireEvent.change(screen.getByTestId('review-title-field'), { target: { value: 'Something else' } });
+    fireEvent.keyDown(screen.getByTestId('review-title-field'), { key: 'Escape' });
+
+    expect(screen.queryByTestId('review-title-field')).toBeNull();
+    expect(useActiveReviewStore.getState().config?.title).toBe('Landing gear review');
+    expect(consumeLocalEdit()).toBe(false);
   });
 });

@@ -214,6 +214,29 @@ const uid = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
 export const NEW_REVIEW_TITLE = 'Untitled design review';
 
 /**
+ * How long a design review's name may be.
+ *
+ * It is read on a lobby card, in a room's top-left corner and in a tracker row, so
+ * the limit is what those three can show rather than what a column can hold:
+ * review_curations.title is text. 120 is long enough for "Door hinge, rev C —
+ * supplier change after the tooling quote" and short enough that a card truncates
+ * rather than wraps into its neighbours.
+ */
+export const MAX_REVIEW_TITLE = 120;
+
+/**
+ * A name somebody typed, as the review stores it.
+ *
+ * Trimmed and capped. An empty answer keeps `current` rather than un-naming the
+ * review: naming is an edit like any other, and pressing Enter in a field nobody
+ * filled in is not a decision to call the review nothing.
+ */
+export function reviewTitleFrom(raw: string, current: string): string {
+  const wanted = raw.trim().slice(0, MAX_REVIEW_TITLE);
+  return wanted === '' ? current : wanted;
+}
+
+/**
  * A draft for a review that does not exist yet.
  *
  * Exported (rather than staying the private `emptyDraft` below) because batch BH

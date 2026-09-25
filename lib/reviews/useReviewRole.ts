@@ -24,6 +24,7 @@ import { useIdentity } from '../identity';
 import { useConnectorConfig } from '../config/ConfigContext';
 import { identityRequired, publicIdentityOf } from '../auth/authRules';
 import { readReviewRoster, type ReviewRoster, EMPTY_ROSTER } from './membersRepo';
+import { REVIEW_ROSTER_CHANGED } from './rosterEvents';
 import { can as mayDo, resolveRole, type ReviewAction, type ReviewMember, type Role } from './roles';
 
 export interface UseReviewRoleOptions {
@@ -152,6 +153,17 @@ export function useReviewRole(options: UseReviewRoleOptions): ReviewRoleState {
       cancelled = true;
     };
   }, [accountsOn, reviewId, nonce]);
+
+  // Read again when this review's roster changes under us — the room's own owner
+  // claim lands after the first read (see announceReviewRosterChanged).
+  useEffect(() => {
+    if (!accountsOn || typeof window === 'undefined') return;
+    const onChange = (event: Event) => {
+      if (event instanceof CustomEvent && event.detail === reviewId) setNonce((n) => n + 1);
+    };
+    window.addEventListener(REVIEW_ROSTER_CHANGED, onChange);
+    return () => window.removeEventListener(REVIEW_ROSTER_CHANGED, onChange);
+  }, [accountsOn, reviewId]);
 
   const accountId = identity?.guest === true ? null : (identity?.accountId ?? null);
 

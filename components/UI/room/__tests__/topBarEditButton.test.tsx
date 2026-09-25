@@ -16,6 +16,7 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import TopBar from '../TopBar';
 
 // XRButton reads the xrStore singleton, and createXRStore injects the WebXR
@@ -49,7 +50,10 @@ function renderBar(overrides: Partial<BarProps> = {}) {
     onOpenDeicticExplainer: vi.fn(),
     ...overrides,
   };
-  return render(<TopBar {...props} />);
+  // Inside a router: the bar carries LineChip and, since batch BQ, StartVariant, and
+  // both navigate — the second unconditionally, because starting a variant ends in the
+  // new variant's room.
+  return render(<MemoryRouter><TopBar {...props} /></MemoryRouter>);
 }
 
 afterEach(() => {

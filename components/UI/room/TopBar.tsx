@@ -3,9 +3,15 @@
 // Highlight granularity stays visible — it is used constantly — while the two
 // set-and-forget pointer toggles fold into Pointer ▾. To the right of the
 // divider are the room controls that used to be a row in the top-right corner.
-// At >=1500px the room controls carry a short label; below that they are
-// icon-only (the label moves into `title`) so the bar still fits the free
-// canvas at 1280px.
+//
+// The bar has to FIT, and what it has to fit is not the window: since batch BQ2 it
+// is laid out between the room's left block (logo, lobby, the review's name) and the
+// side panel, so the width it gets depends on the panel being open and on the review
+// being named. A window media query cannot know either, and the one this bar used
+// (`min-width: 1500px`) was wrong in both directions — labels at 1600px with the
+// panel open ran under it, and no labels at 1280px with the panel closed threw away
+// space that was there. So the bar MEASURES the box it was given and sheds labels,
+// least-used first, until it fits; see TOP_BAR_DROP_ORDER.
 
 import React from 'react';
 import {
@@ -16,10 +22,102 @@ import { useStore } from '../../../store';
 import { usePresence } from '../../../lib/PresenceContext';
 import SharePanel from '../SharePanel';
 import XRButton from '../XRButton';
+import StartVariant from '../../review/StartVariant';
 import LineChip from './LineChip';
 import PointerMenu from './PointerMenu';
 
-const WIDE_LABEL = 'hidden [@media(min-width:1500px)]:inline';
+/**
+ * The order the bar sheds its labels in, least-used first.
+ *
+ * Index 0 goes at compact level 1, and so on: at level N every control in the first N
+ * entries is icon-only, with its word still in `title` so a hover says what it is. Edit,
+ * Sessions and Variant are last because they are the three that name what the meeting is
+ * doing rather than how it is pointed at, and a bar of unlatched icons is a bar nobody
+ * can read at a glance on a shared screen.
+ *
+ * Exported because the test that pins the order reads it: "drops the least-used first"
+ * is a claim about a list, and a list a test cannot see is a list that can be reordered
+ * by accident.
+ */
+export const TOP_BAR_DROP_ORDER = [
+  'privacy',
+  'boardroom',
+  'share',
+  'pointer',
+  'highlight',
+  'people',
+  'variant',
+  'sessions',
+  'edit',
+] as const;
+
+/** A control whose label the bar can shed. */
+export type TopBarButton = (typeof TOP_BAR_DROP_ORDER)[number];
+
+/** The compact level at which this control's label goes. Level 0 is "everything labelled". */
+export function dropLevelOf(control: TopBarButton): number {
+  return TOP_BAR_DROP_ORDER.indexOf(control) + 1;
+}
+
+/** The level at which there is nothing left to shed. */
+export const TOP_BAR_MAX_COMPACT = TOP_BAR_DROP_ORDER.length;
+
+/**
+ * How compact the bar has to be to fit the box it was given.
+ *
+ * Measured rather than breakpointed, and climbing ONE level per layout pass: there is no
+ * table of widths to keep in step with the labels, the icons and the review's name, and
+ * none to get wrong when somebody adds a control. The pass runs in a layout effect, so a
+ * bar that overflows on the frame it is laid out in is already shorter by the time that
+ * frame is painted — and it re-runs on `level`, which is what makes the climb converge, and
+ * on `contentKey`, which is what makes it notice that the bar itself changed.
+ *
+ * The box is measured, not the bar: the bar is a flex item that shrinks to the box while
+ * its own children (all `shrink-0`) overflow it, which is exactly what `scrollWidth`
+ * reports and what `clientWidth` does not. Watching the box for a change in WIDTH resets
+ * to level 0 and lets the climb start again — the panel opening, a window resize, a
+ * review being named. Height is deliberately ignored: a dropdown opening inside the bar
+ * must not cost anybody their labels.
+ */
+function useCompactLevel(
+  boxRef: React.RefObject<HTMLDivElement | null>,
+  barRef: React.RefObject<HTMLDivElement | null>,
+  contentKey: string,
+): number {
+  const [level, setLevel] = React.useState(0);
+  // Bumped by a resize, so the measuring pass runs again even when the level it would set
+  // is the one already there. "The box got narrower while the bar was comfortable" has to
+  // be measured from the top, and a setState to the value it already has neither
+  // re-renders nor re-measures anything.
+  const [pass, setPass] = React.useState(0);
+
+  React.useLayoutEffect(() => {
+    const box = boxRef.current;
+    const bar = barRef.current;
+    if (!box || !bar) return;
+    if (bar.scrollWidth <= box.clientWidth + 1) return;
+    // Clamped, so a bar that cannot fit even icon-only stops asking instead of
+    // re-rendering for ever.
+    setLevel((current) => Math.min(current + 1, TOP_BAR_MAX_COMPACT));
+  }, [level, pass, contentKey, boxRef, barRef]);
+
+  React.useEffect(() => {
+    const box = boxRef.current;
+    if (!box || typeof ResizeObserver === 'undefined') return;
+    let lastWidth = box.getBoundingClientRect().width;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? box.getBoundingClientRect().width;
+      if (Math.abs(width - lastWidth) < 1) return;
+      lastWidth = width;
+      setLevel(0);
+      setPass((current) => current + 1);
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [boxRef]);
+
+  return level;
+}
 
 type Tone = 'idle' | 'on' | 'danger';
 
@@ -30,7 +128,11 @@ const RoomButton: React.FC<{
   label: string;
   tone?: Tone;
   trailing?: React.ReactNode;
-}> = ({ onClick, title, icon, label, tone = 'idle', trailing }) => (
+  /** The level at which the label goes. Omitted for a control that keeps its word. */
+  dropAt?: number;
+  /** The bar's current compact level. */
+  level?: number;
+}> = ({ onClick, title, icon, label, tone = 'idle', trailing, dropAt, level = 0 }) => (
   <button
     onClick={onClick}
     title={title}
@@ -44,7 +146,9 @@ const RoomButton: React.FC<{
     )}
   >
     {icon}
-    <span className={clsx(WIDE_LABEL, 'text-[10px] font-bold uppercase tracking-wide')}>{label}</span>
+    {(dropAt === undefined || level < dropAt) && (
+      <span className="text-[10px] font-bold uppercase tracking-wide">{label}</span>
+    )}
     {trailing}
   </button>
 );
@@ -112,12 +216,46 @@ const TopBar: React.FC<TopBarProps> = ({
   // The same count the participants panel shows in its header.
   const peopleCount = (hideAgents ? 0 : agents.length) + remoteParticipantList.length;
 
+  const boxRef = React.useRef<HTMLDivElement>(null);
+  const barRef = React.useRef<HTMLDivElement>(null);
+  // Everything that decides how wide the bar WANTS to be, as one string: which controls
+  // render at all, and the two labels whose words change. The measuring pass depends on
+  // this rather than on nothing, so a variant's chip appearing or the count growing a digit
+  // is measured again — without measuring on every render of a room that re-renders several
+  // times a second on presence.
+  const contentKey = [
+    roomId ?? '',
+    peopleCount,
+    isPrivacyMode ? 1 : 0,
+    `${activeLine?.id ?? ''}:${activeLine?.name ?? ''}`,
+    canEditReview && onEditReview ? 1 : 0,
+    onOpenSessions ? 1 : 0,
+    isHost ? 1 : 0,
+  ].join('|');
+  const compact = useCompactLevel(boxRef, barRef, contentKey);
+  const shows = (control: TopBarButton) => compact < dropLevelOf(control);
+
   return (
-    <div className="flex items-center gap-1.5 bg-white/90 backdrop-blur-md border border-gray-200 rounded-md shadow-sm p-1.5 pointer-events-auto">
+    // The box the bar has to fit, given to it by the room's header row: everything
+    // between the left block and the side panel. Centring lives here rather than in
+    // Interface so that the thing being measured and the thing being centred are the
+    // same element, and so the bar can be measured on its own in a test.
+    <div
+      ref={boxRef}
+      data-testid="top-bar-box"
+      className="flex w-full min-w-0 justify-center pointer-events-none"
+    >
+    <div
+      ref={barRef}
+      data-testid="top-bar"
+      className="flex items-center gap-1.5 bg-white/90 backdrop-blur-md border border-gray-200 rounded-md shadow-sm p-1.5 pointer-events-auto"
+    >
       {/* Which line of the design review this meeting is on. First, before anything
           that can be changed, because it is the one thing here that says where the
           changes will land: a variant meets in its own room and adopting from it or
-          dropping it are the two decisions the chip carries. */}
+          dropping it are the two decisions the chip carries. Since batch BQ2 it also
+          carries the way back to the main line, which used to be a second button
+          beside it and was the first thing the bar ran out of room for. */}
       {roomId && <LineChip roomId={roomId} line={activeLine} mayEdit={canEditReview} isMeetingHost={isHost} />}
 
       {/* Into the review's own editing, leftmost because it is the one control here
@@ -130,6 +268,8 @@ const TopBar: React.FC<TopBarProps> = ({
           title="Edit the review"
           icon={<Pencil size={16} />}
           label="Edit"
+          dropAt={dropLevelOf('edit')}
+          level={compact}
         />
       )}
 
@@ -143,13 +283,37 @@ const TopBar: React.FC<TopBarProps> = ({
           title="This design review's sessions"
           icon={<Milestone size={16} />}
           label="Sessions"
+          dropAt={dropLevelOf('sessions')}
+          level={compact}
         />
       )}
 
-      {/* Highlight granularity */}
+      {/* Start a variant, beside the map of the ones there already are.
+          Batch BQ: the only way to start one before this was Sessions → click a
+          meeting → "Explore a variant from here", three clicks deep on a diagram,
+          and the user's report was that nothing anywhere offered it. Same write,
+          same people — `editReview` in lib/reviews/roles.ts, the answer the Edit
+          button beside it was already given — and the word on screen is "Variant",
+          never the programming one the icon suggests. */}
+      {canEditReview && roomId && (
+        <StartVariant
+          reviewId={roomId}
+          lineId={activeLine?.id ?? null}
+          mayEdit={canEditReview}
+          isMeetingHost={isHost}
+          label="Variant"
+          showLabel={shows('variant')}
+        />
+      )}
+
+      {/* Highlight granularity. The caption is what a compact bar sheds; Model and
+          Part stay, because without them the two toggles are two identical pills and
+          the choice they offer is unreadable. */}
       <div className="flex items-center gap-1 px-1.5 shrink-0">
         <Crosshair size={14} className="text-gray-400" />
-        <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Highlight</span>
+        {shows('highlight') && (
+          <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500 mr-1">Highlight</span>
+        )}
         <button
           onClick={() => setLaserHighlightGranularity('model')}
           title="Highlight whole model"
@@ -173,17 +337,20 @@ const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Finger pointer + hover dwell, folded away but never invisible */}
-      <PointerMenu onOpenExplainer={onOpenDeicticExplainer} />
+      <PointerMenu onOpenExplainer={onOpenDeicticExplainer} showLabel={shows('pointer')} />
 
       <div className="w-px h-7 bg-gray-200 mx-0.5 shrink-0" />
 
-      {/* People */}
+      {/* People — the count stays when the word goes, because "how many are here" is
+          the answer this button exists to give and the icon alone does not give it. */}
       <RoomButton
         onClick={onToggleParticipants}
         title="Participants"
         icon={<Users size={16} />}
         label="People"
         tone={showParticipants ? 'on' : 'idle'}
+        dropAt={dropLevelOf('people')}
+        level={compact}
         trailing={
           <span className="text-[10px] font-mono tabular-nums opacity-70">{peopleCount}</span>
         }
@@ -197,6 +364,8 @@ const TopBar: React.FC<TopBarProps> = ({
           icon={<Share2 size={16} />}
           label="Share"
           tone={showShare ? 'on' : 'idle'}
+          dropAt={dropLevelOf('share')}
+          level={compact}
         />
         {showShare && roomId && (
           <SharePanel roomId={roomId} onClose={onToggleShare} />
@@ -210,6 +379,8 @@ const TopBar: React.FC<TopBarProps> = ({
         icon={isPrivacyMode ? <ShieldOff size={16} /> : <Shield size={16} />}
         label={isPrivacyMode ? 'Privacy On' : 'Privacy'}
         tone={isPrivacyMode ? 'danger' : 'idle'}
+        dropAt={dropLevelOf('privacy')}
+        level={compact}
       />
 
       {/* Boardroom Mode Toggle — host only */}
@@ -228,11 +399,14 @@ const TopBar: React.FC<TopBarProps> = ({
           icon={<MonitorPlay size={16} />}
           label="Boardroom"
           tone={isBoardroomMode ? 'on' : 'idle'}
+          dropAt={dropLevelOf('boardroom')}
+          level={compact}
         />
       )}
 
       {/* XR Entry — renders nothing when the device supports neither AR nor VR */}
       <XRButton />
+    </div>
     </div>
   );
 };

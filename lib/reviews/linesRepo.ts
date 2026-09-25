@@ -25,6 +25,7 @@ import {
   MAIN_LINE_NAME,
   isMainLine,
   lineById,
+  mainLineOf,
   orderedLines,
   sessionLabel,
   toReviewLine,
@@ -430,6 +431,16 @@ async function adoptedSceneFor(reviewId: string, mainLineId: string): Promise<st
  * something changed: a variant that has never met starts from the session it left
  * (lineOriginSession), and the main line starts from what the newest adoption put
  * on it while no meeting has superseded that.
+ *
+ * Batch BQ added the third: a variant with NO meeting to leave from, which is one
+ * started in a review that had never met. It has no parent session and no session of
+ * its own, so `lineOriginSession` answers null for it — and null here means "rebuild
+ * from the review's whole history", which for such a variant is the newest revision
+ * of every line it has ever stored rather than the scene the main line is showing.
+ * So the main line's own answer is asked for instead: what an adoption put on it, or
+ * what its last meeting was looking at, or — for a review that still has not met —
+ * null, and the caller rebuilds from the review's stored revisions, which is exactly
+ * the scene the main line's room would show.
  */
 export async function originRevisionIds(
   reviewId: string | null | undefined,
@@ -443,8 +454,17 @@ export async function originRevisionIds(
     if (adopted) return adopted;
   }
   const origin = await lineOriginSession(line);
-  if (!origin || origin.revisionIds.length === 0) return null;
-  return origin.revisionIds;
+  if (origin && origin.revisionIds.length > 0) return origin.revisionIds;
+  if (line.kind === 'variant' && line.parentSessionId === null) {
+    const main = mainLineOf(await listLines(reviewId));
+    if (main && main.id !== line.id) {
+      const adopted = await adoptedSceneFor(reviewId, main.id);
+      if (adopted) return adopted;
+      const last = await lastSessionOnLine(main.id);
+      if (last && last.revisionIds.length > 0) return last.revisionIds;
+    }
+  }
+  return null;
 }
 
 /**

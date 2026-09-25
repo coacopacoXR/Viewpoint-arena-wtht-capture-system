@@ -212,11 +212,23 @@ describe('the lobby — the join box', () => {
 });
 
 describe('the lobby — starting a review', () => {
+  /**
+   * The button opens onto the name field in its place since batch BQ, so starting a
+   * review is two presses. Enter on an empty field is the answer "nobody named it",
+   * which creates the untitled review this file has always been asserting on.
+   */
+  async function startReview() {
+    // Two fireEvent calls and then a tick, rather than both inside one `await act(async…)`:
+    // an async act scope does not flush between events, so the field the first click
+    // renders would not be in the DOM for the second.
+    fireEvent.click(screen.getByTestId('new-design-review'));
+    fireEvent.keyDown(screen.getByTestId('new-design-review-field'), { key: 'Enter' });
+    await act(async () => {});
+  }
+
   it('writes the row, then opens that same review with Edit on', async () => {
     await renderLobby();
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('new-design-review'));
-    });
+    await startReview();
     expect(createReviewMock).toHaveBeenCalledTimes(1);
     const reviewId = createReviewMock.mock.calls[0][0];
     expect(screen.getByTestId('room-path').textContent).toBe(`/room/${reviewId}`);
@@ -232,9 +244,7 @@ describe('the lobby — starting a review', () => {
     // its NORMAL answer and not an incident.
     createReviewMock.mockResolvedValue(null);
     await renderLobby();
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('new-design-review'));
-    });
+    await startReview();
     const reviewId = createReviewMock.mock.calls[0][0];
     expect(screen.getByTestId('room-path').textContent).toBe(`/room/${reviewId}`);
     expect(useReviewSetupStore.getState().draft?.reviewId).toBe(reviewId);

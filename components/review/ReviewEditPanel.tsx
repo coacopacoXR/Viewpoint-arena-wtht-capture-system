@@ -24,7 +24,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, ListOrdered, MapPin, Scale, Tags, Trash2, Users } from 'lucide-react';
+import { Camera, ListOrdered, MapPin, Pencil, Scale, Tags, Trash2, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useStore } from '../../store';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
@@ -34,7 +34,7 @@ import { useConnectorConfig } from '../../lib/config/ConfigContext';
 import { createReview, loadCuration } from '../../lib/curationsRepo';
 import { deleteReview } from '../../lib/reviews/deleteClient';
 import { resetLineCache } from '../../lib/reviews/linesRepo';
-import type { ReviewDraft } from '../../lib/reviewSetupStore';
+import { MAX_REVIEW_TITLE, type ReviewDraft } from '../../lib/reviewSetupStore';
 import { AgendaTab } from './AgendaTab';
 import { LabelsTab } from './LabelsTab';
 import PeopleTab from './PeopleTab';
@@ -151,6 +151,95 @@ const DeleteReviewRow: React.FC<{ reviewId: string; title: string }> = ({ review
         </button>
       </div>
       {error && <p className="text-[10px] text-red-400 leading-snug" role="status">{error}</p>}
+    </div>
+  );
+};
+
+/**
+ * The review's name, as the first thing in the panel that edits it.
+ *
+ * Batch BQ. Until now nothing anywhere wrote `review_curations.title`, so every
+ * review was "Untitled design review" and the only way to tell two of them apart in
+ * the lobby was the model behind them. The name sits ABOVE the tabs rather than
+ * among them because it is not a section of the review, it is what the review is
+ * called, and a tab called "Name" would be the sixth of six things to look in.
+ *
+ * Inline rather than a dialog for the reason the panel's delete gives: it cannot be
+ * styled to the panel that offered it, and it freezes the room behind it.
+ *
+ * WHO MAY. Not gated here, deliberately: this panel is rendered only while the room
+ * server has granted THIS browser the review's Edit, which is
+ * `can(role, 'editReview')` — the owner and the editors, and on a deployment with no
+ * accounts the meeting host. A second check would be a second copy of a rule that
+ * lib/reviews/roles.ts already answers.
+ *
+ * The write goes through the same `actions` as every other field in this panel, so
+ * it is marked as this browser's edit (batch BH3), saved by RoomPage's subscriber and
+ * broadcast as REVIEW_CONFIG: everybody in the room gets the new name, including the
+ * one shown in the room's own top-left corner.
+ */
+const ReviewTitleRow: React.FC<{ title: string; onRename: (next: string) => void }> = ({ title, onRename }) => {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+
+  const open = () => { setValue(title); setEditing(true); };
+  const close = () => setEditing(false);
+  const save = () => {
+    setEditing(false);
+    // An empty field keeps the name the review had, which is the store's rule
+    // (lib/reviewSetupStore.reviewTitleFrom) and not this component's: the same
+    // answer has to hold for the lobby's rename and for a room's.
+    onRename(value);
+  };
+
+  return (
+    <div className="shrink-0 rounded-lg border border-white/10 bg-[#111] px-2.5 py-2" data-testid="review-title-row">
+      <p className="font-mono text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">
+        Design review
+      </p>
+      {editing ? (
+        <div className="flex items-center gap-1.5">
+          <input
+            value={value}
+            autoFocus
+            maxLength={MAX_REVIEW_TITLE}
+            aria-label="Name this design review"
+            data-testid="review-title-field"
+            placeholder="e.g. Door hinge, rev C"
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') save();
+              if (event.key === 'Escape') close();
+            }}
+            className="flex-1 min-w-0 rounded border border-white/20 bg-black/40 px-2 py-1 text-[12px] text-gray-100 outline-none focus:border-white/50"
+          />
+          <button
+            onClick={save}
+            data-testid="review-title-save"
+            className="shrink-0 px-2 py-1 rounded bg-white text-black text-[10px] font-bold uppercase tracking-wide hover:bg-gray-200 transition-colors"
+          >
+            Save
+          </button>
+          <button
+            onClick={close}
+            title="Cancel"
+            aria-label="Cancel"
+            className="shrink-0 px-1.5 py-1 rounded border border-white/15 text-gray-400 hover:text-white transition-colors"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={open}
+          data-testid="review-title-edit"
+          title="Rename this design review"
+          className="w-full flex items-center gap-1.5 text-left group"
+        >
+          <span className="flex-1 min-w-0 truncate text-[13px] font-semibold text-gray-100">{title}</span>
+          <Pencil size={12} className="shrink-0 text-gray-600 group-hover:text-gray-300 transition-colors" />
+        </button>
+      )}
     </div>
   );
 };
@@ -369,6 +458,8 @@ const ReviewEditPanel: React.FC<{
 
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-2">
+      <ReviewTitleRow title={config.title} onRename={actions.setTitle} />
+
       <div
         role="tablist"
         aria-label="Review sections"
