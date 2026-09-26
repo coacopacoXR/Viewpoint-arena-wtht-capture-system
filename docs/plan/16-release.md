@@ -57,24 +57,97 @@ the work in §3 that does not depend on them while waiting.
 | # | Decision | Recommendation to offer |
 |---|---|---|
 | D1 | **Version and label**: "0.1.0 preview" or "1.0". | 0.1.0, labelled a preview: identity, variants and backups are days old. |
-| D2 | **Private material** (`docs/plan/` 76+ files with the user's email, admin account, Ubuntu user, home IP, test names; `docs/paper/` thesis notes): keep public, move to a private repo, or delete? And scrub them from git history too? | Move both to a private repo; remove from the release branch; scrub from history in the same rewrite as D3. |
+| D2 | ~~Private material~~ **DECIDED 2026-09-26 by the user: "only publish the relevant files for people to install it, not the plans, the paper thing and all that."** See §3.0. Still to ask: also scrub them from git history (needs D3)? | Yes, in the same rewrite as D3. |
 | D3 | **History rewrite.** Removing the branded models (§3.1) and D2's files from history means `git filter-repo` + force-push, which breaks every clone/fork. Do it, once, right before the announcement? | Yes, once, just before announcing, after everything else is merged. |
 | D4 | **Security review before or after the announcement** (§3.4). | Before. It is a tool for unreleased product designs. |
 | D5 | **Licence**: the repo is Apache-2.0. Keep it? | Keep, unless the user has a reason (e.g. university IP rules for the thesis). Ask about that. |
 | D6 | **Replacement sample model(s)**: a plain cube (decided 2026-09-17), or something nicer they own (e.g. a simple bracket they model)? | Cube now; a nicer own model can follow. |
 | D7 | **Where it lives**: keep the repo name `Viewpoint-arena-wtht-capture-system` or rename (e.g. `viewpoint-arena`) before announcing? | Rename before the announcement if they want it; GitHub redirects the old URL. |
+| D8 | **Commit email.** All 267 commits carry `coacopaco@gmail.com`, visible to anyone. Replace it with the GitHub "noreply" address in the same history rewrite (a `.mailmap` / `--mailmap` in filter-repo), and set it for future commits? | Yes. The user finds their noreply address under GitHub → Settings → Emails. |
 
 ---
 
 ## 3. The work
 
-Order: 3.2 → 3.3 → 3.4 → 3.5/3.6/3.7 → 3.1 → 3.8 (the user's part) last. Each step: do it, test it
+Order: 3.0b checklist to the user early (they can revoke keys any time) → 3.2 → 3.3 → 3.4 → 3.5/3.6/3.7 → 3.0 + 3.1 → 3.8 (the user's part) last. Each step: do it, test it
 live where it touches the product, run the full checks, commit to the planning
 branch, push, and tell the user in plain words.
 
 Full checks = `npm run typecheck && npm run lint && npm run test && npm run build && npm run check:env`,
 plus `capture-service/.venv/Scripts/python.exe -m pytest -q` when the Python
 service changes.
+
+### 3.0 Only what people need to install and run it (D2)
+The user wants the public repository to contain only what someone needs to
+install, run, understand and contribute to the app. Not the plans, not the
+paper, not the delegation specs.
+
+**Leave out of the public repo** (move to a private repo the user owns; Claude
+prepares the move, the user creates the private repo):
+- `docs/plan/`: plans, execution logs, delegation specs, sketches. It contains
+  the user's email, admin account, Ubuntu user, home IP, and test names.
+- `docs/paper/`: thesis notes.
+- `docs/ACTION_TRACKER_ROADMAP.md`, `docs/MULTIPLAYER_ROADMAP.md`,
+  `docs/local-capture-plan.md`: internal roadmaps. Read each first: move
+  anything a user needs (e.g. how local capture works) into user docs.
+- `metadata.json` at the root: check what it is (it looks like an AI-studio
+  leftover); remove it if nothing uses it.
+- The stray `sennheiser_momentum_4_headphones.glb` at the root (see 3.1).
+- Code comments that cite `docs/plan/...` stay harmless but point nowhere once
+  the folder is gone. Rewrite the ones in user-facing docs; leave code
+  comments unless they read as broken.
+
+**Keep:** the app (`components/`, `pages/`, `lib/`, `api/`, `party/`,
+`server/`, `utils/`, `types/`, root config files), `capture-service/`,
+`deploy/`, `install.sh`, `docker-compose*.yml`, `.env.example`,
+`viewpoint.config.example.ts`, `scripts/`, all tests (`__tests__`, `e2e/`,
+`test/`), `.github/`, `docs/INSTALL.md`, `docs/README.md`,
+`docs/supabase-schema.sql`, `docs/adapters/`, and README, LICENSE, CHANGELOG,
+CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, THIRD_PARTY.
+
+**Make sure local-only things can never be added:** `.gitignore` already
+covers `.env.local`, `.qwen/`, `.qwen-tasks/`, `Videos Post linkedin/`,
+`test-results/`. Add `.claude/` (Claude Code's local settings are in this
+project folder and are NOT ignored today; never committed so far). Add a CI
+step that fails if `docs/plan/` or `docs/paper/` reappear on `main`.
+
+**Order matters:** this plan and the execution log live in `docs/plan/`.
+Before the removal commit, the user creates the private repo and Claude copies
+`docs/plan/` and `docs/paper/` into it (with their history if the user wants,
+via `git subtree split` or a filter-repo'd copy) and confirms it's there. Also
+keep a plain copy outside the repo folder. Update Claude's memory files to
+point at the new location.
+
+**How it reaches the public:** the removal is a normal commit on the planning
+branch (the files stay in the private repo). Removing them from HISTORY is part
+of the user's rewrite (D3, §3.8).
+
+### 3.0b The user's accounts and keys: inventory and clean-up
+The user: "remove all my tokens/accounts that I have used here in case
+something slips." Checked 2026-09-26 (names only, no values ever printed):
+**a secret scan of the full git history of every branch is clean**, `.env.local`
+is git-ignored, and no AI provider keys are stored in the admin console.
+
+Claude's part: prepare a checklist with one line per item, what it is, where it
+lives and how to revoke it, and remove local copies from files when the user
+says so. **The user revokes the external ones** (they need the user's logins).
+
+| # | What | Where it lives | What to do |
+|---|---|---|---|
+| K1 | Old Supabase project keys (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`) | `.env.local` (git-ignored) | The project seemed gone in September. User: confirm it's deleted in the Supabase dashboard. Then delete the lines from `.env.local`. |
+| K2 | Onshape OAuth app (`ONSHAPE_CLIENT_ID`, `ONSHAPE_CLIENT_SECRET`) | `.env.local` | User: in the Onshape developer portal, rotate the secret, or delete the app if unused. Then clear the lines. |
+| K3 | PartyKit cloud host (`VITE_PARTYKIT_HOST`) | `.env.local` | If a cloud PartyKit project exists on the user's account, delete it (the self-hosted install doesn't need it). |
+| K4 | Cloudflare Realtime TURN keys (see commit `27165ba` on main) | Cloudflare dashboard, maybe a Vercel project's env vars | User: revoke the TURN key if nothing uses it, and remove the Vercel project/env vars if there is an old deployment. |
+| K5 | GitHub push access | Windows Credential Manager (git), any personal access tokens | After release: revoke tokens not needed (GitHub → Settings → Developer settings), and check 2FA is on. |
+| K6 | Qwen Code login / API key | `~/.qwen/` on the PC (not in the repo) | When no longer delegating: `qwen` logout, or revoke the key in the provider's console. |
+| K7 | The install's own secrets (`JWT_SECRET`, `POSTGRES_PASSWORD`, `CAPTURE_SHARED_SECRET`, `COTURN_SHARED_SECRET`, `ANON_KEY`, the access password hash, …) | `~/viewpoint-arena/.env` in WSL | Generated by the installer, local only, never in git. Nothing to do unless the file was ever shared. If so, reinstall to regenerate. |
+| K8 | Accounts on the install: `coacopaco@gmail.com` (admin), `pousita@guapa.esse`, `estelapere@ff.se` | the install's database | Ask the user which to keep. Delete the others through the admin console (People), never by SQL. |
+| K9 | The commit email `coacopaco@gmail.com` on every commit | git history | D8. |
+| K10 | Personal details inside `docs/plan/` | git history | D2/D3. |
+
+Before the user's rewrite, Claude re-runs the full-history scan (`gitleaks git
+--log-opts=--all`, see `.qwen-tasks/ops/`) and a search for the user's email,
+names and `192.168.1.134`, and shows the user what's left.
 
 ### 3.1 Branded models out (needs D3, D6)
 - `components/Scene/sennheiser_momentum_4_headphones.glb`,
@@ -201,7 +274,8 @@ The sequence to prepare for the user:
 3. **User:** the history rewrite (only if D3 = yes). Claude prepares a script
    and a step-by-step: take `backup-now.sh`; make a mirror backup of the repo
    (`git clone --mirror`); install `git-filter-repo`; the exact filter-repo
-   command for the `.glb` files and D2's paths; how to check the result
+   command for the `.glb` files, `docs/plan/`, `docs/paper/` and the other §3.0
+   paths, plus the `--mailmap` that replaces the commit email (D8); how to check the result
    (`git log --all -- '*.glb'` is empty); the force-push commands; what it means
    for existing clones. Claude then re-points the WSL install
    (`~/viewpoint-arena`) at the rewritten repo, after the user says the push is done.
