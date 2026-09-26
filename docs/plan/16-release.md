@@ -68,7 +68,7 @@ the work in §3 that does not depend on them while waiting.
 
 ## 3. The work
 
-Order: 3.2 → 3.3 → 3.4 → 3.5/3.6/3.7 → 3.1 + 3.8 last. Each step: do it, test it
+Order: 3.2 → 3.3 → 3.4 → 3.5/3.6/3.7 → 3.1 → 3.8 (the user's part) last. Each step: do it, test it
 live where it touches the product, run the full checks, commit to the planning
 branch, push, and tell the user in plain words.
 
@@ -87,10 +87,11 @@ service changes.
 - The live acceptance test uses the bike as its model: switch it to an imported
   test file you create (any small GLB with several named parts; build one with
   three.js' GLTFExporter in a node script and keep it under `e2e/fixtures/`).
-- History: `git filter-repo --path-glob '*.glb' --invert-paths` (plus D2's
-  paths), done ONCE, last, with the user's go-ahead. It was done before for
-  commit attribution on 2026-09-17 (see EXECUTION-LOG). Afterwards the WSL
-  install's clone must be re-cloned or hard-reset to the rewritten branch.
+- History: removing the files from git history is the USER's step (§3.8, step
+  3). Claude prepares the commands (`git filter-repo --path-glob '*.glb'
+  --invert-paths`, plus D2's paths) and the checklist; the user runs them. It
+  was done once before for commit attribution on 2026-09-17 (see
+  EXECUTION-LOG). Afterwards Claude re-points the WSL install's clone.
 
 ### 3.2 A fresh install, followed like a stranger would
 - The install guide (`docs/INSTALL.md`, `install.sh`) has not been followed end
@@ -174,23 +175,49 @@ limitations".
   `listArchivedIds`).
 - Dependabot / renovate on the repo.
 
-### 3.8 Merge and release (needs D1–D3, D7)
-1. Everything above committed on the planning branch; CI green.
-2. Ask the user for the go-ahead to merge to main. Open a PR
-   planning → main (`gh` is not installed on this machine; the user can open it
-   in the browser, or install `gh`). Merge after CI is green on the PR.
-3. The history rewrite (D2/D3), with the user present: filter-repo, force-push
-   main and the planning branch, re-clone the WSL install
-   (`~/viewpoint-arena`) from the rewritten repo and re-apply the schema.
-   Take `backup-now.sh` first.
-4. Tag `v0.1.0`, write the GitHub release notes from the CHANGELOG, and give
-   the user the link. Announcing it is theirs.
+### 3.8 Merge and release: THE USER DOES THIS, Claude assists
+The user, 2026-09-26: **"I wanna be the one making it public, I just want you
+assist me, not doing it yourself."** So every step below that changes something
+public, irreversible, or on GitHub is performed BY THE USER. Claude's job is to
+prepare and guide: a written checklist, the exact commands to paste, what each
+command does in plain words, what to check before and after, and how to undo
+it. Then Claude waits for the user to say it is done, and verifies (e.g. CI
+status, the install still working).
+
+Claude may still do, on its own: work and commits on the planning branch, pushes
+to that branch, tests on the user's machine, drafts (release notes, changelog,
+security write-up) for the user to read.
+
+Claude must NOT do, even if it seems helpful: merge to main, open or merge the
+PR, run `git filter-repo`, force-push anything, create or push tags, create the
+GitHub release, rename the repository, change repository settings, or post or
+announce anything.
+
+The sequence to prepare for the user:
+1. Everything in 3.1–3.7 committed on the planning branch; CI green. Claude
+   reports "ready for you" with a short summary of what changed.
+2. **User:** open the PR planning → main in the browser (Claude gives the link
+   and the PR text), wait for CI, merge.
+3. **User:** the history rewrite (only if D3 = yes). Claude prepares a script
+   and a step-by-step: take `backup-now.sh`; make a mirror backup of the repo
+   (`git clone --mirror`); install `git-filter-repo`; the exact filter-repo
+   command for the `.glb` files and D2's paths; how to check the result
+   (`git log --all -- '*.glb'` is empty); the force-push commands; what it means
+   for existing clones. Claude then re-points the WSL install
+   (`~/viewpoint-arena`) at the rewritten repo, after the user says the push is done.
+4. **User:** rename the repo (D7) and enable private vulnerability reporting
+   in Settings (Claude lists the clicks).
+5. **User:** create the tag `v0.1.0` and the GitHub release. Claude drafts the
+   release notes from the CHANGELOG for the user to paste and edit.
+6. **User:** announce it, wherever and whenever they choose.
 
 ---
 
 ## 4. Rules that still apply
-- Push only to `planning/oss-enterprise-readiness` until the user approves the
-  merge to main.
+- **The user makes it public, not Claude** (§3.8). Claude never merges to main,
+  rewrites history, force-pushes, tags, publishes a release, renames the repo,
+  changes GitHub settings or announces anything. It prepares, explains and verifies.
+- Push only to `planning/oss-enterprise-readiness`.
 - Never publish secrets; JWT_SECRET / service-role keys never in the browser.
 - Test live on the install for anything the user will touch; screenshots over
   assumptions. Back up before, clean up after, only `@example.com` data.
