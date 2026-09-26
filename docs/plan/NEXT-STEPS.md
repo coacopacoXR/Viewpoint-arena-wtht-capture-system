@@ -1,5 +1,10 @@
 # Next Steps — decisions only you can make
 
+> **2026-09-26: the release plan is [`16-release.md`](./16-release.md).** Its
+> §2 lists the decisions for the release (version, private docs, history
+> rewrite, security review timing, licence, sample model, repo name). The
+> items below are older.
+
 > Everything technical has moved to [`EXECUTION-LOG.md`](./EXECUTION-LOG.md),
 > which is the resume point for a new session. This file is now only the short
 > list of things that genuinely need **you**, because they are questions of

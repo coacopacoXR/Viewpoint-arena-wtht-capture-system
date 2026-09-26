@@ -1041,3 +1041,18 @@ actually found problems is written up in `delegation/README.md`.
     description and agentId). `cardForSummary` fixes that.
   - Tested live with two accounts: one session, one card, both names, and
     minutes stored and shown.
+
+## Session 2026-09-26: variants done properly, backups, and the release plan
+
+- Batches BU–BY (recording choices and transcripts, per-line positions,
+  findable variants, variants from variants, merge into any line, dropped
+  hidden, tracker restyle, people from the lobby, nightly backups, audit
+  trail) are committed and pushed. BX was finished by Claude after Qwen's
+  monthly quota ran out (resets 2026-10-08). The live variant acceptance test
+  (`.qwen-tasks/variants-e2e.mjs`) passes 24/24.
+- Data-loss incident: an over-broad test clean-up deleted the user's own
+  review, their meetings and probably ~40 older reviews, with no backup to
+  restore. Clean-up is now limited to `@example.com` test accounts, and the
+  install backs itself up (`db-backup`).
+- **NEXT: [`16-release.md`](./16-release.md)**, the plan for the public
+  release. Start there.
