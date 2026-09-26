@@ -22,79 +22,28 @@
 // accounts there, so there is no roster to show and nothing a row could be keyed
 // on. The meeting host edits freely, as the curate page always allowed.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Crown, UserPlus, Users, X } from 'lucide-react';
 import {
-  fetchReviewPeople,
-  writeReviewMember,
-  type ReviewPerson,
-} from '../../lib/reviews/membersClient';
+  ASSIGNABLE_ROLES,
+  ROLE_LABEL,
+  useReviewPeople,
+} from '../../lib/reviews/useReviewPeople';
 import type { MemberRole } from '../../lib/reviews/roles';
-
-const ROLE_LABEL: Record<MemberRole, string> = {
-  owner: 'Owner',
-  editor: 'Editor',
-  participant: 'Participant',
-};
-
-/** The roles an owner can hand out. The owner's own row is not one of them. */
-const ASSIGNABLE: MemberRole[] = ['editor', 'participant'];
 
 const PeopleTab: React.FC<{
   reviewId: string;
   /** Called after a write lands, so the room can re-read its own role. */
   onRosterChanged?: () => void;
 }> = ({ reviewId, onRosterChanged }) => {
-  const [people, setPeople] = useState<ReviewPerson[] | null>(null);
-  const [ownerId, setOwnerId] = useState<string | null>(null);
-  const [canManage, setCanManage] = useState(false);
-  const [canClaimOwner, setCanClaimOwner] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // The read, the writes and the error mapping are lib/reviews/useReviewPeople, which
+  // the lobby's preview panel shares: one reading of api/reviews/members.ts rather than
+  // two. What is left here is this tab's own layout, drawn for the room's dark panel —
+  // components/lobby/PeopleSection.tsx is the same roster in the lobby's light one.
+  const { people, ownerId, canManage, canClaimOwner, error, busy, reload, write, add } =
+    useReviewPeople(reviewId, onRosterChanged);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<MemberRole>('participant');
-
-  const reload = useCallback(async () => {
-    const result = await fetchReviewPeople(reviewId);
-    if ('error' in result) {
-      setError(result.error);
-      setPeople(null);
-      return;
-    }
-    setError(null);
-    setPeople(result.people.people);
-    setOwnerId(result.people.ownerId);
-    setCanManage(result.people.canManage);
-    setCanClaimOwner(result.people.canClaimOwner);
-  }, [reviewId]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  /**
-   * One write, then a re-read.
-   *
-   * The re-read is not tidiness: an add resolves an email to an account id this
-   * browser never had, and a claim sets a column that decides everybody's role in
-   * the room from now on. Patching a local copy would leave the tab showing a
-   * roster the server did not write.
-   */
-  const write = useCallback(
-    async (change: Parameters<typeof writeReviewMember>[1]) => {
-      setBusy(true);
-      const result = await writeReviewMember(reviewId, change);
-      setBusy(false);
-      if (!result.ok) {
-        setError(result.error ?? 'That change was refused.');
-        return;
-      }
-      setError(null);
-      await reload();
-      onRosterChanged?.();
-    },
-    [reviewId, reload, onRosterChanged],
-  );
 
   if (people === null) {
     return (
@@ -181,7 +130,7 @@ const PeopleTab: React.FC<{
                     }}
                     className="bg-white/5 text-[10px] font-bold uppercase rounded px-1.5 py-1 border border-white/10 outline-none text-gray-300"
                   >
-                    {ASSIGNABLE.map((r) => (
+                    {ASSIGNABLE_ROLES.map((r) => (
                       <option key={r} value={r}>{ROLE_LABEL[r]}</option>
                     ))}
                   </select>
@@ -222,20 +171,17 @@ const PeopleTab: React.FC<{
               onChange={(e) => setRole(e.target.value === 'editor' ? 'editor' : 'participant')}
               className="bg-white/5 text-[10px] font-bold uppercase rounded px-1.5 py-1.5 border border-white/10 outline-none text-gray-300 shrink-0"
             >
-              {ASSIGNABLE.map((r) => (
+              {ASSIGNABLE_ROLES.map((r) => (
                 <option key={r} value={r}>{ROLE_LABEL[r]}</option>
               ))}
             </select>
           </div>
           <button
             onClick={() => {
-              const address = email.trim();
-              if (!address) {
-                setError('Enter the email address of somebody who signs in to this install.');
-                return;
-              }
+              // The empty-box sentence lives in the hook, so this tab and the lobby's
+              // People section cannot drift into two answers for the same mistake.
               setEmail('');
-              void write({ action: 'add', email: address, role });
+              void add(email, role);
             }}
             disabled={busy}
             className="self-start flex items-center gap-1.5 px-3 py-1.5 rounded bg-white text-gray-900 text-[11px] font-bold hover:bg-gray-200 transition-colors disabled:opacity-50"

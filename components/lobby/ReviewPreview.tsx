@@ -29,6 +29,7 @@ import { clsx } from 'clsx';
 import SessionMap, { summaryLines } from '../review/SessionMap';
 import StartVariant from '../review/StartVariant';
 import { Avatar } from './IdentityChip';
+import PeopleSection from './PeopleSection';
 import { useSessionMap } from '../../lib/reviews/useSessionMap';
 import {
   MAIN_LINE_NAME,
@@ -76,6 +77,16 @@ export interface ReviewPreviewProps {
   mayEdit?: boolean;
   /** Read on a deployment with no accounts, where there is no token to verify. */
   isMeetingHost?: boolean;
+  /**
+   * Whether this install has accounts at all — `identityRequired(publicIdentityOf(config))`
+   * in the page, and the same fact the room reads.
+   *
+   * False on the default 'none' install, where api/reviews/members.ts answers 404
+   * because there is no roster to manage and nothing a membership row could be keyed
+   * on. The People section is absent there for exactly the reason the room's People
+   * tab is, and the meeting host edits freely as they always did.
+   */
+  accountsOn?: boolean;
   onOpen: () => void;
   /** The review is gone; the caller drops it from the grid and clears the panel. */
   onDeleted: () => void;
@@ -184,6 +195,7 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
   mayDelete,
   mayEdit = false,
   isMeetingHost = false,
+  accountsOn = false,
   onOpen,
   onDeleted,
   onChanged,
@@ -364,6 +376,20 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
           </p>
         </div>
       </div>
+
+      {/* WHO IS ON IT, and who else may be — batch BW.
+
+          Under the heading rather than down with the sessions because it is a fact
+          about the review and not about one meeting, and because the person deciding
+          whether to invite a colleague is reading the review's name and not its
+          history. The avatars above count the names this review's MEETINGS recorded;
+          this counts its roster, and the two are different sets — somebody added
+          here who has never met is on the review and in no attendee list.
+
+          Drawn for the people api/reviews/members.ts lets read a roster, which is
+          the same `can(role, 'editReview')` the panel already answers as `mayEdit`,
+          and only on an install with accounts at all — see the `accountsOn` prop. */}
+      {accountsOn && mayEdit && <PeopleSection reviewId={review.id} onChanged={onChanged} />}
 
       {/* The model: the snapshot, or the live viewer once "Turn in 3D" is pressed. */}
       <div className="relative border-b border-gray-100 bg-gradient-to-b from-[#f7f8fa] to-[#e9ecf1]" style={{ aspectRatio: '16 / 9' }}>

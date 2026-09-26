@@ -446,6 +446,7 @@ const LobbyPage: React.FC = () => {
                 mayDelete={mayDelete(selected)}
                 mayEdit={mayEditReview(selected)}
                 isMeetingHost={!accountsOn}
+                accountsOn={accountsOn}
                 onOpen={() => enterRoom(selected.id)}
                 onDeleted={() => {
                   lobby.forget(selected.id);

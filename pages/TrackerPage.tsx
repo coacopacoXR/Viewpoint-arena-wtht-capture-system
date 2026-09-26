@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import clsx from 'clsx';
 import IntegrationsPanel from '../components/UI/IntegrationsPanel';
 import AssigneeComboBox from '../components/UI/AssigneeComboBox';
 import LabelFieldsSettings from '../components/UI/LabelFieldsSettings';
+import LobbyTopBar from '../components/lobby/LobbyTopBar';
 import CardContinuityLine, { CardContinuityProvider, CardLineLabel } from '../components/UI/CardContinuity';
-import { getDisplayName } from '../lib/identity';
+import { getDisplayName, useIdentity, AVATAR_COLORS } from '../lib/identity';
 import { useLabelFieldsStore } from '../lib/labelFieldsStore';
 import { listAllCurations, type CurationSummary } from '../lib/curationsRepo';
 import { listModelRevisions, type ModelRevision } from '../lib/reviews/revisionsRepo';
@@ -234,6 +235,32 @@ const ALL_STATUSES: TrackerItem['status'][] = ['Open', 'In Review', 'Approved', 
 const ALL_TYPES: TrackerItem['type'][] = ['RISK', 'ACTION', 'RATIONALE'];
 const ALL_PRIORITIES: TrackerItem['priority'][] = ['Critical', 'High', 'Medium', 'Low'];
 
+// ─── The app's look (batch BW) ────────────────────────────────────────────────
+//
+// The user asked for "the aesthetics of the tracker to match the aesthetics of the
+// other parts of the app", and the other parts are the lobby and the room's top bar:
+// a #f3f4f6 ground, white panels on gray-200 rules, black for the thing that is on,
+// mono uppercase labels at 9-10px with tracking, and gray-500 for everything
+// secondary. Colour survives ONLY where it means something — RISK red, ACTION blue,
+// RATIONALE amber; Approved green, Rejected red, Open and In Review neutral — which
+// is the rule batch BJ's Manager view was drawn to. What is gone is the black bar,
+// the #111111 sidebar and the white-on-dark rows: they were the last surfaces in the
+// app that looked like a different product.
+
+/** One of the top bar's own buttons: the lobby's pill, verbatim. */
+const PILL =
+  'inline-flex items-center gap-1.5 h-9 px-3 rounded-md border border-gray-200 bg-white ' +
+  'text-xs font-semibold text-gray-600 hover:border-gray-400 hover:text-black transition-colors';
+
+/** A view chip that is on, and one that is not. The lobby's filter chips, verbatim. */
+const CHIP_ON = 'bg-black border-black text-white';
+const CHIP_OFF = 'bg-white border-gray-200 text-gray-500 hover:border-gray-400 hover:text-black';
+
+/** Every select on the page, in the house style rather than in a ring of its own. */
+const SELECT =
+  'border border-gray-200 rounded-md px-2.5 py-1.5 text-xs bg-white text-gray-600 ' +
+  'focus:outline-none focus:border-black cursor-pointer hover:border-gray-400 transition-colors';
+
 const priorityBorder: Record<TrackerItem['priority'], string> = {
   Critical: 'border-l-red-500',
   High: 'border-l-orange-400',
@@ -301,7 +328,7 @@ const StatusBadge: React.FC<{ status: TrackerItem['status'] }> = ({ status }) =>
 const StatTile: React.FC<{ label: string; value: number; urgent?: boolean; accent: string }> = ({ label, value, urgent, accent }) => {
   const displayed = useCountUp(value);
   return (
-    <div className={clsx('flex-1 min-w-[100px] rounded-xl px-4 py-3 flex flex-col gap-0.5 border transition-all', accent, urgent && value > 0 && 'ring-1 ring-offset-1 ring-red-300')}>
+    <div className={clsx('flex-1 min-w-[100px] rounded-lg px-4 py-3 flex flex-col gap-0.5 border transition-all', accent, urgent && value > 0 && 'ring-1 ring-offset-1 ring-red-300')}>
       <span className="text-2xl font-bold text-gray-900 tabular-nums leading-none">{displayed}</span>
       <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</span>
     </div>
@@ -309,7 +336,7 @@ const StatTile: React.FC<{ label: string; value: number; urgent?: boolean; accen
 };
 
 const StatsBar: React.FC<{ stats: Stats }> = ({ stats }) => (
-  <div className="flex-shrink-0 flex gap-3 px-6 py-3 bg-white border-b border-gray-100 overflow-x-auto">
+  <div className="flex-shrink-0 flex gap-3 px-6 py-3 bg-white border-b border-gray-200 overflow-x-auto">
     <StatTile label="Total Items" value={stats.total} accent="bg-white border-gray-200" />
     <StatTile label="Open Risks" value={stats.openRisks} urgent accent={stats.openRisks > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'} />
     <StatTile label="Pending Actions" value={stats.openActions} accent={stats.openActions > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'} />
@@ -392,9 +419,9 @@ const CardContent: React.FC<{ item: TrackerItem; isDragging?: boolean }> = ({ it
   const origin = cardOrigin(item);
   return (
     <div className={clsx(
-      'bg-white rounded-xl border-l-4 border border-gray-200 p-3.5 space-y-2.5 group select-none',
+      'bg-white rounded-lg border-l-4 border border-gray-200 p-3.5 space-y-2.5 group select-none',
       priorityBorder[item.priority],
-      isDragging ? 'shadow-2xl ring-2 ring-blue-400 ring-offset-1 opacity-95 rotate-1 scale-105' : 'shadow-sm hover:shadow-md hover:-translate-y-0.5 hover:border-gray-300',
+      isDragging ? 'shadow-2xl ring-2 ring-blue-400 ring-offset-1 opacity-95 rotate-1 scale-105' : 'shadow-sm hover:shadow-md hover:-translate-y-0.5 hover:border-gray-400',
       'transition-all duration-150'
     )}>
       <div className="flex items-center gap-1.5 flex-wrap">
@@ -521,18 +548,18 @@ const DroppableColumn: React.FC<{ status: TrackerItem['status']; items: TrackerI
     <div className="flex-shrink-0 w-[240px] flex flex-col">
       <div className="flex items-center gap-2 mb-3 px-0.5">
         <span className={clsx('text-xs font-bold uppercase tracking-wide', colHeader[status])}>{status}</span>
-        <span className="text-xs font-mono text-gray-300 ml-auto bg-gray-100 px-1.5 py-0.5 rounded-full">{items.length}</span>
+        <span className="text-xs font-mono text-gray-500 ml-auto bg-white border border-gray-200 px-1.5 py-0.5 rounded-full">{items.length}</span>
       </div>
       <SortableContext items={items.map(i => i.id)} strategy={verticalListSortingStrategy} id={status}>
         <div
           ref={setNodeRef}
           className={clsx(
-            'flex-1 overflow-y-auto space-y-2 min-h-[120px] rounded-xl p-2 transition-all duration-150',
+            'flex-1 overflow-y-auto space-y-2 min-h-[120px] rounded-lg p-2 transition-all duration-150',
             isOver ? 'bg-blue-50 ring-2 ring-blue-200 ring-offset-1' : ''
           )}
         >
           {items.length === 0 ? (
-            <div className={clsx('border-2 border-dashed rounded-xl h-24 flex items-center justify-center text-[11px] font-mono transition-colors', isOver ? 'border-blue-300 text-blue-400 bg-blue-50/50' : 'border-gray-100 text-gray-300')}>
+            <div className={clsx('border-2 border-dashed rounded-lg h-24 flex items-center justify-center text-[11px] font-mono transition-colors', isOver ? 'border-blue-300 text-blue-400 bg-blue-50/50' : 'border-gray-300 text-gray-400')}>
               drop here
             </div>
           ) : items.map((item, idx) => (
@@ -542,7 +569,7 @@ const DroppableColumn: React.FC<{ status: TrackerItem['status']; items: TrackerI
       </SortableContext>
       <button
         onClick={() => onAddItem(status)}
-        className="mt-2 text-[11px] font-mono text-gray-300 hover:text-gray-600 text-left px-2 py-1.5 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-1"
+        className="mt-2 text-[11px] font-mono text-gray-400 hover:text-black text-left px-2 py-1.5 rounded-md hover:bg-gray-100 transition-colors flex items-center gap-1"
       >
         <span className="text-base leading-none">+</span> Add item
       </button>
@@ -604,9 +631,11 @@ const RiskMatrix: React.FC<RiskMatrixProps> = ({ items, onItemClick }) => {
               {/* Axis labels */}
               <text x={PAD + innerW / 2} y={H - 8} textAnchor="middle" fill="#6b7280" fontSize={11} fontFamily="monospace" fontWeight="600">PROBABILITY →</text>
               <text x={14} y={PAD + innerH / 2} textAnchor="middle" fill="#6b7280" fontSize={11} fontFamily="monospace" fontWeight="600" transform={`rotate(-90, 14, ${PAD + innerH / 2})`}>IMPACT →</text>
-              {/* Zone labels */}
-              <text x={PAD + 0.25 * innerW} y={PAD + 0.97 * innerH} textAnchor="middle" fill="#86efac" fontSize={9} fontFamily="monospace">LOW</text>
-              <text x={PAD + 0.75 * innerW} y={PAD + 0.03 * innerH + 10} textAnchor="middle" fill="#fca5a5" fontSize={9} fontFamily="monospace">CRITICAL ZONE</text>
+              {/* Zone labels. The 300-shade greens and reds these were read on a dark
+                  page; on the pale zone fills they are decoration rather than a word,
+                  so they take the 600 shade of the same two meanings. */}
+              <text x={PAD + 0.25 * innerW} y={PAD + 0.97 * innerH} textAnchor="middle" fill="#16a34a" fontSize={9} fontFamily="monospace" fontWeight="600">LOW</text>
+              <text x={PAD + 0.75 * innerW} y={PAD + 0.03 * innerH + 10} textAnchor="middle" fill="#dc2626" fontSize={9} fontFamily="monospace" fontWeight="600">CRITICAL ZONE</text>
               {/* Risk dots */}
               {risks.map(item => {
                 const [x, y] = itemToXY(item);
@@ -642,14 +671,14 @@ const RiskMatrix: React.FC<RiskMatrixProps> = ({ items, onItemClick }) => {
               <div key={p} className="flex items-center gap-2 text-xs">
                 <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: riskMatrixColor[p] }} />
                 <span className="font-mono text-gray-600">{p}</span>
-                <span className="text-gray-300 ml-auto">{risks.filter(i => i.priority === p).length}</span>
+                <span className="text-gray-400 ml-auto">{risks.filter(i => i.priority === p).length}</span>
               </div>
             ))}
           </div>
           <div className="border-t border-gray-100 pt-3 space-y-1.5">
             <p className="text-[9px] font-mono font-bold text-gray-400 uppercase tracking-widest mb-2">All Risks</p>
             {risks.length === 0
-              ? <p className="text-xs text-gray-300 font-mono italic">No risks in current view.</p>
+              ? <p className="text-xs text-gray-400 font-mono italic">No risks in current view.</p>
               : risks.map(item => (
                 <button key={item.id} onClick={() => onItemClick(item)}
                   className="w-full text-left flex items-start gap-2 p-2 rounded-lg hover:bg-gray-50 transition-colors group/r">
@@ -695,7 +724,7 @@ const ListView: React.FC<{ items: TrackerItem[]; onItemClick: (i: TrackerItem) =
   );
 
   return (
-    <div className="overflow-auto h-full rounded-xl border border-gray-200 bg-white">
+    <div className="overflow-auto h-full rounded-lg border border-gray-200 bg-white">
       <table className="w-full text-sm border-collapse">
         <thead className="sticky top-0 bg-white border-b border-gray-100 z-10">
           <tr>
@@ -780,9 +809,9 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ items, onItemClick, onC
   return (
     <>
       <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50" onClick={onClose} />
-      <div className="fixed left-1/2 top-[20%] -translate-x-1/2 z-50 w-[560px] bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-200 animate-in fade-in zoom-in-95 duration-150">
+      <div className="fixed left-1/2 top-[20%] -translate-x-1/2 z-50 w-[560px] bg-white rounded-lg shadow-2xl overflow-hidden border border-gray-200 animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
-          <span className="text-gray-400 text-sm">🔍</span>
+          <span className="text-gray-400 text-sm" aria-hidden="true">🔍</span>
           <input ref={inputRef} type="text" value={q} onChange={e => setQ(e.target.value)} onKeyDown={handleKey}
             placeholder="Search items, assignees, components…"
             className="flex-1 text-sm text-gray-900 focus:outline-none placeholder:text-gray-300" />
@@ -796,7 +825,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ items, onItemClick, onC
               {!q.trim() && <p className="font-mono text-[9px] font-bold text-gray-300 uppercase tracking-widest px-3 py-1.5">Recent items</p>}
               {results.map((item, i) => (
                 <button key={item.id} onClick={() => { onItemClick(item); onClose(); }} onMouseEnter={() => setCursor(i)}
-                  className={clsx('w-full flex items-start gap-3 px-3 py-2.5 rounded-xl text-left transition-colors', i === cursor ? 'bg-gray-900 text-white' : 'hover:bg-gray-50')}>
+                  className={clsx('w-full flex items-start gap-3 px-3 py-2.5 rounded-md text-left transition-colors', i === cursor ? 'bg-black text-white' : 'hover:bg-gray-50')}>
                   <div className="flex gap-1 flex-shrink-0 pt-0.5">
                     <span className={clsx('text-[10px] font-bold font-mono px-1.5 py-0.5 rounded', i === cursor ? 'bg-white/20 text-white' : typeColor[item.type])}>{item.type}</span>
                   </div>
@@ -950,7 +979,7 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate, onDele
               {item.session && (
                 <div className="border-t border-gray-100 pt-4">
                   <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2">Source Session</p>
-                  <div className="bg-gray-50 rounded-xl px-3 py-2.5">
+                  <div className="bg-gray-50 rounded-lg border border-gray-200 px-3 py-2.5">
                     <p className="text-sm font-semibold text-gray-800">{item.session.title}</p>
                     <p className="font-mono text-xs text-gray-400 mt-0.5">{fmt(item.session.ended_at)} · {item.session.participant_count} participants{item.session.model_name ? ` · ${item.session.model_name}` : ''}</p>
                   </div>
@@ -966,7 +995,7 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate, onDele
                   <div className="space-y-4">
                     {comments.map(c => (
                       <div key={c.id} className="flex gap-3">
-                        <div className="w-7 h-7 rounded-full bg-gray-900 text-white flex items-center justify-center text-xs font-bold flex-shrink-0">{c.author_name[0].toUpperCase()}</div>
+                        <div className="w-7 h-7 rounded-full bg-black text-white flex items-center justify-center text-xs font-bold flex-shrink-0">{c.author_name[0].toUpperCase()}</div>
                         <div className="flex-1">
                           <div className="flex items-baseline gap-2 mb-1">
                             <span className="text-sm font-semibold text-gray-900">{c.author_name}</span>
@@ -1018,7 +1047,7 @@ const ItemDrawer: React.FC<ItemDrawerProps> = ({ item, onClose, onUpdate, onDele
         <div className="flex-shrink-0 px-6 py-3 border-t border-gray-100 flex items-center justify-between">
           <button
             onClick={async () => { if (confirm('Delete this item permanently?')) { await onDelete(item.id); onClose(); } }}
-            className="text-xs font-medium text-red-400 hover:text-red-600 transition-colors flex items-center gap-1"
+            className="text-xs font-medium text-red-600 hover:text-red-700 transition-colors flex items-center gap-1"
           >🗑 Delete item</button>
           <div className="flex items-center gap-3">
             <span className="font-mono text-[10px] text-gray-300">Updated {fmtShort(item.updated_at)}</span>
@@ -1058,7 +1087,7 @@ const GroupedSidebarNodes: React.FC<{
   }, [nodes, depth]);
 
   return (
-    <div className={depth > 0 ? 'ml-3 border-l border-white/10 pl-1' : ''}>
+    <div className={depth > 0 ? 'ml-3 border-l border-gray-200 pl-1' : ''}>
       {nodes.map((node) => {
         const isLeaf = node.children.length === 0;
         const isExpanded = expanded.has(node.value);
@@ -1073,16 +1102,16 @@ const GroupedSidebarNodes: React.FC<{
               }}
               className={clsx(
                 'w-full text-left px-2 py-1.5 rounded text-xs transition-colors flex items-center gap-1',
-                !isLeaf ? 'text-gray-300 hover:bg-white/10 hover:text-white font-semibold' : 'text-gray-400 hover:bg-white/10 hover:text-white'
+                !isLeaf ? 'text-gray-700 hover:bg-gray-100 hover:text-black font-semibold' : 'text-gray-600 hover:bg-gray-100 hover:text-black'
               )}
             >
               {!isLeaf && (
-                <span className="text-[8px] text-gray-500 w-3">{isExpanded ? '▾' : '▸'}</span>
+                <span className="text-[8px] text-gray-400 w-3">{isExpanded ? '▾' : '▸'}</span>
               )}
-              <span className={clsx('truncate flex-1', node.value === UNASSIGNED && 'italic text-gray-500')}>
+              <span className={clsx('truncate flex-1', node.value === UNASSIGNED && 'italic text-gray-400')}>
                 {node.value}
               </span>
-              <span className="font-mono text-[9px] text-gray-600">{sessionCount}</span>
+              <span className="font-mono text-[9px] text-gray-400">{sessionCount}</span>
             </button>
             {!isLeaf && isExpanded && (
               <GroupedSidebarNodes
@@ -1099,11 +1128,11 @@ const GroupedSidebarNodes: React.FC<{
                 onClick={() => onSelect(s.id)}
                 className={clsx(
                   'w-full text-left px-3 py-1.5 rounded text-[11px] transition-colors ml-3',
-                  selectedSessionId === s.id ? 'bg-white text-gray-900' : 'text-gray-400 hover:bg-white/10 hover:text-white'
+                  selectedSessionId === s.id ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100 hover:text-black'
                 )}
               >
                 <span className="truncate block">{s.title}</span>
-                <span className="font-mono text-[9px] text-gray-600">{fmtShort(s.ended_at)}</span>
+                <span className={clsx('font-mono text-[9px]', selectedSessionId === s.id ? 'text-gray-300' : 'text-gray-400')}>{fmtShort(s.ended_at)}</span>
               </button>
             ))}
           </div>
@@ -1151,14 +1180,14 @@ const SessionSidebar: React.FC<{
   }
 
   return (
-    <aside className="hidden lg:flex flex-col w-56 flex-shrink-0 bg-[#111111] h-full overflow-y-auto">
+    <aside className="hidden lg:flex flex-col w-56 flex-shrink-0 bg-white border-r border-gray-200 h-full overflow-y-auto">
       <div className="px-3 pt-5 pb-4">
-        <p className="font-mono text-[9px] font-bold text-gray-600 uppercase tracking-widest px-2 mb-3">Sessions</p>
-        <button onClick={() => onSelect(null)} className={clsx('w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition-colors mb-1', selectedSessionId === null ? 'bg-white text-gray-900' : 'text-gray-400 hover:bg-white/10 hover:text-white')}>
+        <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest px-2 mb-3">Sessions</p>
+        <button onClick={() => onSelect(null)} className={clsx('w-full text-left px-3 py-2.5 rounded-md text-sm font-semibold transition-colors mb-1', selectedSessionId === null ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100 hover:text-black')}>
           All Sessions
-          <span className={clsx('ml-2 font-mono text-xs font-normal', selectedSessionId === null ? 'text-gray-500' : 'text-gray-600')}>{allItems.length}</span>
+          <span className={clsx('ml-2 font-mono text-xs font-normal', selectedSessionId === null ? 'text-gray-300' : 'text-gray-400')}>{allItems.length}</span>
         </button>
-        <div className="h-px bg-white/10 my-3 mx-2" />
+        <div className="h-px bg-gray-200 my-3 mx-2" />
         {isGrouped && groupedNodes ? (
           <GroupedSidebarNodes
             nodes={groupedNodes}
@@ -1173,7 +1202,7 @@ const SessionSidebar: React.FC<{
           const active = selectedSessionId === s.id;
           const editing = editingId === s.id;
           return (
-            <div key={s.id} className={clsx('group/session relative rounded-lg mb-0.5 transition-colors', active ? 'bg-white' : 'hover:bg-white/10')}>
+            <div key={s.id} className={clsx('group/session relative rounded-md mb-0.5 transition-colors', active ? 'bg-black' : 'hover:bg-gray-100')}>
               {editing ? (
                 <div className="px-3 py-2.5 space-y-1.5" onClick={e => e.stopPropagation()}>
                   <input
@@ -1181,28 +1210,32 @@ const SessionSidebar: React.FC<{
                     value={editTitle}
                     onChange={e => setEditTitle(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') commitEdit(s.id); if (e.key === 'Escape') setEditingId(null); }}
-                    className="w-full bg-white/10 text-white text-xs rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-white/30 border border-white/20"
+                    className="w-full bg-white text-gray-900 text-xs rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-black border border-gray-300"
                     placeholder="Session title…"
                   />
                   <input
                     type="date"
                     value={editDate}
                     onChange={e => setEditDate(e.target.value)}
-                    className="w-full bg-white/10 text-white text-[10px] font-mono rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-white/30 border border-white/20"
+                    className="w-full bg-white text-gray-700 text-[10px] font-mono rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-black border border-gray-300"
                   />
                   <div className="flex gap-2">
-                    <button onClick={() => commitEdit(s.id)} className="flex-1 text-[10px] font-mono bg-white text-gray-900 rounded px-2 py-1 hover:bg-gray-100 transition-colors">Save</button>
-                    <button onClick={() => setEditingId(null)} className="text-[10px] font-mono text-gray-500 hover:text-white px-2 py-1 transition-colors">Cancel</button>
+                    <button onClick={() => commitEdit(s.id)} className="flex-1 text-[10px] font-mono bg-black text-white rounded px-2 py-1 hover:bg-gray-800 transition-colors">Save</button>
+                    <button onClick={() => setEditingId(null)} className="text-[10px] font-mono text-gray-500 hover:text-black px-2 py-1 transition-colors">Cancel</button>
                   </div>
                 </div>
               ) : (
                 <button onClick={() => onSelect(s.id)} className="w-full text-left px-3 py-2.5">
-                  <p className={clsx('text-xs font-semibold leading-tight truncate pr-10', active ? 'text-gray-900' : 'text-gray-300')}>{s.title}</p>
-                  <p className={clsx('font-mono text-[10px] mt-0.5', active ? 'text-gray-500' : 'text-gray-600')}>{fmtShort(s.ended_at)} · {total}</p>
+                  <p className={clsx('text-xs font-semibold leading-tight truncate pr-10', active ? 'text-white' : 'text-gray-700')}>{s.title}</p>
+                  <p className={clsx('font-mono text-[10px] mt-0.5', active ? 'text-gray-300' : 'text-gray-400')}>{fmtShort(s.ended_at)} · {total}</p>
+                  {/* The three counts keep the tracker's own card colours — RISK red,
+                      ACTION blue, RATIONALE amber — because here they are the only
+                      thing saying what a meeting raised. Lightened on the black row so
+                      they stay readable on it rather than going to their 800 shade. */}
                   <div className="flex gap-2 mt-1 font-mono text-[10px]">
-                    <span className={active ? 'text-red-500' : 'text-red-800'}>{R}R</span>
-                    <span className={active ? 'text-blue-500' : 'text-blue-800'}>{A}A</span>
-                    <span className={active ? 'text-amber-500' : 'text-amber-800'}>{Ra}Ra</span>
+                    <span className={active ? 'text-red-300' : 'text-red-600'}>{R}R</span>
+                    <span className={active ? 'text-blue-300' : 'text-blue-600'}>{A}A</span>
+                    <span className={active ? 'text-amber-300' : 'text-amber-600'}>{Ra}Ra</span>
                   </div>
                 </button>
               )}
@@ -1212,12 +1245,12 @@ const SessionSidebar: React.FC<{
                   <button
                     onClick={e => startEdit(s, e)}
                     title="Edit session"
-                    className="w-5 h-5 rounded flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/20 transition-colors text-[10px]"
+                    className={clsx('w-5 h-5 rounded flex items-center justify-center transition-colors text-[10px]', active ? 'text-gray-300 hover:text-white hover:bg-white/20' : 'text-gray-400 hover:text-black hover:bg-gray-200')}
                   >✎</button>
                   <button
                     onClick={async e => { e.stopPropagation(); if (confirm(`Delete "${s.title}" and all its items?`)) await onDeleteSession(s.id); }}
                     title="Delete session"
-                    className="w-5 h-5 rounded flex items-center justify-center text-gray-600 hover:text-red-400 hover:bg-red-500/20 transition-colors text-[10px]"
+                    className={clsx('w-5 h-5 rounded flex items-center justify-center transition-colors text-[10px]', active ? 'text-gray-400 hover:text-red-300 hover:bg-white/20' : 'text-gray-400 hover:text-red-600 hover:bg-red-50')}
                   >✕</button>
                 </div>
               )}
@@ -1255,7 +1288,8 @@ interface FilterBarProps {
 }
 
 const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, reviewOptions, lineOptions, onChange, onOpenPalette, sessions, selectedSessionId, onSelectSession }) => {
-  const sel = 'border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-black cursor-pointer hover:border-gray-300 transition-colors';
+  // The page's one select style, named locally because every filter below wears it.
+  const sel = SELECT;
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {/* Mobile session selector — only visible on small screens */}
@@ -1270,10 +1304,10 @@ const FilterBar: React.FC<FilterBarProps> = ({ filters, assignees, reviewOptions
         </select>
       )}
       <button onClick={onOpenPalette}
-        className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-400 bg-white hover:border-gray-300 hover:text-gray-700 transition-colors w-44">
-        <span>🔍</span>
+        className="flex items-center gap-2 h-[34px] border border-gray-200 rounded-md px-3 text-xs text-gray-500 bg-white hover:border-gray-400 hover:text-black transition-colors w-44">
+        <span aria-hidden="true">🔍</span>
         <span className="flex-1 text-left">Search…</span>
-        <kbd className="font-mono text-[9px] bg-gray-100 px-1 py-0.5 rounded border border-gray-200 text-gray-400">⌘K</kbd>
+        <kbd className="font-mono text-[9px] bg-gray-50 px-1 py-0.5 rounded border border-gray-200 text-gray-400">⌘K</kbd>
       </button>
       <select value={filters.review} onChange={e => onChange({ ...filters, review: e.target.value })} className={sel}
         aria-label="Filter by design review" title="Show only the cards and meetings of one design review">
@@ -1383,10 +1417,10 @@ const TrendsView: React.FC<TrendsViewProps> = ({ sessions, allItems }) => {
         <div className="flex gap-6 flex-wrap items-start">
 
           {/* Session Timeline Bar Chart */}
-          <div className="flex-1 min-w-[300px] bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className="flex-1 min-w-[300px] bg-white rounded-lg border border-gray-200 shadow-sm p-5">
             <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-4">Items per Session</p>
             {sessionBars.length === 0 ? (
-              <p className="text-xs text-gray-300 font-mono italic">No session data.</p>
+              <p className="text-xs text-gray-400 font-mono italic">No session data.</p>
             ) : (
               <div className="overflow-x-auto">
                 <svg width={chartW} height={chartH} style={{ display: 'block' }}>
@@ -1445,7 +1479,7 @@ const TrendsView: React.FC<TrendsViewProps> = ({ sessions, allItems }) => {
           </div>
 
           {/* Approval Rate Ring */}
-          <div className="flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col items-center justify-center min-w-[160px]">
+          <div className="flex-shrink-0 bg-white rounded-lg border border-gray-200 shadow-sm p-5 flex flex-col items-center justify-center min-w-[160px]">
             <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-4 text-center">Approval Rate</p>
             <svg width={100} height={100} viewBox="0 0 100 100">
               <circle cx={50} cy={50} r={ringR} fill="none" stroke="#f3f4f6" strokeWidth={10} />
@@ -1462,7 +1496,7 @@ const TrendsView: React.FC<TrendsViewProps> = ({ sessions, allItems }) => {
         </div>
 
         {/* Row 2: Status Distribution */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
           <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-4">Status Distribution</p>
           <div className="flex h-6 rounded-lg overflow-hidden w-full">
             {statusSegments.map(({ status, color }) => {
@@ -1490,7 +1524,7 @@ const TrendsView: React.FC<TrendsViewProps> = ({ sessions, allItems }) => {
           <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-3">Priority Breakdown</p>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {priorityTiles.map(({ priority, border, bg, text }) => (
-              <div key={priority} className="rounded-xl border-l-4 p-4 flex flex-col gap-1" style={{ borderLeftColor: border, background: bg }}>
+              <div key={priority} className="rounded-lg border-l-4 p-4 flex flex-col gap-1" style={{ borderLeftColor: border, background: bg }}>
                 <span className="text-2xl font-bold tabular-nums" style={{ color: text }}>{priorityCounts[priority]}</span>
                 <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-gray-500">{priority}</span>
               </div>
@@ -1548,12 +1582,12 @@ const AddItemModal: React.FC<AddItemModalProps> = ({ sessions, defaultSessionId,
     onClose();
   }
 
-  const sel = 'border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-black cursor-pointer w-full';
+  const sel = clsx(SELECT, 'text-sm py-2 w-full');
 
   return (
     <>
       <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50" onClick={onClose} />
-      <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[480px] bg-white rounded-2xl shadow-2xl border border-gray-200 animate-in fade-in zoom-in-95 duration-150 overflow-hidden">
+      <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[480px] bg-white rounded-lg shadow-2xl border border-gray-200 animate-in fade-in zoom-in-95 duration-150 overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <h2 className="font-semibold text-gray-900 text-sm">Add Item</h2>
           <button onClick={onClose} className="text-gray-300 hover:text-gray-700 text-xl leading-none">✕</button>
@@ -1637,7 +1671,7 @@ const AddItemModal: React.FC<AddItemModalProps> = ({ sessions, defaultSessionId,
             <button
               onClick={handleSave}
               disabled={!title.trim() || !sessionId || saving}
-              className="px-5 py-2 bg-black text-white text-sm font-semibold rounded-xl hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="px-5 py-2 bg-black text-white text-sm font-semibold rounded-md hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               {saving ? 'Saving…' : 'Add Item'}
             </button>
@@ -1674,9 +1708,9 @@ const ReviewPanel: React.FC<{
 }> = ({ reviewId, review, revisions, meetings, items, selectedSessionId, onSelectSession }) => {
   const open = items.filter(i => !isClosed(i.status)).length;
   const heading = 'font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-2';
-  const nothing = 'text-[11px] text-gray-300 font-mono italic';
+  const nothing = 'text-[11px] text-gray-400 font-mono italic';
   return (
-    <div className="flex-shrink-0 px-6 py-4 bg-white border-b border-gray-100">
+    <div className="flex-shrink-0 px-6 py-4 bg-white border-b border-gray-200">
       <div className="flex gap-8 flex-wrap items-start">
         <div className="min-w-[180px] max-w-[240px]">
           <p className={heading}>Design review</p>
@@ -1716,7 +1750,7 @@ const ReviewPanel: React.FC<{
                     title={selectedSessionId === m.id ? 'Show every meeting of this review' : 'Show only this meeting'}
                     className={clsx(
                       'w-full text-left flex items-baseline gap-2 px-2 py-1 rounded transition-colors text-[11px]',
-                      selectedSessionId === m.id ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'
+                      selectedSessionId === m.id ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-50'
                     )}
                   >
                     <span className="truncate flex-1">{m.title}</span>
@@ -1749,7 +1783,6 @@ type ViewMode = 'board' | 'list' | 'matrix' | 'trends';
 const SessionMap = React.lazy(() => import('../components/review/SessionMap'));
 
 const TrackerPage: React.FC = () => {
-  const navigate = useNavigate();
   const location = useLocation();
   // A link in from the session map names the meeting it wants
   // (/tracker?session=<id>&review=<id>), so a card listed under a stop on the map
@@ -1761,6 +1794,19 @@ const TrackerPage: React.FC = () => {
     return { session: params.get('session'), review: params.get('review') };
   });
   const [sessions, setSessions] = useState<TrackerSession[]>([]);
+  // Whose name the top bar's chip carries: the same vp_user record the lobby edits,
+  // read through the same hook, so a name typed on either screen is the name on both.
+  // Written back as a PATCH — dropping accountId here would sign the person out of
+  // their own lobby the moment they picked a colour on this screen.
+  const [identity, setIdentity] = useIdentity();
+  const chip = {
+    name: identity?.name ?? '',
+    color: identity?.color ?? AVATAR_COLORS[0],
+    role: identity?.role ?? '',
+  };
+  const writeIdentity = (patch: Partial<typeof chip>) => {
+    setIdentity({ ...(identity ?? { name: '', color: AVATAR_COLORS[0] }), ...chip, ...patch });
+  };
   const [allItems, setAllItems] = useState<TrackerItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(arrival.session);
@@ -2144,10 +2190,10 @@ const TrackerPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-[#111111]">
+      <div className="h-full flex items-center justify-center bg-[#f3f4f6]">
         <div className="text-center space-y-3">
-          <div className="w-8 h-8 border-2 border-white/20 border-t-white/80 rounded-full animate-spin mx-auto" />
-          <p className="font-mono text-xs text-gray-600">Loading tracker…</p>
+          <div className="w-8 h-8 border-2 border-gray-300 border-t-black rounded-full animate-spin mx-auto" />
+          <p className="font-mono text-xs text-gray-500">Loading tracker…</p>
         </div>
       </div>
     );
@@ -2155,42 +2201,77 @@ const TrackerPage: React.FC = () => {
 
   return (
     <CardContinuityProvider value={continuityData}>
-      <div className="h-screen overflow-hidden flex flex-col bg-white" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-        {/* Header */}
-        <header className="flex-shrink-0 bg-black text-white flex items-center justify-between px-6 h-12 z-30">
-          <div className="flex items-center gap-3">
-            <span className="font-mono text-sm font-bold tracking-widest uppercase select-none">Viewpoint Tracker</span>
-            {visibleSessions.length > 0 && (
-              <span className="font-mono text-[10px] text-gray-600 border border-gray-800 rounded px-2 py-0.5">
-                {visibleSessions.length} sessions · {reviewItems.length} items
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            <button onClick={handleSeed} disabled={seeding} className="font-mono text-xs text-gray-600 hover:text-gray-300 transition-colors disabled:opacity-40">
-              {seeding ? 'Seeding…' : '+ Demo Data'}
-            </button>
-            <button onClick={() => setLabelSettingsOpen(true)}
-              className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
-              <span>🏷</span> Label fields
-            </button>
-            <button onClick={() => setIntegrationsOpen(true)}
-              className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors flex items-center gap-1.5">
-              <span>⚡</span> Integrations
-            </button>
-            <button onClick={() => exportToCSV(filteredItems)} disabled={filteredItems.length === 0}
-              className="font-mono text-xs text-gray-400 hover:text-white border border-gray-800 hover:border-gray-600 rounded px-3 py-1 transition-colors disabled:opacity-30">
-              ↓ Export CSV
-            </button>
-            <button onClick={() => navigate('/')} className="font-mono text-xs text-gray-600 hover:text-white transition-colors">← Arena</button>
-          </div>
-        </header>
+      {/* Its own scroll container, exactly like the lobby's: index.html fixes the body
+          and hides its overflow for the 3D room, so a page taller than the window must
+          scroll itself or the part under the fold is unreachable. The board's columns
+          still scroll inside it — the body row keeps a floor, so a page whose chrome
+          has grown (a review panel, an open session map) overflows the container and
+          the container scrolls, instead of squeezing the board to nothing. */}
+      <div
+        className="h-full overflow-y-auto bg-[#f3f4f6] font-sans text-gray-900"
+        data-testid="tracker-scroll"
+        style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
+      >
+        <div className="flex flex-col min-h-full">
+        {/* The bar the lobby wears, with this screen's own controls in its slot. The
+            black bar this replaces said "Viewpoint Tracker" in mono caps and then
+            offered four gray-on-black buttons and a "← Arena" link; the brand, the way
+            back to the lobby and the name chip are all the shared bar's now, and the
+            four buttons are pills of the same shape as its links.
+
+            `canSignOut` is FALSE. The chip edits the name, the colour and the role —
+            the same vp_user record the lobby's chip edits — but ending a session stays
+            the lobby's, one click away on the brand or the Lobby pill: a second
+            sign-out path is a second thing to keep honest about the session. */}
+        <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 z-30">
+          <LobbyTopBar
+            here="tracker"
+            name={chip.name}
+            color={chip.color}
+            role={chip.role}
+            canSignOut={false}
+            nameEditable={!identity?.accountId}
+            onName={(next) => writeIdentity({ name: next })}
+            onColor={(next) => writeIdentity({ color: next })}
+            onRole={(next) => writeIdentity({ role: next })}
+            onSignOut={() => {}}
+            actions={
+              <>
+                {visibleSessions.length > 0 && (
+                  <span
+                    className="inline-flex items-center h-9 px-3 rounded-md border border-gray-200 bg-white font-mono text-[10px] text-gray-500"
+                    data-testid="tracker-counts"
+                  >
+                    {visibleSessions.length} sessions · {reviewItems.length} items
+                  </span>
+                )}
+                <button onClick={handleSeed} disabled={seeding} className={PILL} data-testid="seed-demo-data">
+                  {seeding ? 'Seeding…' : '+ Demo Data'}
+                </button>
+                <button onClick={() => setLabelSettingsOpen(true)} className={PILL} data-testid="label-fields">
+                  <span aria-hidden="true">🏷</span> Label fields
+                </button>
+                <button onClick={() => setIntegrationsOpen(true)} className={PILL} data-testid="integrations">
+                  <span aria-hidden="true">⚡</span> Integrations
+                </button>
+                <button
+                  onClick={() => exportToCSV(filteredItems)}
+                  disabled={filteredItems.length === 0}
+                  className={clsx(PILL, 'disabled:opacity-40')}
+                  data-testid="export-csv"
+                >
+                  ↓ Export CSV
+                </button>
+              </>
+            }
+          />
+        </div>
 
         {/* Stats */}
         {reviewItems.length > 0 && <StatsBar stats={stats} />}
 
         {/* Body */}
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden min-h-[420px]">
           <SessionSidebar sessions={visibleSessions} allItems={reviewItems} selectedSessionId={selectedSessionId}
             onSelect={id => { setSelectedSessionId(id); setSelectedItem(null); }}
             onDeleteSession={deleteSession}
@@ -2199,9 +2280,9 @@ const TrackerPage: React.FC = () => {
             isGrouped={groupBy.fieldIds.length > 0}
           />
 
-          <main className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+          <main className="flex-1 flex flex-col overflow-hidden">
             {/* Toolbar */}
-            <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3 bg-white border-b border-gray-100 flex-wrap">
+            <div className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3 bg-white border-b border-gray-200 flex-wrap">
               <FilterBar filters={filters} assignees={assignees} reviewOptions={reviewOptions} lineOptions={lineOptions}
                 onChange={next => {
                   // Moving to another design review leaves the meeting that was
@@ -2216,16 +2297,21 @@ const TrackerPage: React.FC = () => {
                 }}
                 onOpenPalette={() => setPaletteOpen(true)} sessions={visibleSessions} selectedSessionId={selectedSessionId} onSelectSession={id => { setSelectedSessionId(id); setSelectedItem(null); }} />
               <button
-              onClick={() => setAddItemState({ open: true, status: 'Open' })}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white text-xs font-semibold rounded-lg hover:bg-gray-800 transition-colors ml-auto"
-            >
-              + New Item
-            </button>
-            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                onClick={() => setAddItemState({ open: true, status: 'Open' })}
+                className="flex items-center gap-1.5 h-9 px-3.5 rounded-md bg-black border border-black text-white text-xs font-semibold hover:bg-gray-800 transition-colors ml-auto"
+              >
+                + New Item
+              </button>
+              {/* The four ways of looking at the same set of cards, as the lobby's
+                  filter chips: black for the one that is on, white for the three that
+                  are not. The emoji they carried were the last decoration on this page
+                  that nothing else in the app uses — its icons are lucide's, and a chip
+                  that says "board" needs no picture of one. */}
+              <div className="flex items-center gap-1.5 flex-wrap" role="group" aria-label="How to show the cards">
                 {(['board', 'list', 'matrix', 'trends'] as ViewMode[]).map(m => (
-                  <button key={m} onClick={() => setViewMode(m)}
-                    className={clsx('px-3 py-1 text-xs font-semibold rounded-md capitalize transition-colors', viewMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-700')}>
-                    {m === 'matrix' ? '⬛ Matrix' : m === 'board' ? '🗂 Board' : m === 'list' ? '☰ List' : '📈 Trends'}
+                  <button key={m} onClick={() => setViewMode(m)} aria-pressed={viewMode === m}
+                    className={clsx('inline-flex items-center h-8 px-3 rounded-full border text-xs font-semibold capitalize transition-colors', viewMode === m ? CHIP_ON : CHIP_OFF)}>
+                    {m}
                   </button>
                 ))}
               </div>
@@ -2262,7 +2348,7 @@ const TrackerPage: React.FC = () => {
                 review, its main line and its variants, above the cards they produced.
                 Folded away until asked for, so the board still gets the page. */}
             {selectedReviewId && (
-              <div className="flex-shrink-0 bg-white border-b border-gray-100">
+              <div className="flex-shrink-0 bg-white border-b border-gray-200">
                 <button
                   onClick={() => setMapOpen(v => !v)}
                   className="w-full flex items-center gap-2 px-6 py-2 text-left hover:bg-gray-50 transition-colors"
@@ -2306,7 +2392,7 @@ const TrackerPage: React.FC = () => {
                 <div className="text-5xl mb-2">📋</div>
                 <p className="text-gray-500 text-sm max-w-xs leading-relaxed">No sessions yet. End a meeting to see items here, or load demo data to explore the tracker.</p>
                 <button onClick={handleSeed} disabled={seeding}
-                  className="mt-2 px-5 py-2.5 bg-black text-white text-sm font-semibold rounded-xl hover:bg-gray-800 disabled:opacity-40 transition-colors">
+                  className="mt-2 px-5 py-2.5 bg-black text-white text-sm font-semibold rounded-md hover:bg-gray-800 disabled:opacity-40 transition-colors">
                   {seeding ? 'Loading…' : 'Load Demo Data'}
                 </button>
               </div>
@@ -2354,6 +2440,7 @@ const TrackerPage: React.FC = () => {
             onClose={() => setIntegrationsOpen(false)}
           />
         )}
+        </div>
       </div>
     </CardContinuityProvider>
   );
@@ -2369,7 +2456,7 @@ const GroupByBar: React.FC<{
   onFiltersChange: (f: GroupFilters) => void;
   sessions: TrackerSession[];
 }> = ({ fields, choice, onChange, filters, onFiltersChange, sessions }) => {
-  const sel = 'border border-gray-200 rounded-lg px-2 py-1 text-xs bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-black cursor-pointer hover:border-gray-300 transition-colors';
+  const sel = clsx(SELECT, 'px-2 py-1');
 
   const availableFields = fields.filter((f) => !choice.fieldIds.includes(f.id));
 
@@ -2396,7 +2483,7 @@ const GroupByBar: React.FC<{
   };
 
   return (
-    <div className="flex-shrink-0 flex items-center gap-3 px-6 py-2 bg-gray-50 border-b border-gray-100 flex-wrap">
+    <div className="flex-shrink-0 flex items-center gap-3 px-6 py-2 bg-white border-b border-gray-200 flex-wrap">
       <span className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">Group by</span>
       {choice.fieldIds.length === 0 && (
         <span className="text-xs text-gray-400 italic">All sessions</span>

@@ -15,6 +15,14 @@
 //
 // Style copied from components/UI/room/TopBar.tsx: white pills on a light ground,
 // gray-200 rules, black for the thing that is on.
+//
+// Batch BW made it the app's top bar rather than the lobby's: the tracker wears the
+// same one, so the two screens are recognisably the same product. What that needed
+// was two props and no second component — `here`, because a bar that offers "Tracker"
+// while standing on the tracker offers a link to where you already are, and `actions`,
+// because a screen's own controls belong in its bar rather than in a second bar under
+// it. The name chip is the lobby's, unchanged, and it is why the tracker gets no
+// identity form of its own.
 
 import React from 'react';
 import { Link } from 'react-router-dom';
@@ -25,6 +33,9 @@ import IdentityChip from './IdentityChip';
 const PILL =
   'inline-flex items-center gap-1.5 h-9 px-3 rounded-md border border-gray-200 bg-white ' +
   'text-xs font-semibold text-gray-600 hover:border-gray-400 hover:text-black transition-colors';
+
+/** The screens this bar can stand on. Each offers the OTHER one, never itself. */
+export type TopBarScreen = 'lobby' | 'tracker';
 
 export interface LobbyTopBarProps {
   name: string;
@@ -38,6 +49,16 @@ export interface LobbyTopBarProps {
   onColor: (color: string) => void;
   onRole: (role: string) => void;
   onSignOut: () => void;
+  /** Which screen this is. Defaults to the lobby, which is where the bar started. */
+  here?: TopBarScreen;
+  /**
+   * This screen's own controls, drawn between the nav pills and the name chip.
+   *
+   * Slot rather than props: the tracker's are four buttons that open its own panels
+   * and export its own CSV, and a bar that knew about them would be the tracker's
+   * bar with a lobby flag on it.
+   */
+  actions?: React.ReactNode;
 }
 
 const LobbyTopBar: React.FC<LobbyTopBarProps> = ({
@@ -50,6 +71,8 @@ const LobbyTopBar: React.FC<LobbyTopBarProps> = ({
   onColor,
   onRole,
   onSignOut,
+  here = 'lobby',
+  actions,
 }) => {
   // required && unlocked is the admin page's own gate: `required` false means no
   // passphrase is configured, which closes /admin for everyone rather than opening it.
@@ -70,15 +93,27 @@ const LobbyTopBar: React.FC<LobbyTopBarProps> = ({
       <div className="flex-1" />
 
       <nav className="flex items-center gap-2 flex-wrap" aria-label="Other screens">
-        <Link to="/tracker" className={PILL} data-testid="lobby-tracker-link">
-          Tracker
-        </Link>
+        {here === 'tracker' ? (
+          <Link to="/" className={PILL} data-testid="topbar-lobby-link">
+            Lobby
+          </Link>
+        ) : (
+          <Link to="/tracker" className={PILL} data-testid="lobby-tracker-link">
+            Tracker
+          </Link>
+        )}
         {mayAdmin && (
           <Link to="/admin" className={clsx(PILL, 'border-black text-black')} data-testid="lobby-admin-link">
             Admin
           </Link>
         )}
       </nav>
+
+      {actions && (
+        <div className="flex items-center gap-2 flex-wrap" data-testid="topbar-actions">
+          {actions}
+        </div>
+      )}
 
       <IdentityChip
         name={name}
