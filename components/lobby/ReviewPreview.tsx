@@ -30,7 +30,15 @@ import SessionMap, { summaryLines } from '../review/SessionMap';
 import StartVariant from '../review/StartVariant';
 import { Avatar } from './IdentityChip';
 import { useSessionMap } from '../../lib/reviews/useSessionMap';
-import { sessionLabel } from '../../lib/reviews/lines';
+import {
+  MAIN_LINE_NAME,
+  lineLabel,
+  lineStatusWord,
+  orderedLines,
+  roomPath,
+  sessionLabel,
+  type ReviewLine,
+} from '../../lib/reviews/lines';
 import { deleteReview, deleteSession } from '../../lib/reviews/deleteClient';
 import { renameCuration } from '../../lib/curationsRepo';
 import { MAX_REVIEW_TITLE } from '../../lib/reviewSetupStore';
@@ -218,6 +226,17 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
   const latest = rows[0] ?? null;
 
   const lineOf = (lineId: string | null) => lines.find((line) => line.id === lineId) ?? null;
+
+  /**
+   * How many meetings a line has held.
+   *
+   * A session with no `line_id` is the main line's, which is where the map above
+   * draws it and where the backfill in docs/supabase-schema.sql puts it.
+   */
+  const countOnLine = (line: ReviewLine): number =>
+    sessions.filter(
+      (session) => session.lineId === line.id || (line.kind === 'main' && session.lineId === null),
+    ).length;
 
   const runDelete = async () => {
     setBusy(true);
@@ -418,6 +437,65 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
           emptyMessage="No sessions recorded in this design review yet."
         />
       </div>
+
+      {/* Every line of this review, and the way into each — batch BV.
+
+          The map above draws the lines, but a drawing is not a link, and the list
+          below is of SESSIONS: a variant started before anybody met had no row in it,
+          so this panel counted the variant in its header ("0 sessions · 1 variant")
+          and then offered no way to open it. That is the report this batch came from —
+          the variant's own room had kept every change, and from the lobby it did not
+          exist. One row per line, in the order the map draws them.
+
+          An adopted or dropped line is greyed and carries no Open: it is finished
+          with, there is no meeting to walk into on it, and its record is its cards
+          and its place on the map. Rendered only where the review has lines at all,
+          so an ad-hoc room and an install with no database show no empty heading. */}
+      {lines.length > 0 && (
+        <div className="flex flex-col gap-2 px-4 py-3 border-b border-gray-100" data-testid="preview-lines">
+          <p className={LABEL}>Lines</p>
+          <ul className="flex flex-col gap-1.5">
+            {orderedLines(lines).map((line) => {
+              const closed = lineStatusWord(line);
+              const held = countOnLine(line);
+              const name = line.kind === 'main' ? MAIN_LINE_NAME : lineLabel(line) ?? 'Variant';
+              return (
+                <li
+                  key={line.id}
+                  data-testid="preview-line"
+                  data-line={line.id}
+                  data-status={closed ?? 'active'}
+                  className={clsx('flex items-center gap-2 text-xs', closed && 'opacity-50')}
+                >
+                  <span className="flex-1 min-w-0 truncate text-gray-700" title={name}>
+                    {name}
+                    {line.kind === 'variant' && !closed && (
+                      <span className="text-gray-400"> · active</span>
+                    )}
+                    {closed && <span className="text-gray-400"> · {closed}</span>}
+                    <span className="text-gray-400">
+                      {' · '}{held} {held === 1 ? 'session' : 'sessions'}
+                    </span>
+                  </span>
+                  {!closed && (
+                    <Link
+                      to={roomPath(review.id, line.kind === 'variant' ? line.id : null)}
+                      data-testid={line.kind === 'variant' ? 'open-variant' : 'open-main-line'}
+                      title={line.kind === 'variant' ? 'Open this variant’s room' : 'Open the main line’s room'}
+                      className={clsx(
+                        BUTTON,
+                        'px-2.5 py-1 text-[11px] bg-white border-gray-200 text-gray-600 hover:border-gray-400 hover:text-black shrink-0',
+                      )}
+                    >
+                      Open
+                    </Link>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {/* Every meeting, newest first, with a delete for whoever may delete the review. */}
       <div className="flex flex-col gap-2 px-4 py-3 border-b border-gray-100">

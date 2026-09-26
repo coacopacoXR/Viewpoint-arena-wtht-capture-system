@@ -32,10 +32,34 @@ export interface EmissiveHighlight {
   intensity: number;
 }
 
-/** Materials without an emissive channel — points, lines, a basic material. */
-function emissiveMaterial(material: Material | undefined): MeshStandardMaterial | null {
+/**
+ * Materials without an emissive channel — points, lines, a basic material.
+ *
+ * Exported for lib/scene/captureClean.ts, which has to narrow a material before it can
+ * compare its live emissive against the one a highlight took off it. The narrowing is a
+ * `'emissive' in material` test rather than an instanceof, because the channel arrives on
+ * any of the standard-material family — MeshStandardMaterial, MeshPhysicalMaterial, and
+ * whatever a glTF extension produced — and not on one named class.
+ */
+export function emissiveMaterial(material: Material | undefined): MeshStandardMaterial | null {
   if (!material || !('emissive' in material)) return null;
   return material as MeshStandardMaterial;
+}
+
+/**
+ * The emissive a highlight took off this material, or null when no highlight has ever
+ * touched it.
+ *
+ * READ-ONLY, and that is the whole of the difference from `originalEmissiveOf` below:
+ * this does not stamp the material, so a caller that has to ask about every material in
+ * the scene — a capture hiding the selection glow, batch BV — can ask about a 40 000-part
+ * assembly without writing to the 39 990 of them nobody ever selected.
+ */
+export function rememberedEmissiveOf(material: Material | undefined): OriginalEmissive | null {
+  const mat = emissiveMaterial(material);
+  if (!mat) return null;
+  const stored = mat.userData[ORIGINAL_KEY] as OriginalEmissive | undefined;
+  return stored ?? null;
 }
 
 /**
@@ -47,8 +71,8 @@ function emissiveMaterial(material: Material | undefined): MeshStandardMaterial 
 export function originalEmissiveOf(material: Material | undefined): OriginalEmissive | null {
   const mat = emissiveMaterial(material);
   if (!mat) return null;
-  const stored = mat.userData[ORIGINAL_KEY] as OriginalEmissive | undefined;
-  if (stored) return stored;
+  const remembered = rememberedEmissiveOf(mat);
+  if (remembered) return remembered;
   const original: OriginalEmissive = { color: mat.emissive.clone(), intensity: mat.emissiveIntensity };
   mat.userData[ORIGINAL_KEY] = original;
   return original;

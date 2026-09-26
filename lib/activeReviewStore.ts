@@ -12,7 +12,7 @@ import type { SpatialComment, Requirement } from '../types';
 import type { TeamMember } from './people';
 import { useStore } from '../store';
 import { forgetReviewScene, showReviewScene } from './scene/showCurationModel';
-import { samePlacements, type StoredPlacement } from './scene/placement';
+import { placementsForLine, samePlacements, type StoredPlacement } from './scene/placement';
 import { forgetLocalEdit, markLocalEdit } from './reviewLocalEdit';
 
 // Build a live SpatialComment from a curated pin at commit time. The comment
@@ -291,8 +291,13 @@ interface ActiveReviewState {
    * than on every frame of it, so opening the review later puts every revision
    * back where it was left. Answering null is how "nothing moved" is spelled: no
    * mark, no broadcast, no write.
+   *
+   * `lineId` is the slot to write, batch BV: null for the main line, which goes on
+   * writing `asset.placements` exactly as it always has, and a variant's id, which
+   * writes `asset.linePlacements[id]` and leaves the main line's positions alone.
+   * Optional so every caller that predates lines keeps its meaning.
    */
-  setScenePlacements: (placements: StoredPlacement[]) => ReviewDraft | null;
+  setScenePlacements: (placements: StoredPlacement[], lineId?: string | null) => ReviewDraft | null;
   addAgendaItem: (item: NewAgendaItem) => ReviewDraft | null;
   removeAgendaItem: (id: string) => ReviewDraft | null;
   reorderAgenda: (fromIdx: number, toIdx: number) => ReviewDraft | null;
@@ -517,16 +522,32 @@ export const useActiveReviewStore = create<ActiveReviewState>((set, get) => ({
     return next;
   },
 
-  setScenePlacements: (placements) => {
+  setScenePlacements: (placements, lineId) => {
     const cfg = get().config;
     if (!cfg) return null;
+    // The slot this drag writes: a variant's own id, or null for the main line — which
+    // is also the answer for an ad-hoc room, an install with no lines and the curator's
+    // setup page, all of which have no line and all of which mean the review's own.
+    const wanted = typeof lineId === 'string' ? lineId.trim() : '';
+    const slot = wanted === '' ? null : wanted;
     // A drag that ended where it started is not an edit. Treating it as one would
     // mark the review, broadcast the whole of it to everybody in the room and write
     // the row, for a change nobody can see. The list is rebuilt from the scene
     // every time and the scene's order is the order additions arrived in, so the
     // comparison is by (line, revision) and not by position.
-    if (samePlacements(cfg.asset.placements, placements)) return null;
-    const next = edited(cfg, { asset: { ...cfg.asset, placements } });
+    //
+    // Against the SLOT being written, read through the same rule the seeding half
+    // uses: a variant that has not diverged yet has no slot and stands where the main
+    // line stands, so a drag in it that changed nothing writes nothing — and the first
+    // drag that does change something creates its slot.
+    if (samePlacements(slot === null ? cfg.asset.placements : placementsForLine(cfg.asset, slot), placements)) {
+      return null;
+    }
+    const next = edited(cfg, {
+      asset: slot === null
+        ? { ...cfg.asset, placements }
+        : { ...cfg.asset, linePlacements: { ...cfg.asset.linePlacements, [slot]: placements } },
+    });
     applyEdit(set, next);
     // No sync follows: the scene this was read from is already the truth on this
     // screen, and placements say nothing about comments or requirements.

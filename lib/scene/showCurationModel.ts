@@ -13,26 +13,41 @@ import { modelFileMime } from '../../utils/modelFormats';
 import { curationScene, curationSceneModel, legacyCurationModel } from './curationScene';
 import { sceneModelPrefix } from './roomScene';
 import { sceneModelEntry } from './sceneEntries';
-import { applyStoredPlacements, type StoredPlacement } from './placement';
+import { applyStoredPlacements, placementsForLine, type PlacementSlots } from './placement';
 import { listModelRevisions, revisionsForSession, sceneFromRevisions } from '../reviews/revisionsRepo';
 import { originRevisionIds } from '../reviews/linesRepo';
 
-/** The part of a curation's asset that decides what to show. */
-export interface CurationAssetModel {
+/**
+ * The part of a curation's asset that decides what to show.
+ *
+ * It carries the review's stored positions as well, through `PlacementSlots`:
+ * `placements` is the MAIN line's and `linePlacements` one slot per variant, keyed by
+ * its review_lines id. Batch BV split what batch BI had made a single field, because a
+ * single field was shared by every line — a variant that moved a model overwrote where
+ * the main line had left it, and whichever room re-seeded from the database last won.
+ * Nothing below reads either field directly; which slot a line opens on is
+ * lib/scene/placement.placementsForLine, so the reading half and the writing half
+ * (lib/scene/keepPlacements) cannot drift apart.
+ */
+export interface CurationAssetModel extends PlacementSlots {
   modelType?: string;
   modelHash?: string;
   importedFileName?: string;
   importedFileBase64?: string;
-  /**
-   * Where the review left each of its models, per revision.
-   *
-   * Batch BI. The room's Move / Rotate / Scale used to live only in the room
-   * server's storage, so a review reopened outside that room — later, from the
-   * lobby, on an install whose server had hibernated — put every model back where
-   * it had arrived. Optional, and absent on every review written before then,
-   * which means "nobody moved anything".
-   */
-  placements?: readonly StoredPlacement[] | null;
+}
+
+/**
+ * The line whose slot of the review's positions this browser should open on.
+ *
+ * Null for the main line, and null for the four cases that mean the same thing: a
+ * room on the main line, an ad-hoc room with no review, an install with no lines, and
+ * the curator's setup page, which has no room at all. `activeLine` is resolved by
+ * pages/RoomPage BEFORE the socket opens, so by the time a seed runs it is already the
+ * line this room is on.
+ */
+function activePlacementSlot(): string | null {
+  const line = useStore.getState().activeLine;
+  return line?.kind === 'variant' ? line.id : null;
 }
 
 /**
@@ -45,6 +60,10 @@ export interface CurationAssetModel {
 export function showCurationModel(asset: CurationAssetModel | undefined, logAs: string): boolean {
   if (!asset || asset.modelType !== 'imported') return false;
   const { setRoomScene, upsertSceneModel } = useStore.getState();
+  // Which line's positions this scene opens on — the main line's for every caller
+  // that is not standing in a variant's room. Read once, before the async branch
+  // below, so the two halves of a legacy parse cannot disagree about it.
+  const slot = activePlacementSlot();
 
   if (asset.modelHash && asset.importedFileName) {
     // Stored by hash: say what to show and let lib/scene/useSceneModelLoader
@@ -54,7 +73,7 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
     // exactly the same path, which is the point of having one.
     setRoomScene(applyStoredPlacements(
       curationScene(asset.modelHash, asset.importedFileName),
-      asset.placements,
+      placementsForLine(asset, slot),
     ));
     return true;
   }
@@ -74,7 +93,10 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
     );
     parseModelFile(file, { treePrefix: sceneModelPrefix(model.hash) })
       .then((parsed) => {
-        setRoomScene(applyStoredPlacements({ models: [model], builtIn: null }, asset.placements));
+        setRoomScene(applyStoredPlacements(
+          { models: [model], builtIn: null },
+          placementsForLine(asset, slot),
+        ));
         upsertSceneModel(sceneModelEntry(model, parsed));
       })
       .catch((err) => console.error(`[${logAs}] failed to parse imported model:`, err));
@@ -181,6 +203,12 @@ export async function showReviewScene(
 
   const lineId = useStore.getState().activeLine?.id ?? null;
   const key = lineKeyOf(lineId);
+  // NOT the same thing as `lineId` above, and the difference is the whole of batch BV:
+  // the rebuilt-key and the origin read want the line's own id whatever it is, while
+  // the positions want the SLOT they live in, and the main line's slot has no id in it
+  // at all — it is `asset.placements`, the field every review written before variants
+  // keeps its positions in.
+  const slot = activePlacementSlot();
   // `force` is a room whose server has just said it has NEVER held a scene, so there
   // is nothing on screen for the guard to protect: the reason it exists — not putting
   // the database's copy back over a model somebody has since hidden or moved — cannot
@@ -224,10 +252,11 @@ export async function showReviewScene(
       ? curationSceneModel(asset.modelHash, asset.importedFileName)
       : null;
   // History decides WHICH models are in the scene and which of them is visible;
-  // the review's own placements then decide where each one stands. The stored
+  // the positions THIS LINE left them at then decide where each one stands. The stored
   // placement wins over the beside-each-other default sceneFromRevisions computes,
   // because that default is a guess about a room nobody has been in since, and the
-  // placement is where somebody actually left it (batch BI).
+  // placement is where somebody actually left it (batch BI). A variant with no slot of
+  // its own gets the main line's, which is what "starts where the main line is" means.
   //
   // Narrowed to the line's last meeting when it named revisions that still exist.
   // revisionsForSession falls back to the whole history when it named none — a
@@ -235,7 +264,7 @@ export async function showReviewScene(
   // origin cannot be honoured opens on everything rather than on an empty room.
   state.setRoomScene(applyStoredPlacements(
     sceneFromRevisions(revisionsForSession(revisions, origin), unrecorded),
-    asset?.placements,
+    placementsForLine(asset, slot),
   ));
   return true;
 }

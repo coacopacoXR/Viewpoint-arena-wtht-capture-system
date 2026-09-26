@@ -10,6 +10,7 @@ import { fingerPointerRef } from '../../lib/fingerPointerRef';
 import { pointingSourceRef } from '../../lib/pointingSourceRef';
 import { getModelCenter } from '../../lib/orbitPivot';
 import { pickSelectionId } from '../../lib/pickSelectionId';
+import { EDITING_HELPER_KEY } from '../../lib/scene/captureClean';
 
 // Project the active model's center to NDC. Returns true on success.
 function computeModelCenterNDC(scene: THREE.Scene, camera: THREE.Camera, out: Vector2): boolean {
@@ -478,7 +479,10 @@ const UserLaser: React.FC = () => {
                 <meshBasicMaterial color={userColor} transparent opacity={0.6} depthTest={false} />
             </mesh>
 
-            <group ref={sparkMesh} userData={{ skipRaycast: true }}>
+            {/* editingHelper: the spark is the dot this person's laser lands on, and
+                the lobby's thumbnail leaves the dots out (batch BV,
+                lib/scene/captureClean.ts). */}
+            <group ref={sparkMesh} userData={{ skipRaycast: true, [EDITING_HELPER_KEY]: true }}>
                 <mesh userData={{ skipRaycast: true }}>
                     <sphereGeometry args={[0.03, 8, 8]} />
                     <meshBasicMaterial color={userColor} toneMapped={false} />

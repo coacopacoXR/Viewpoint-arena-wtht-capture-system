@@ -127,9 +127,18 @@ describe('a lobby card', () => {
     expect(screen.getAllByTestId('mini-rejoin')).toHaveLength(1);
   });
 
-  it('says a review that has never met has no sessions yet', () => {
-    render(<ReviewCard review={review({ sessions: [], lines: [MAIN] })} selected={false} onSelect={() => {}} />);
+  it('says a review with no lines at all has no sessions yet', () => {
+    render(<ReviewCard review={review({ sessions: [], lines: [] })} selected={false} onSelect={() => {}} />);
     expect(screen.getByTestId('mini-session-map-empty')).toHaveTextContent('No sessions yet');
+  });
+
+  it('draws a review that has lines and has not met, rather than saying it has nothing', () => {
+    // Batch BV: the card carries the main line's start — and a variant's stub if it has
+    // one — so a review whose first meeting has not happened yet is still recognisable
+    // in a grid of them, and a variant started before anybody met is still visible.
+    render(<ReviewCard review={review({ sessions: [], lines: [MAIN] })} selected={false} onSelect={() => {}} />);
+    expect(screen.getByTestId('mini-session-map')).toBeInTheDocument();
+    expect(screen.queryByTestId('mini-session-map-empty')).toBeNull();
   });
 
   it('selects the review when the card is pressed', () => {

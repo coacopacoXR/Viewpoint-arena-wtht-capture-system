@@ -23,6 +23,15 @@
 //   * Only for somebody who may EDIT the review. `can('editReview')` is the room's own
 //     answer (lib/reviews/roles.ts): a participant's browser and a guest's do not write,
 //     so a review's picture is always one its editors were looking at.
+//   * Only from the MAIN LINE's room, batch BV. `review_curations.thumbnail` is the
+//     review's one picture and every line of it shares the row, so a variant's browser
+//     writing it replaced the review's thumbnail with the variant's model, moved
+//     wherever the variant had moved it — which is what the user saw after exploring a
+//     variant that had never met. A variant's room captures nothing at all; the
+//     review's picture is taken by its own room, and after an adoption that room opens
+//     on the positions the adoption made the main line's (docs/supabase-schema.sql,
+//     `adopt_review_line`) and takes a new one then. `activeLine` null means the main
+//     line, an ad-hoc room and an install with no lines, and all three keep capturing.
 //   * Never when there is nothing on screen. An empty room's snapshot would replace a
 //     good picture with a grey rectangle, and the lobby would show it to everybody.
 //
@@ -78,10 +87,19 @@ const ThumbnailCapture: React.FC = () => {
   // debounce below: the geometry landing is what makes the picture worth taking.
   const sceneEntries = useStore((state) => state.sceneEntries);
   const roomScene = useStore((state) => state.scene);
+  // The line this room resolved itself to, put in the store by pages/RoomPage.tsx
+  // before the socket opened. Null on the main line, for an ad-hoc room and on an
+  // install with no database — and all three are a room that may write the review's
+  // picture. A variant's is not: see the header.
+  const activeLine = useStore((state) => state.activeLine);
   const localUserId = usePresence().localUserId;
   const { can, loading } = useReviewRole({ reviewId, sessionHostId, localUserId });
 
-  const mayCapture = reviewId !== null && !loading && can('editReview');
+  const mayCapture =
+    reviewId !== null &&
+    !loading &&
+    can('editReview') &&
+    (activeLine === null || activeLine.kind === 'main');
 
   // Read through a ref at the moment of capture rather than closed over, because the
   // debounced call fires three seconds after the render that armed it and the scene may

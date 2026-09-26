@@ -117,8 +117,28 @@ export interface ReviewAsset {
    * storage. Absent, or absent for one revision, means that model stands where the
    * scene put it. Batch BI; see lib/scene/placement.ts for why it lives here and
    * not in a column on model_revisions.
+   *
+   * THE MAIN LINE'S, and only the main line's. Batch BV moved every other line's
+   * positions into `linePlacements` below, because this one slot was shared: a
+   * variant that moved a model overwrote where the main line had left it, and
+   * whichever room re-seeded from the database last won.
    */
   placements?: StoredPlacement[];
+  /**
+   * Where a VARIANT's models were left, keyed by its review_lines id. Batch BV.
+   *
+   * Absent for a variant nobody has moved anything in, which is not the same as an
+   * empty list: a variant with no slot of its own opens on the main line's
+   * `placements`, because "a variant starts where the main line is" is what starting
+   * one means, and it diverges into its own slot the first time somebody drags
+   * anything in it. lib/scene/placement.placementsForLine is the one reader of that
+   * rule and lib/scene/keepPlacements the one writer.
+   *
+   * Kept when the variant is adopted or dropped: an adoption copies the slot into
+   * `placements` (docs/supabase-schema.sql, `adopt_review_line`) and a drop leaves it
+   * as the record of where the answer the review did not take had got to.
+   */
+  linePlacements?: Record<string, StoredPlacement[]>;
 }
 
 export interface ReviewDraft {

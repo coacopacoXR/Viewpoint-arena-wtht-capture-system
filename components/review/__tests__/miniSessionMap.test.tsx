@@ -215,21 +215,38 @@ describe('the miniature of a review with a variant', () => {
 });
 
 describe('a review that has not met', () => {
-  it('says so in words and draws nothing', () => {
-    draw({ sessions: [] });
+  it('says so in words and draws nothing, for a review with no lines at all', () => {
+    draw({ lines: [], sessions: [] });
 
     expect(screen.getByTestId('mini-session-map-empty').textContent).toBe('No sessions yet');
     expect(screen.queryByTestId('mini-session-map')).toBeNull();
     expect(document.querySelector('svg')).toBeNull();
   });
 
-  it('says so for a review with a variant started and no sessions recorded on either line', () => {
-    // layoutSessionMap draws a line leaving for a variant even when nothing was ever
-    // held on it, so this is the case where "no stops" and "no edges" come apart.
+  it('draws the main line’s start for a review that has lines and no meetings', () => {
+    // Batch BV. A review with lines has a shape before its first meeting, so the card
+    // carries that shape rather than saying there is nothing to show.
+    draw({ lines: [MAIN], sessions: [] });
+
+    expect(screen.getByTestId('mini-session-map')).toBeInTheDocument();
+    expect(document.querySelector('[data-marker="start"]')).not.toBeNull();
+    expect(screen.queryByTestId('mini-session-map-empty')).toBeNull();
+    // Nothing is filled in as "where this review has got to", because it has not got
+    // anywhere yet — the start is hollow.
+    expect(document.querySelector('[data-current="true"]')).toBeNull();
+  });
+
+  it('draws a session-less variant as a short coloured stub', () => {
+    // The reported case: a variant started before any meeting, explored, and left with a
+    // moved model in it. Its branch was already drawn, and ended in nothing.
     draw({ lines: [MAIN, variant()], sessions: [] });
 
-    expect(screen.getByTestId('mini-session-map-empty').textContent).toBe('No sessions yet');
-    expect(screen.queryByTestId('mini-session-map')).toBeNull();
+    const stub = document.querySelector('[data-marker="variant-end"]');
+    expect(stub).not.toBeNull();
+    expect(stub?.getAttribute('data-line')).toBe('variant');
+    expect(stub?.querySelector('circle')?.getAttribute('stroke')).toBe(VARIANT_INK);
+    // And it is not mistaken for a meeting the main line is at.
+    expect(document.querySelector('[data-current="true"]')).toBeNull();
   });
 });
 

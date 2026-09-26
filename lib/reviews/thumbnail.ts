@@ -35,13 +35,22 @@
 // box of the review's models by the same arithmetic the lobby's "Turn in 3D" viewer
 // frames with (lib/scene/frameBox.ts), from the same three-quarter angle and slightly
 // above. The room's camera is never read and never written, so there is nothing to
-// restore. The grid, the floor shadow, the agents, the lasers and the pins are still
-// in the frame — they are what makes it look like the room — they just no longer
-// decide what is in the middle of it, or how big it is.
+// restore. The grid, the floor shadow, the lights and the agents are still in the frame
+// — they are what makes it look like the room — they just no longer decide what is in
+// the middle of it, or how big it is.
+//
+// WHAT IS NOT IN IT, batch BV. The editing tools: the transform gizmo, a selection or
+// laser glow on a material, the pins somebody placed while curating and the dots a laser
+// lands on. They used to be in the frame with everything else, which is how a review's
+// card in the lobby came to show the move gizmo's arrows — the capture fires three
+// seconds after a model moves, and three seconds after a drag is while the gizmo is
+// still attached. lib/scene/captureClean.ts hides them for the one render and puts them
+// back in a `finally`, so the meeting keeps its tools and the picture does not.
 
 import * as THREE from 'three';
 import { supabase, supabaseConfigured } from '../supabase';
 import { FRAME_FOV, applyFrame, frameBox } from '../scene/frameBox';
+import { hideEditingHelpers } from '../scene/captureClean';
 import { reviewModelBounds } from '../scene/modelBounds';
 
 /** The picture the lobby stores: a JPEG data URL, small enough to read in a list. */
@@ -306,34 +315,52 @@ export function captureRoomThumbnail(
     // there is no aspect to frame with and nowhere to read from.
     if (!canvas || !(canvas.width > 0) || !(canvas.height > 0)) return null;
 
-    // Its own camera, framed on the models. Null when the scene has nothing tagged in
-    // it, which is the "never replace a good picture with a grey rectangle" case the
-    // caller's own guard also covers — a room whose models are still parsing is not a
-    // room with nothing in it, and the debounce asks again three seconds later.
-    const camera = captureCameraFor(scene, canvas.width / canvas.height);
-    if (!camera) return null;
-
-    // Take the renderer off whatever the room's frame loop left it doing, for this one
-    // render — see ThumbnailRenderer for why each of these is here. The room re-asserts
-    // all of them on its next frame, which is 16 ms away and before anything else can
-    // draw; `autoClear` is restored anyway because "Save this view" reads the buffer
-    // from a button press that can land between frames and expects the room's own
-    // compositing to have been in charge.
-    const ratio = gl.getPixelRatio() || 1;
-    const width = canvas.width / ratio;
-    const height = canvas.height / ratio;
-    const autoClear = gl.autoClear;
-    gl.autoClear = true;
-    gl.setScissorTest(false);
-    gl.setViewport(0, 0, width, height);
-    gl.setScissor(0, 0, width, height);
+    // The editing tools come out for this one frame, and come back in the `finally`:
+    // the gizmo, a selection or laser glow on a material, the pins somebody placed and
+    // the dots a laser lands on. Batch BV, from the picture the user reported — the
+    // capture is armed by a model arriving or moving and fires three seconds later, so
+    // it lands exactly when the move gizmo is still attached to the model somebody had
+    // just dragged, and the review's card in the lobby showed its arrows to everybody.
+    // Hidden rather than cropped or re-framed, because the framing is already the
+    // bounding box of the models and the tools are inside it. The grid, the floor
+    // shadow, the lights and the other people in the room stay: the tools are what make
+    // it look like one person mid-edit, and the room is what makes it look like a
+    // meeting. See lib/scene/captureClean.ts.
+    const clean = hideEditingHelpers(scene);
     try {
-      gl.render(scene, camera);
-    } finally {
-      gl.autoClear = autoClear;
-    }
+      // Its own camera, framed on the models. Null when the scene has nothing tagged in
+      // it, which is the "never replace a good picture with a grey rectangle" case the
+      // caller's own guard also covers — a room whose models are still parsing is not a
+      // room with nothing in it, and the debounce asks again three seconds later.
+      const camera = captureCameraFor(scene, canvas.width / canvas.height);
+      if (!camera) return null;
 
-    return downscaleJpeg(canvas, makeCanvas, quality);
+      // Take the renderer off whatever the room's frame loop left it doing, for this one
+      // render — see ThumbnailRenderer for why each of these is here. The room re-asserts
+      // all of them on its next frame, which is 16 ms away and before anything else can
+      // draw; `autoClear` is restored anyway because "Save this view" reads the buffer
+      // from a button press that can land between frames and expects the room's own
+      // compositing to have been in charge.
+      const ratio = gl.getPixelRatio() || 1;
+      const width = canvas.width / ratio;
+      const height = canvas.height / ratio;
+      const autoClear = gl.autoClear;
+      gl.autoClear = true;
+      gl.setScissorTest(false);
+      gl.setViewport(0, 0, width, height);
+      gl.setScissor(0, 0, width, height);
+      try {
+        gl.render(scene, camera);
+      } finally {
+        gl.autoClear = autoClear;
+      }
+
+      return downscaleJpeg(canvas, makeCanvas, quality);
+    } finally {
+      // A renderer that throws on a lost context must still give the meeting its tools
+      // back: an invisible gizmo is a room nobody can move anything in.
+      clean.restore();
+    }
   } catch (err) {
     // A renderer whose context was lost throws on render rather than drawing
     // nothing, and a lost context is an ordinary thing to happen to a room that

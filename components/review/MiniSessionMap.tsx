@@ -103,6 +103,11 @@ function currentStop(layout: SessionMapLayout): MapStop | null {
   let newest: MapStop | null = null;
   for (const stop of layout.stops) {
     if (stop.rejoin) continue;
+    // Batch BV's two markers are not meetings either: the main line's hollow "Start"
+    // and the hollow letter a variant with no meetings ends at. Filling the start in
+    // would say the review is at a meeting it has not held, and on a card whose main
+    // line has never met it is the only stop there is.
+    if (stop.start === true || stop.variantEnd === true) continue;
     if ((stop.line?.kind ?? 'main') !== 'main') continue;
     if (!newest || stop.x > newest.x) newest = stop;
   }
@@ -215,6 +220,7 @@ export const MiniSessionMap: React.FC<MiniSessionMapProps> = ({ lines, sessions,
             data-line={stop.line?.kind ?? 'main'}
             data-dropped={stop.dropped ? 'true' : undefined}
             data-current={isCurrent ? 'true' : undefined}
+            data-marker={stop.start === true ? 'start' : stop.variantEnd === true ? 'variant-end' : undefined}
           >
             <circle
               cx={stop.x}

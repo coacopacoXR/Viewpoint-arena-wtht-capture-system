@@ -11,8 +11,10 @@
 // Pinned: the chip names the line in the words the app uses everywhere else, its link
 // goes to the main line's address (which carries no `?line=`, so every link already in
 // circulation still works), it carries the two variant decisions for somebody who may
-// make them, and it renders NOTHING at all on the main line — every room that existed
-// before this batch has an address with no `?line=` in it.
+// make them, and it renders NOTHING at all where there is no line — an ad-hoc session, or
+// an install with no database. On the MAIN line it is a small "Lines" menu rather than a
+// chip, which is batch BV: same list, no claim about where you are that you had not
+// wondered about. The list itself is pinned in lineChipLines.test.tsx.
 
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
@@ -27,6 +29,11 @@ vi.mock('../../../../lib/reviews/linesClient', () => ({
 
 vi.mock('../../../../lib/reviews/linesRepo', () => ({
   resetLineCache: () => undefined,
+  // Batch BV: the panel now lists every line of the review, so the chip reads them.
+  // Answering none is the case the chip has to survive anyway — an install whose lines
+  // cannot be read must still offer the way back to the main line — and
+  // lineChipLines.test.tsx is where the list itself is pinned.
+  listLines: async () => [],
 }));
 
 import LineChip from '../LineChip';
@@ -99,9 +106,18 @@ describe('the chip in a variant’s room', () => {
 });
 
 describe('the chip on every other room', () => {
-  it('renders nothing at all on the main line', () => {
-    const { container } = renderChip({ line: MAIN });
-    expect(container.textContent).toBe('');
+  it('is a Lines menu on the main line, and not a chip naming the obvious', () => {
+    // Batch BV changed this. It used to render nothing here, on the reasoning that every
+    // room that existed before variants has an address with no `?line=` in it and nobody
+    // standing in one has wondered which line they are on. What nobody in one HAS is a
+    // route to the review's variants: the only way was out to the lobby and back in
+    // again, and until this batch the lobby offered no way into a variant either. So the
+    // main line gets the same list under a small menu, and still no chip saying "You are
+    // on Main line" in every room that ever existed.
+    renderChip({ line: MAIN });
+    expect(screen.getByTestId('lines-menu-button').textContent).toBe('Lines');
+    expect(screen.queryByTestId('line-chip-button')).toBeNull();
+    expect(screen.queryByText(/You are on/)).toBeNull();
   });
 
   it('renders nothing for a room with no line — an ad-hoc session, or no database', () => {

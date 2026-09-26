@@ -388,6 +388,15 @@ function rpcRefusal(answer: RpcAnswer): { status: number; error: string } | null
  * the same model, a request with no answer is refused with the question in it, and
  * the browser asks the person and posts again. The cards move either way, and both
  * halves are one transaction.
+ *
+ * So is the third half, batch BV: the positions the variant left its models at become
+ * the main line's. `adopt_review_line` copies `asset.linePlacements[variant]` into
+ * `asset.placements` on the review's own row, in the same function call as the cards and
+ * the status — this endpoint writes no row of its own afterwards, and deliberately so,
+ * because an adoption that moved the cards in one transaction and the positions in a
+ * second request would have a window in which the main line opens on the model the
+ * meeting had just taken, standing where the meeting had just decided against. A drop
+ * leaves the variant's slot exactly as it was, as the record.
  */
 async function adopt(
   res: VercelResponse,

@@ -337,3 +337,91 @@ describe('the preview panel — "Turn in 3D" is lazy', () => {
     expect(screen.getByTestId('preview-placeholder')).toHaveTextContent('hinge.glb');
   });
 });
+
+// ─── Batch BV: every line, and the way into each ──────────────────────────────
+//
+// The report this batch came from: a variant started before anybody met, explored, and
+// left with a moved model in it was kept perfectly by its own room and was invisible from
+// everywhere else. This panel counted it in its header ("0 sessions · 1 variant"), the map
+// under that said "No sessions recorded", and the list below it is of SESSIONS — so there
+// was no row to read and no link to press. What is pinned here is that the panel now names
+// every line of the review and offers the room each one meets in.
+
+describe('the preview panel — its lines, and the way into each', () => {
+  /** A variant still being explored, and one nobody has met on: the reported case. */
+  const ACTIVE: ReviewLine = {
+    ...MAIN, id: 'line-b', kind: 'variant', name: 'Frame forward', letter: 'B',
+    parentSessionId: null, status: 'active', closedAt: null,
+    // Started before VARIANT, so `orderedLines` — which sorts by the moment a line was
+    // started and then by id — puts it first and the row order below is pinned by the
+    // data rather than by two ids happening to sort the same way.
+    createdAt: '2026-09-19T09:00:00.000Z',
+  };
+
+  it('lists the main line and every variant, each with the room it opens', () => {
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE, VARIANT] };
+    renderPanel();
+
+    const rows = screen.getAllByTestId('preview-line');
+    expect(rows).toHaveLength(3);
+    // In the order the map above it draws them: the main line first, then the variants
+    // in the order they were started.
+    expect(rows.map((row) => row.getAttribute('data-line'))).toEqual(['line-main', 'line-b', 'line-a']);
+    // The main line's address carries no ?line= — every link already in circulation for
+    // a review opens exactly the room it always did.
+    expect(screen.getByTestId('open-main-line').getAttribute('href')).toBe('/room/r1');
+    expect(screen.getByTestId('open-variant').getAttribute('href')).toBe('/room/r1?line=line-b');
+    expect(screen.getByTestId('preview-lines')).toHaveTextContent('Variant B · Frame forward');
+  });
+
+  it('offers a way into a variant that has never met, which is the whole of the batch', () => {
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE], sessions: [] };
+    renderPanel({ review: review({ sessions: [], lines: [MAIN, ACTIVE] }) });
+
+    expect(screen.getByTestId('open-variant').getAttribute('href')).toBe('/room/r1?line=line-b');
+    expect(screen.getByTestId('preview-lines')).toHaveTextContent('0 sessions');
+    expect(screen.getByTestId('preview-lines')).toHaveTextContent('active');
+  });
+
+  it('greys a line that is finished with, and offers no way into it', () => {
+    // An adopted or dropped variant has no meeting to walk into. Its record is its cards
+    // and its place on the map, so it stays on the list and loses the link.
+    mapData.current = { ...mapData.current, lines: [MAIN, VARIANT] };
+    renderPanel();
+
+    const closed = screen
+      .getAllByTestId('preview-line')
+      .find((row) => row.getAttribute('data-line') === 'line-a');
+    expect(closed?.getAttribute('data-status')).toBe('adopted');
+    expect(closed?.textContent).toContain('adopted');
+    expect(closed?.querySelector('a')).toBeNull();
+    // The main line is not finished with, so it keeps its way in.
+    expect(screen.getByTestId('open-main-line')).toBeInTheDocument();
+  });
+
+  it('counts each line’s own meetings, and counts a meeting with no line as the main line’s', () => {
+    mapData.current = {
+      ...mapData.current,
+      lines: [MAIN, ACTIVE],
+      sessions: [
+        session('s1', { seq: 1, lineId: null }),
+        session('s2', { seq: 2 }),
+        session('s3', { seq: 1, lineId: 'line-b' }),
+      ],
+    };
+    renderPanel();
+
+    const [main, variantRow] = screen.getAllByTestId('preview-line');
+    expect(main.textContent).toContain('2 sessions');
+    expect(variantRow.textContent).toContain('1 session');
+  });
+
+  it('has no Lines heading at all for a review with no lines', () => {
+    // An ad-hoc room and an install with no database. An empty heading under the map
+    // would be a question the panel then has to answer.
+    mapData.current = { ...mapData.current, lines: [], sessions: [] };
+    renderPanel({ review: review({ lines: [], sessions: [] }) });
+
+    expect(screen.queryByTestId('preview-lines')).toBeNull();
+  });
+});

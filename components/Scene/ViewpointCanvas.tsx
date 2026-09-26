@@ -23,6 +23,7 @@ import type { ViewCapture } from '../../types';
 import { xrStore } from '../../lib/xrStore';
 import { computeOrbitPivot, getModelCenter } from '../../lib/orbitPivot';
 import { FOLLOW_RESUME_DELAY_MS } from '../../lib/followTiming';
+import { EDITING_HELPER_KEY } from '../../lib/scene/captureClean';
 import * as THREE from 'three';
 
 // Follow ease, expressed per second instead of per frame: 1 - e^(-k·dt) equals
@@ -678,8 +679,11 @@ const RemoteLaserDot: React.FC<{
 
   return (
     <>
-      {/* Hit-point group: dot + glow + label. skipRaycast so the laser doesn't pin to its own dot. */}
-      <group ref={groupRef} visible={false} userData={{ skipRaycast: true }}>
+      {/* Hit-point group: dot + glow + label. skipRaycast so the laser doesn't pin to
+          its own dot; editingHelper so the lobby's thumbnail leaves the dot out (batch
+          BV, lib/scene/captureClean.ts) — a dot on the model says somebody was pointing
+          at it, and the picture is of the review rather than of one person's laser. */}
+      <group ref={groupRef} visible={false} userData={{ skipRaycast: true, [EDITING_HELPER_KEY]: true }}>
         <mesh ref={dotRef} renderOrder={999} userData={{ skipRaycast: true }}>
           <sphereGeometry args={[0.035, 10, 10]} />
           <meshBasicMaterial ref={dotMatRef} toneMapped={false} depthTest={false} />

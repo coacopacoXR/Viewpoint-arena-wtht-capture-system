@@ -228,6 +228,50 @@ export function placementsFromScene(models: readonly SceneModel[]): StoredPlacem
 }
 
 /**
+ * The two slots of a review's asset that hold positions.
+ *
+ * Structural, and deliberately not `ReviewAsset`: the readers are lib/scene/
+ * showCurationModel (which is handed a curation's asset as it arrived off the wire)
+ * and components/lobby/ReviewModelViewer, and neither should have to import the whole
+ * draft type to ask where a line's models stand.
+ */
+export interface PlacementSlots {
+  /** The MAIN line's positions, and every review's positions before batch BV. */
+  placements?: readonly StoredPlacement[] | null;
+  /** A variant's own, keyed by its review_lines id. Absent until somebody moves one. */
+  linePlacements?: Record<string, readonly StoredPlacement[]> | null;
+}
+
+/**
+ * The positions ONE LINE opens on.
+ *
+ * Batch BV, and the reason it is a function rather than a field read: `placements`
+ * used to be the review's one slot, shared by every line, so a variant that moved a
+ * model overwrote where the main line had left it — and a room that re-seeded from the
+ * database (BQ2: a room whose server has never held a scene) got whichever line wrote
+ * last. Two slots and one rule for which to read.
+ *
+ * `lineId` null means the main line, and means it for the three cases that all answer
+ * the same way: a room on the main line, a review on an install with no lines at all,
+ * and the curator's own setup page, which has no room and no line.
+ *
+ * A variant with no slot of its own gets the MAIN line's positions, not nothing. That
+ * is what "a variant starts where the main line is" means: it is handed the scene as
+ * the main line has it, and from the first drag it writes to its own slot and diverges.
+ * An empty slot of its own — a variant whose models were all moved back to where they
+ * arrived — is NOT the same as no slot, and is honoured as the empty list it is.
+ */
+export function placementsForLine(
+  asset: PlacementSlots | null | undefined,
+  lineId: string | null | undefined,
+): readonly StoredPlacement[] | null | undefined {
+  if (!asset) return undefined;
+  const id = typeof lineId === 'string' ? lineId.trim() : '';
+  if (id === '') return asset.placements;
+  return asset.linePlacements?.[id] ?? asset.placements;
+}
+
+/**
  * Put the placements a review stored back onto the scene it means.
  *
  * Returns the SAME scene object when nothing in it changes, which is the contract

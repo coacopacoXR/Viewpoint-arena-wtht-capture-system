@@ -871,8 +871,9 @@ where s.id = i.session_id
 --
 --   adopt_review_line   moves every card the variant raised onto the main line,
 --                       stamps each one with the moment it was adopted, records
---                       what the main line's scene became, and marks the variant
---                       adopted — all of it or none of it.
+--                       what the main line's scene became, makes the positions the
+--                       variant left its models at the main line's own, and marks
+--                       the variant adopted — all of it or none of it.
 --   drop_review_line    marks the variant dropped, closes every card still open on
 --                       it with the reason, and writes the same status history the
 --                       tracker writes when somebody closes a card by hand, so
@@ -945,6 +946,34 @@ begin
          closed_at = now(),
          adopted_revision_ids = p_revision_ids
    where id = v_variant.id;
+
+  -- The variant's own saved positions become the main line's (added 2026-09-26,
+  -- docs/plan/15-sessions-and-variants.md batch BV).
+  --
+  -- A review keeps where its models stand in its own row, because room storage is the
+  -- room's and a review is opened again long after that room is gone: `asset.placements`
+  -- is the MAIN line's and `asset.linePlacements[<review_lines.id>]` is one slot per
+  -- variant, so exploring a variant cannot move the main line's models. An adoption is
+  -- the moment the two become one answer — the variant's model IS the main line's model
+  -- from here — so its positions go with it, and in the same transaction as the cards
+  -- and the status: an adoption that moved the cards and left the main line standing
+  -- where it was would open on the model the meeting had just decided against, arranged
+  -- the way the meeting had just decided against.
+  --
+  -- Written only where the variant HAS a slot of its own. One that does not never
+  -- diverged from the main line, so `asset.placements` already says where it stands and
+  -- a write would be a no-op that still bumped `updated_at` and moved the review up the
+  -- lobby's list. The slot is left in place either way, because it is the record of where
+  -- the answer the review took had got to — and a DROP leaves its own there for the same
+  -- reason, which is why drop_review_line has no counterpart of this statement.
+  update review_curations
+     set asset = jsonb_set(
+           asset,
+           '{placements}',
+           asset -> 'linePlacements' -> v_variant.id::text
+         )
+   where id = v_variant.review_id
+     and asset -> 'linePlacements' ? v_variant.id::text;
 
   return jsonb_build_object(
     'ok', true,

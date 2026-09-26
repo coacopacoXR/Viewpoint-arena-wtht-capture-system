@@ -32,6 +32,7 @@ import * as THREE from 'three';
 import { selectedNodeId, useStore } from '../../store';
 import { usePresence } from '../../lib/PresenceContext';
 import { keepReviewPlacements } from '../../lib/scene/keepPlacements';
+import { markEditingHelper } from '../../lib/scene/captureClean';
 import {
   findPartNode,
   partTargetFor,
@@ -274,6 +275,13 @@ const ReviewModelGizmo: React.FC<{
 
   return (
     <TransformControls
+      // Tagged so the lobby's thumbnail hides it for the one frame it renders. Batch
+      // BV: the capture fires three seconds after a model moves, which is while the
+      // gizmo is still attached to it, and the review's card in the lobby showed the
+      // arrows. lib/scene/captureClean.ts also recognises three's own
+      // 'TransformControls' type name, so this tag is the second of two mechanisms and
+      // not the only thing between a card and an arrow.
+      ref={markEditingHelper}
       object={object}
       mode={mode}
       size={0.8}

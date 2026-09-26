@@ -40,10 +40,13 @@ import {
 import {
   MAIN_LINE_NAME,
   lineLabel,
+  lineStatusWord,
   mainLineOf,
   orderedLines,
+  roomPath,
   sessionLabel,
   shortLineLabel,
+  variantLetter,
   type ReviewLine,
 } from '../../lib/reviews/lines';
 import type { LineSession, SessionCardRef } from '../../lib/reviews/linesRepo';
@@ -86,6 +89,27 @@ export interface MapStop {
   dropped: boolean;
   /** The green stop an adopted variant rejoins the main line at. Not a meeting. */
   rejoin: boolean;
+  /**
+   * The hollow stop at the head of a main line that has never met. Not a meeting.
+   *
+   * Batch BV. It is where the line's first meeting will leave from, and — for a
+   * variant started before anybody met — where its branch already leaves from, so
+   * drawing it is what makes such a review a picture rather than a sentence. Drawn
+   * only for a review that HAS lines: one that has none has nothing to start, and
+   * its map is still the empty message.
+   */
+  start?: boolean;
+  /**
+   * The hollow stop a variant with no meetings ends at, labelled with its letter.
+   * Not a meeting.
+   *
+   * Batch BV, and the reason for it is a report from live testing: a variant started
+   * before any meeting, explored, moved a model in and left, was invisible everywhere
+   * outside its own room — the map said "No sessions recorded", so the person who had
+   * just spent twenty minutes in it read that as "the variant was not saved". Its
+   * branch was already drawn; this is the end of it, and it is a thing to click.
+   */
+  variantEnd?: boolean;
 }
 
 /** A line drawn between two points. */
@@ -97,6 +121,17 @@ export interface MapEdge {
   kind: 'along' | 'leave' | 'rejoin';
   dashed: boolean;
   colour: string;
+  /**
+   * The line this piece of drawing belongs to, when it is a VARIANT's. Batch BV: a
+   * variant's line is clickable and opens that line's panel, because a variant nobody
+   * has met on has no stops to click and its branch is the only thing on the map that
+   * says it exists.
+   *
+   * Left off the main line's own edges — its stops are its meetings, and its start is
+   * the one marker that opens its panel — and off the green edge an adopted variant
+   * rejoins along, so the whole of that return stays the inert moment it describes.
+   */
+  lineId?: string;
 }
 
 export interface SessionMapLayout {
@@ -197,6 +232,21 @@ export function layoutSessionMap(
     });
   }
 
+  // A main line that has never met still gets its start, as long as the review has
+  // lines at all. One STEP of line rather than a dot on its own, so it reads as the
+  // beginning of the row the meetings will be placed along and not as a stray mark.
+  if (mainStops.length === 0 && ordered.length > 0) {
+    stops.push(markerStop(main, `start-${main?.id ?? '__main__'}`, PAD_X, MAIN_Y, 'Start', 'start'));
+    edges.push({
+      id: 'main-start',
+      from: { x: PAD_X, y: MAIN_Y },
+      to: { x: PAD_X + STEP, y: MAIN_Y },
+      kind: 'along',
+      dashed: false,
+      colour: INK,
+    });
+  }
+
   // ─── The variants ───────────────────────────────────────────────────────────
   // Rejoin stops are appended to the main row after the last real meeting, in the
   // order the variants were started, so two adopted variants do not land on top of
@@ -247,6 +297,22 @@ export function layoutSessionMap(
       ? { x: variantStops[0].x, y }
       : { x: originX + STEP, y };
 
+    // A variant nobody has met on yet ends its branch in a hollow stop carrying its
+    // letter. Batch BV: without it the branch was a coloured line to nowhere, the map
+    // had no stops at all when the main line had not met either, and the whole review
+    // read as "No sessions recorded" — which is what made an explored variant look
+    // like a variant that had not been saved.
+    if (variantStops.length === 0) {
+      stops.push(markerStop(
+        variant,
+        `end-${variant.id}`,
+        firstPoint.x,
+        y,
+        variantLetter(variant) ?? '•',
+        'variantEnd',
+      ));
+    }
+
     // The elbow off the main line: across, then down, then along.
     edges.push({
       id: `leave-${variant.id}`,
@@ -255,6 +321,7 @@ export function layoutSessionMap(
       kind: 'leave',
       dashed: dropped,
       colour,
+      lineId: variant.id,
     });
     for (let i = 1; i < variantStops.length; i++) {
       edges.push({
@@ -264,6 +331,7 @@ export function layoutSessionMap(
         kind: 'along',
         dashed: dropped,
         colour,
+        lineId: variant.id,
       });
     }
 
@@ -329,6 +397,83 @@ function emptySession(): LineSession {
     revisionIds: [],
     summary: null,
   };
+}
+
+/**
+ * A stop that is not a meeting: the main line's start, or the end of a variant
+ * nobody has met on.
+ *
+ * Carried on the same shape as a real stop — and given a `session` with a made-up id
+ * that cannot collide with one — because everything that draws, keys and measures the
+ * map works on stops, and a second collection of "the other things on the map" would
+ * be a second thing for the drawing, the miniature and the width arithmetic to keep in
+ * step. The id is what makes it clickable: the panel below opens on the LINE it names.
+ */
+function markerStop(
+  line: ReviewLine | null,
+  id: string,
+  x: number,
+  y: number,
+  label: string,
+  kind: 'start' | 'variantEnd',
+): MapStop {
+  return {
+    session: { ...emptySession(), id, lineId: line?.id ?? null },
+    line,
+    x,
+    y,
+    label,
+    date: '',
+    revisions: '',
+    cards: 0,
+    dropped: line?.status === 'dropped',
+    rejoin: false,
+    ...(kind === 'start' ? { start: true } : { variantEnd: true }),
+  };
+}
+
+/**
+ * "from S2 · 24 Sep", or "from the start" — where a variant left the main line.
+ *
+ * "From the start" is the answer for a variant started in a review that had never
+ * met (`parent_session_id` NULL, batch BQ) AND for one whose parent meeting has since
+ * been deleted, because in both cases there is no meeting to name — and a date
+ * invented from the variant's own `created_at` would say when the line was started,
+ * not where it left from, which is the question this line answers.
+ */
+function startedFromText(
+  line: ReviewLine,
+  lines: readonly ReviewLine[],
+  sessions: readonly LineSession[],
+): string {
+  if (line.kind !== 'variant' || !line.parentSessionId) return 'from the start';
+  const parent = sessions.find((session) => session.id === line.parentSessionId) ?? null;
+  if (!parent) return 'from the start';
+  const on = lines.find((one) => one.id === parent.lineId) ?? mainLineOf(orderedLines(lines));
+  const label = sessionLabel(on, parent.seq);
+  const date = shortDate(parent.endedAt);
+  if (label && date) return `from ${label} · ${date}`;
+  if (label) return `from ${label}`;
+  if (date) return `from ${date}`;
+  return 'from the start';
+}
+
+/**
+ * How many meetings a line has held.
+ *
+ * A session with no `line_id` counts towards the main line, which is where the map
+ * draws it and where the backfill in docs/supabase-schema.sql puts it.
+ */
+function sessionsOnLine(
+  line: ReviewLine,
+  lines: readonly ReviewLine[],
+  sessions: readonly LineSession[],
+): number {
+  const main = mainLineOf(orderedLines(lines));
+  const mine = main !== null && line.id === main.id;
+  return sessions.filter((session) =>
+    session.lineId === line.id || (mine && session.lineId === null),
+  ).length;
 }
 
 /** The elbow an edge takes: across first, then down (or up), then across again. */
@@ -527,12 +672,19 @@ const SessionMap: React.FC<SessionMapProps> = ({
   compact = false,
 }) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The line one of the map's two markers opened. Batch BV: a review whose variant
+  // has never met has nothing to open a SESSION panel on, and the way into that
+  // variant's room is the thing its reader is looking for.
+  const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const layout = useMemo(
     () => layoutSessionMap(lines, sessions, revisions, cards),
     [lines, sessions, revisions, cards],
   );
 
-  const selected = layout.stops.find((stop) => stop.session.id === selectedId && !stop.rejoin) ?? null;
+  const selected = layout.stops.find(
+    (stop) => stop.session.id === selectedId && !stop.rejoin && !stop.start && !stop.variantEnd,
+  ) ?? null;
+  const selectedLine = selectedLineId ? lines.find((line) => line.id === selectedLineId) ?? null : null;
 
   // The selected meeting's transcript, read when its stop is clicked and dropped
   // when another one is. The id travels with the rows so a slow answer about the
@@ -681,18 +833,48 @@ const SessionMap: React.FC<SessionMapProps> = ({
             aria-label="Map of this design review's sessions"
             className="block"
           >
-            {layout.edges.map((edge) => (
-              <path
-                key={edge.id}
-                d={edgePath(edge)}
-                fill="none"
-                stroke={edge.colour}
-                strokeWidth={edge.kind === 'along' ? 2 : 1.5}
-                strokeDasharray={edge.dashed ? '4 4' : undefined}
-                strokeLinecap="round"
-                opacity={edge.dashed ? 0.9 : 1}
-              />
-            ))}
+            {layout.edges.map((edge) => {
+              // A variant's line is a way into its panel — batch BV, and for a variant
+              // nobody has met on it is the ONLY way, because it has no stops to click.
+              const opensLine = edge.lineId;
+              return (
+                <g key={edge.id}>
+                  <path
+                    d={edgePath(edge)}
+                    fill="none"
+                    stroke={edge.colour}
+                    strokeWidth={edge.kind === 'along' ? 2 : 1.5}
+                    strokeDasharray={edge.dashed ? '4 4' : undefined}
+                    strokeLinecap="round"
+                    opacity={edge.dashed ? 0.9 : 1}
+                  />
+                  {opensLine && (
+                    // A second, wider, invisible stroke over the same path, because a
+                    // 1.5px line is not a thing anybody can hit with a pointer. Made a
+                    // sibling rather than a thicker visible stroke so the drawing stays
+                    // exactly as legible as it was and only the hit area grows.
+                    <path
+                      d={edgePath(edge)}
+                      fill="none"
+                      stroke="transparent"
+                      strokeWidth={14}
+                      pointerEvents="stroke"
+                      style={{ cursor: 'pointer' }}
+                      data-testid="map-line-edge"
+                      data-line={opensLine}
+                      onClick={() => {
+                        setSelectedId(null);
+                        setSelectedLineId((now) => (now === opensLine ? null : opensLine));
+                      }}
+                    >
+                      <title>
+                        {layout.rows.find((row) => row.id === opensLine)?.title ?? 'This line'}
+                      </title>
+                    </path>
+                  )}
+                </g>
+              );
+            })}
 
             {layout.rows.map((row) => (
               <text
@@ -712,20 +894,36 @@ const SessionMap: React.FC<SessionMapProps> = ({
             ))}
 
             {layout.stops.map((stop) => {
-              const isSelected = selectedId === stop.session.id && !stop.rejoin;
-              const fill = stop.rejoin ? ADOPTED : stop.dropped ? '#f3f4f6' : '#ffffff';
+              // Not a meeting: the main line's start, or the end of a variant nobody
+              // has met on. Both open the LINE's panel rather than a session's.
+              const marker = stop.start === true || stop.variantEnd === true;
+              const isSelected = marker
+                ? selectedLineId !== null && selectedLineId === stop.line?.id
+                : selectedId === stop.session.id && !stop.rejoin;
+              const fill = stop.rejoin ? ADOPTED : marker ? '#ffffff' : stop.dropped ? '#f3f4f6' : '#ffffff';
               const stroke = stop.rejoin ? ADOPTED : stop.dropped ? DROPPED : stop.line && stop.line.kind === 'variant' ? VARIANT_INK : INK;
               return (
                 <g
                   key={`${stop.session.id}-${stop.x}`}
-                  onClick={() => { if (!stop.rejoin) setSelectedId(isSelected ? null : stop.session.id); }}
+                  onClick={() => {
+                    if (stop.rejoin) return;
+                    if (marker) {
+                      setSelectedId(null);
+                      setSelectedLineId(isSelected ? null : stop.line?.id ?? null);
+                      return;
+                    }
+                    setSelectedLineId(null);
+                    setSelectedId(isSelected ? null : stop.session.id);
+                  }}
                   style={{ cursor: stop.rejoin ? 'default' : 'pointer' }}
-                  data-testid={stop.rejoin ? undefined : 'session-stop'}
+                  data-testid={stop.rejoin ? undefined : marker ? 'map-line-stop' : 'session-stop'}
                 >
                   <title>
                     {stop.rejoin
                       ? 'Adopted into the main line'
-                      : `${stop.label} — ${stop.date}${stop.revisions ? ` — ${stop.revisions}` : ''}`}
+                      : marker
+                        ? `${lineLabel(stop.line) ?? MAIN_LINE_NAME} — no sessions on it yet`
+                        : `${stop.label} — ${stop.date}${stop.revisions ? ` — ${stop.revisions}` : ''}`}
                   </title>
                   <circle
                     cx={stop.x}
@@ -740,14 +938,14 @@ const SessionMap: React.FC<SessionMapProps> = ({
                     x={stop.x}
                     y={stop.y + 3.5}
                     textAnchor="middle"
-                    fontSize={10}
+                    fontSize={marker ? 9 : 10}
                     fontWeight={700}
                     fontFamily="ui-monospace, monospace"
                     fill={stop.rejoin ? '#ffffff' : stop.dropped ? FAINT : INK}
                   >
                     {stop.label}
                   </text>
-                  {!stop.rejoin && (
+                  {!stop.rejoin && !marker && (
                     <>
                       <text x={stop.x} y={stop.y + STOP_R + 13} textAnchor="middle" fontSize={9} fill={stop.dropped ? FAINT : MUTED}>
                         {stop.date}
@@ -807,6 +1005,81 @@ const SessionMap: React.FC<SessionMapProps> = ({
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* One LINE, opened — batch BV. Only the map's two markers open it: the main
+          line's start, and the hollow stop a variant nobody has met on ends at.
+
+          It exists because a variant with no meetings had nothing to click and
+          therefore no way into its own room from anywhere but its address: the map
+          said "No sessions recorded", the lobby preview counted it and could not
+          name it, and the person who had just spent twenty minutes moving a model
+          inside it read all of that as "the variant was not saved". What it offers
+          is the way in, then the same two decisions the map already offers for a
+          variant — and it offers them to exactly the same people, because
+          VariantActions is the component that asks. */}
+      {selectedLine && (
+        <div
+          className="flex-shrink-0 border-t border-gray-100 bg-gray-50/40 px-4 py-3 max-h-[45%] overflow-y-auto custom-scrollbar"
+          data-testid="line-panel"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">Line</p>
+              <h3 className="text-sm font-semibold text-gray-900 leading-snug">
+                {lineLabel(selectedLine) ?? MAIN_LINE_NAME}
+              </h3>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                {lineStatusWord(selectedLine) ?? 'active'}
+                {selectedLine.kind === 'variant'
+                  ? ` · started ${startedFromText(selectedLine, lines, sessions)}`
+                  : ''}
+                {` · ${sessionsOnLine(selectedLine, lines, sessions)} ${
+                  sessionsOnLine(selectedLine, lines, sessions) === 1 ? 'session' : 'sessions'
+                }`}
+              </p>
+            </div>
+            <button
+              onClick={() => setSelectedLineId(null)}
+              className="p-1 rounded text-gray-400 hover:text-black hover:bg-gray-100 transition-colors flex-shrink-0"
+              title="Close this line"
+              aria-label="Close this line"
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          {/* The way in. The main line's address carries no `?line=` — see
+              lib/reviews/lines.roomPath — so it is asked for with null rather than
+              with the main line's own id, which would be a second address for the
+              same room. */}
+          {reviewId && (
+            <Link
+              to={roomPath(reviewId, selectedLine.kind === 'variant' ? selectedLine.id : null)}
+              data-testid={selectedLine.kind === 'variant' ? 'open-variant' : 'open-main-line'}
+              className={`${BUTTON} mt-3 border-black bg-black text-white hover:bg-gray-800`}
+              title={
+                selectedLine.kind === 'variant'
+                  ? 'Open this variant’s room'
+                  : 'Open the main line’s room'
+              }
+            >
+              {selectedLine.kind === 'variant' ? 'Open variant' : 'Open main line'}
+            </Link>
+          )}
+
+          {reviewId && mayEditLines && selectedLine.kind === 'variant' && selectedLine.status === 'active' && (
+            <div className="mt-2.5 border-t border-gray-200/70 pt-2.5">
+              <VariantActions
+                reviewId={reviewId}
+                variant={selectedLine}
+                mayEdit={mayEditLines}
+                isMeetingHost={isMeetingHost}
+                onChanged={onChanged}
+              />
+            </div>
+          )}
         </div>
       )}
 

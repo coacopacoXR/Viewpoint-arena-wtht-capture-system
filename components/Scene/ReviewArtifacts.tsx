@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { useActiveReviewStore } from '../../lib/activeReviewStore';
+import { EDITING_HELPER_KEY } from '../../lib/scene/captureClean';
 import type { ReviewPin, PinSeverity } from '../../lib/reviewSetupStore';
 
 const PIN_COLOR: Record<PinSeverity, string> = {
@@ -12,10 +13,13 @@ const PIN_COLOR: Record<PinSeverity, string> = {
 };
 
 // Pin marker matching the setup-canvas style. skipRaycast so lasers and
-// hover-dwell don't accidentally pin to the marker itself.
+// hover-dwell don't accidentally pin to the marker itself. editingHelper so the
+// lobby's thumbnail leaves it out (batch BV, lib/scene/captureClean.ts): a pin is
+// something a curator placed, and a picture of the review with the pins still on it
+// is a picture of the review mid-curation.
 const PinMarker: React.FC<{ pin: ReviewPin }> = ({ pin }) => {
   return (
-    <group position={pin.worldPos} userData={{ skipRaycast: true }}>
+    <group position={pin.worldPos} userData={{ skipRaycast: true, [EDITING_HELPER_KEY]: true }}>
       <mesh userData={{ skipRaycast: true }}>
         <sphereGeometry args={[0.035, 16, 16]} />
         <meshBasicMaterial color={PIN_COLOR[pin.severity]} toneMapped={false} depthTest={false} />

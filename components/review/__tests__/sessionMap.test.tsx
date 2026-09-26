@@ -12,7 +12,7 @@
 
 import React from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import SessionMap, { layoutSessionMap, rowLabels, stopLabels } from '../SessionMap';
 import type { ReviewLine } from '../../../lib/reviews/lines';
@@ -155,9 +155,40 @@ describe('layoutSessionMap', () => {
     expect(rowLabels(layout)).toEqual(['Main line']);
   });
 
-  it('draws no stops for a review that has never met', () => {
+  it('draws the main line’s start, and nothing else, for a review that has never met', () => {
+    // Batch BV. A review with lines has a shape before its first meeting, and a variant
+    // started before anybody met leaves from that start — so drawing no stops at all was
+    // what made such a review say "No sessions recorded" and made an explored variant
+    // look like one that had not been saved.
     const layout = layoutSessionMap([MAIN], [], REVISIONS, []);
-    expect(layout.stops.filter((stop) => !stop.rejoin)).toHaveLength(0);
+    expect(layout.stops).toHaveLength(1);
+    expect(layout.stops[0].start).toBe(true);
+    expect(layout.stops[0].label).toBe('Start');
+    expect(layout.stops.filter((stop) => !stop.rejoin && !stop.start)).toHaveLength(0);
+    // One STEP of the main line, so it reads as the beginning of the row and not as a
+    // dot that fell off something.
+    expect(layout.edges.filter((edge) => edge.kind === 'along')).toHaveLength(1);
+  });
+
+  it('draws nothing at all for a review with no lines, which has nothing to start', () => {
+    // An install the backfill has not reached, and a review read while its lines are
+    // still in flight. Both keep the empty message rather than gaining a picture.
+    const layout = layoutSessionMap([], [], REVISIONS, []);
+    expect(layout.stops).toHaveLength(0);
+  });
+
+  it('ends a variant nobody has met on at a hollow stop carrying its letter', () => {
+    const parentless: ReviewLine = { ...VARIANT_A, id: 'line-new', letter: 'B', parentSessionId: null };
+    const layout = layoutSessionMap([MAIN, parentless], [], REVISIONS, []);
+
+    const end = layout.stops.find((stop) => stop.variantEnd);
+    expect(end?.label).toBe('B');
+    expect(end?.line?.id).toBe('line-new');
+    // On its own row, to the right of where it leaves the main line.
+    const start = layout.stops.find((stop) => stop.start);
+    expect(end?.y).not.toBe(start?.y);
+    expect(end?.x).toBeGreaterThan(start?.x ?? 0);
+    expect(layout.edges.some((edge) => edge.kind === 'leave')).toBe(true);
   });
 
   it('names what was on screen at each stop', () => {
@@ -295,13 +326,28 @@ describe('SessionMap', () => {
     expect(screen.getByText(/1 variant/)).toBeTruthy();
   });
 
-  it('says what there is to say when a review has not met', () => {
-    renderMap({ sessions: [], cards: [] });
+  it('says what there is to say when a review has no lines at all', () => {
+    renderMap({ lines: [], sessions: [], cards: [] });
     expect(screen.getByText('No sessions recorded in this design review yet.')).toBeTruthy();
   });
 
+  it('draws a review that has lines and no meetings, rather than saying it has none', () => {
+    // Batch BV, and the shape of the report this batch came from: a variant started
+    // before any meeting is a line of the review, and a map that says "No sessions
+    // recorded" about it is a map that says the variant was not saved.
+    renderMap({ sessions: [], cards: [] });
+    expect(screen.queryByText('No sessions recorded in this design review yet.')).toBeNull();
+    expect(screen.getByText('Start')).toBeTruthy();
+    expect(screen.getByText('A')).toBeTruthy();
+    expect(screen.getByText('Main line')).toBeTruthy();
+    expect(screen.getByText('Variant A')).toBeTruthy();
+  });
+
   it('says it is reading, rather than showing an empty map, while it loads', () => {
-    renderMap({ sessions: [], cards: [], emptyMessage: 'Reading this design review’s sessions…' });
+    // While lib/reviews/useSessionMap is reading, it has answered NO lines either — its
+    // four reads land together — so an empty `lines` is the shape a loading map is
+    // actually given, and the sentence is still what it shows.
+    renderMap({ lines: [], sessions: [], cards: [], emptyMessage: 'Reading this design review’s sessions…' });
     expect(screen.getByText('Reading this design review’s sessions…')).toBeTruthy();
   });
 
@@ -441,8 +487,12 @@ describe('SessionMap — the words on screen', () => {
 
   it('calls them a design review, its lines and its sessions', () => {
     renderMap();
-    expect(screen.getByText('Design review')).toBeTruthy();
-    expect(screen.getByText(/sessions/)).toBeTruthy();
+    const heading = screen.getByTestId('session-map-heading');
+    expect(within(heading).getByText('Design review')).toBeTruthy();
+    // Scoped to the heading: since batch BV a session-less variant's stop carries a
+    // tooltip that also says "sessions", and the word this test is about is the
+    // heading's count of them.
+    expect(within(heading).getByText(/sessions/)).toBeTruthy();
     expect(screen.getByText('Main line')).toBeTruthy();
   });
 });

@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { Vector3, Raycaster, Vector2, Mesh } from 'three';
 import { mobileLaserRef } from '../../lib/mobileLaserRef';
 import { usePresence } from '../../lib/PresenceContext';
+import { EDITING_HELPER_KEY } from '../../lib/scene/captureClean';
 import { useStore } from '../../store';
 import { setLaserEntry, clearLaserEntry } from '../../lib/laserTargetRef';
 
@@ -92,8 +93,15 @@ const MobileLaser: React.FC = () => {
     }
   });
 
+  // editingHelper: this is the dot a pointing finger lands on, and the lobby's
+  // thumbnail leaves the dots out (batch BV, lib/scene/captureClean.ts).
   return (
-    <mesh ref={dotRef} visible={false} renderOrder={999} userData={{ skipRaycast: true }}>
+    <mesh
+      ref={dotRef}
+      visible={false}
+      renderOrder={999}
+      userData={{ skipRaycast: true, [EDITING_HELPER_KEY]: true }}
+    >
       <sphereGeometry args={[0.045, 12, 12]} />
       <meshBasicMaterial color={userColor} toneMapped={false} depthTest={false} />
     </mesh>
