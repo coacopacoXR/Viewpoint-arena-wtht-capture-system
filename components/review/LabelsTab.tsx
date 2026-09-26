@@ -111,7 +111,7 @@ export const LabelsTab: React.FC<{
                 }}
                 placeholder="Type a value…"
                 list={`label-suggestions-${field.id}`}
-                className="w-full bg-white/5 text-xs rounded px-2 py-1.5 border border-white/10 outline-none focus:border-emerald-400/50 placeholder:text-gray-600"
+                className="text-gray-100 w-full bg-white/5 text-xs rounded px-2 py-1.5 border border-white/10 outline-none focus:border-emerald-400/50 placeholder:text-gray-600"
               />
             )}
             {!hasValues && usedValues[field.id] && usedValues[field.id].length > 0 && (

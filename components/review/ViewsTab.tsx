@@ -38,7 +38,7 @@ export const ViewsTab: React.FC<{
               value={v.label}
               onChange={(e) => actions.updateViewpoint(v.id, { label: e.target.value })}
               placeholder="Viewpoint title"
-              className="flex-1 bg-transparent text-xs font-bold outline-none placeholder:text-gray-600"
+              className="text-gray-100 flex-1 bg-transparent text-xs font-bold outline-none placeholder:text-gray-600"
             />
             <button onClick={() => onJump(v)} className="text-[10px] font-bold uppercase text-emerald-400 hover:text-emerald-300 px-1.5">
               Jump
@@ -53,7 +53,7 @@ export const ViewsTab: React.FC<{
               value={v.notes ?? ''}
               onChange={(e) => actions.updateViewpoint(v.id, { notes: e.target.value })}
               placeholder="Notes / explainer — what should the room discuss at this view?"
-              className="w-full h-14 bg-black/30 text-[11px] rounded p-1.5 border border-white/10 outline-none focus:border-emerald-400/40 placeholder:text-gray-600 resize-none"
+              className="text-gray-100 w-full h-14 bg-black/30 text-[11px] rounded p-1.5 border border-white/10 outline-none focus:border-emerald-400/40 placeholder:text-gray-600 resize-none"
             />
           </div>
         </div>

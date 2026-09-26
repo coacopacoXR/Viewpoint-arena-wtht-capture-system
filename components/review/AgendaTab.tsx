@@ -108,7 +108,7 @@ const SlideCard: React.FC<{
           value={item.title}
           onChange={(e) => actions.updateAgendaItem(item.id, { title: e.target.value })}
           placeholder="Slide title"
-          className="flex-1 bg-transparent text-xs font-bold outline-none placeholder:text-gray-600"
+          className="text-gray-100 flex-1 bg-transparent text-xs font-bold outline-none placeholder:text-gray-600"
         />
         <button onClick={onRemove} className="text-gray-500 hover:text-red-400" title="Remove slide">
           <X size={14} />
@@ -121,7 +121,7 @@ const SlideCard: React.FC<{
           value={item.notes ?? ''}
           onChange={(e) => actions.updateAgendaItem(item.id, { notes: e.target.value })}
           placeholder="Speaker notes — what should you say at this slide?"
-          className="w-full h-14 bg-black/30 text-[11px] rounded p-1.5 border border-white/10 outline-none focus:border-emerald-400/40 placeholder:text-gray-600 resize-none"
+          className="text-gray-100 w-full h-14 bg-black/30 text-[11px] rounded p-1.5 border border-white/10 outline-none focus:border-emerald-400/40 placeholder:text-gray-600 resize-none"
         />
       </div>
 

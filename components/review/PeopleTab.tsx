@@ -215,7 +215,7 @@ const PeopleTab: React.FC<{
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="email address"
-              className="flex-1 min-w-0 bg-white/5 text-xs rounded px-2 py-1.5 border border-white/10 outline-none focus:border-emerald-400/50 placeholder:text-gray-600"
+              className="text-gray-100 flex-1 min-w-0 bg-white/5 text-xs rounded px-2 py-1.5 border border-white/10 outline-none focus:border-emerald-400/50 placeholder:text-gray-600"
             />
             <select
               value={role}

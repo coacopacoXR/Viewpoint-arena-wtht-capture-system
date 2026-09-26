@@ -94,7 +94,7 @@ export const PinsTab: React.FC<{
                 value={p.label}
                 onChange={(e) => actions.updatePin(p.id, { label: e.target.value })}
                 onClick={(e) => e.stopPropagation()}
-                className="flex-1 bg-transparent text-xs font-bold outline-none"
+                className="text-gray-100 flex-1 bg-transparent text-xs font-bold outline-none"
               />
               <button
                 onClick={(e) => { e.stopPropagation(); actions.removePin(p.id); }}
@@ -131,7 +131,7 @@ export const PinsTab: React.FC<{
                 onChange={(e) => actions.updatePin(p.id, { notes: e.target.value })}
                 onClick={(e) => e.stopPropagation()}
                 placeholder="Notes…"
-                className="ml-5 mt-1 w-[calc(100%-1.25rem)] h-16 bg-black/30 text-xs rounded p-2 border border-white/10 outline-none focus:border-emerald-400/40"
+                className="text-gray-100 ml-5 mt-1 w-[calc(100%-1.25rem)] h-16 bg-black/30 text-xs rounded p-2 border border-white/10 outline-none focus:border-emerald-400/40"
               />
             )}
           </div>
