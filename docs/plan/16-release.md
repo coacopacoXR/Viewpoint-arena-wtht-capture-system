@@ -4,7 +4,8 @@ Written 2026-09-26 at the end of a long session, for a NEW Claude Code session t
 pick up. The user said: "it works great, I think it might be time to release it"
 and asked for a plan.
 
-Read this file first, then `EXECUTION-LOG.md` (the history), then act. Talk to
+Read this file first, then `EXECUTION-LOG.md` (the history), then act. The
+publicity plan that follows the release is `17-publicity.md`. Talk to
 the user in plain, everyday language (see memory `feedback_plain_language`).
 Decide technical questions yourself; ask the user only about the decisions
 listed in §2.
@@ -51,6 +52,8 @@ listed in §2.
 
 ## 2. Decisions only the user can make
 
+**Ask D9 first:** it decides whether §3.8 (route A) or §4 (route B) applies.
+
 Ask these together, early, with a recommendation for each (AskUserQuestion). Do
 the work in §3 that does not depend on them while waiting.
 
@@ -63,6 +66,7 @@ the work in §3 that does not depend on them while waiting.
 | D5 | **Licence**: the repo is Apache-2.0. Keep it? | Keep, unless the user has a reason (e.g. university IP rules for the thesis). Ask about that. |
 | D6 | **Replacement sample model(s)**: a plain cube (decided 2026-09-17), or something nicer they own (e.g. a simple bracket they model)? | Cube now; a nicer own model can follow. |
 | D7 | **Where it lives**: keep the repo name `Viewpoint-arena-wtht-capture-system` or rename (e.g. `viewpoint-arena`) before announcing? | Rename before the announcement if they want it; GitHub redirects the old URL. |
+| D9 | **Which route to public: A (clean up THIS repo by rewriting its history) or B (a NEW clean public repo; this one goes private)?** See §4. The user will decide; they were leaning towards thinking it over (2026-09-26). | B. It is the only one where nothing can slip; the current repo has 0 forks and 0 stars. |
 | D8 | **Commit email.** All 267 commits carry `coacopaco@gmail.com`, visible to anyone. Replace it with the GitHub "noreply" address in the same history rewrite (a `.mailmap` / `--mailmap` in filter-repo), and set it for future commits? | Yes. The user finds their noreply address under GitHub → Settings → Emails. |
 
 ---
@@ -248,7 +252,7 @@ limitations".
   `listArchivedIds`).
 - Dependabot / renovate on the repo.
 
-### 3.8 Merge and release: THE USER DOES THIS, Claude assists
+### 3.8 Route A, merge and release: THE USER DOES THIS, Claude assists
 The user, 2026-09-26: **"I wanna be the one making it public, I just want you
 assist me, not doing it yourself."** So every step below that changes something
 public, irreversible, or on GitHub is performed BY THE USER. Claude's job is to
@@ -287,7 +291,62 @@ The sequence to prepare for the user:
 
 ---
 
-## 4. Rules that still apply
+## 4. Route B: a new clean public repository (the alternative)
+
+Written 2026-09-26 because a history rewrite on GitHub is not airtight: old
+commits stay reachable by their exact address for a while, GitHub keeps cached
+views and pull-request refs, and a full purge needs GitHub support. A new
+repository that starts from one clean commit has no old commits to leak. The
+current repo (checked 2026-09-26): public, **0 forks, 0 stars, 1 open issue**.
+Nobody depends on it.
+
+What changes compared with route A:
+- **No history rewrite, no force-push, no filter-repo** (§3.1's history line,
+  §3.8 step 3 and D3 don't apply). D8 (commit email) is solved by making the
+  new repo's first commit with the GitHub noreply address.
+- §3.0 (only install files) is done by **building the clean copy from the
+  keep-list**, not by deleting files from this repo. This repo keeps
+  everything and becomes private: the full history, the plans and the paper
+  stay with the user.
+- The public history starts at 0.1.0. The development history stays private.
+- The one open issue: the user copies it over by hand if it matters.
+
+Steps. The user does every public step; Claude prepares and verifies:
+1. Claude, on the planning branch: everything in §3.0b–3.7 and 3.1 (branded
+   models replaced in the working code). CI green.
+2. Claude builds the clean copy in a folder OUTSIDE this repo (e.g.
+   `C:/Users/coaco/viewpoint-arena-public/`): `git archive` of the planning
+   branch filtered to §3.0's keep-list, no `docs/plan`, `docs/paper`, internal
+   roadmaps, `metadata.json`, `.glb` product models, `.gitleaksignore` entries
+   that point at deleted history. Then `npm ci` + the full checks inside that
+   copy, a gitleaks scan, and a search for the user's email, names and
+   `192.168.1.134`. Show the user the file list and the results.
+3. Claude runs the fresh-install test (§3.2) FROM that copy, since that is
+   exactly what strangers will clone.
+4. **User:** creates the new empty public repo (name per D7, e.g.
+   `viewpoint-arena`) on GitHub. No README or licence from GitHub, so the first
+   push is clean.
+5. Claude gives the exact commands; **user** runs them in the copy:
+   `git init`, `git config user.email <noreply address>`, `git add -A`,
+   `git commit -m "Viewpoint Arena 0.1.0"`, `git remote add origin …`,
+   `git push -u origin main`. Claude then checks CI on the new repo and that
+   the README renders.
+6. **User:** Settings → turn on private vulnerability reporting, add topics and
+   description (Claude drafts them), branch protection on `main`.
+7. **User:** makes the OLD repo private (Settings → Danger zone → Change
+   visibility). Claude updates `SECURITY.md`/README links if they pointed at
+   the old name, and re-points the WSL install (`~/viewpoint-arena`) at the new
+   repo (or keeps it on the private one for development; see next point).
+8. **User:** tags `v0.1.0` and publishes the GitHub release (Claude drafts the
+   notes). Announcing follows the publicity plan (`17-publicity.md`).
+
+Where development happens afterwards (ask the user at step 7). Suggested:
+develop in the NEW public repo from now on. Keep plans and paper in a small
+private repo made from `docs/plan/` + `docs/paper/`. That avoids syncing two
+copies of the code. If the user prefers to keep developing privately, releases
+are then exported the same way as step 2 each time.
+
+## 5. Rules that still apply
 - **The user makes it public, not Claude** (§3.8). Claude never merges to main,
   rewrites history, force-pushes, tags, publishes a release, renames the repo,
   changes GitHub settings or announces anything. It prepares, explains and verifies.
