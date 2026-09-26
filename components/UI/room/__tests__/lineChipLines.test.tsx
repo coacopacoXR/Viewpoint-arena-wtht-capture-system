@@ -35,13 +35,13 @@ const REVIEW = 'review-1';
 
 const MAIN: ReviewLine = {
   id: 'line-main', reviewId: REVIEW, kind: 'main', name: 'Main line', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: 'Paco',
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null, status: 'active', createdBy: null, createdByName: 'Paco',
   createdAt: '2026-09-01T09:00:00.000Z', closedAt: null,
 };
 
 function variant(id: string, letter: string, name: string, over: Partial<ReviewLine> = {}): ReviewLine {
   return {
-    ...MAIN, id, kind: 'variant', letter, name, parentSessionId: null,
+    ...MAIN, id, kind: 'variant', letter, name, parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null,
     createdAt: `2026-09-2${letter === 'A' ? '1' : '2'}T09:00:00.000Z`, ...over,
   };
 }
@@ -78,7 +78,7 @@ describe('LineChip — in a variant’s room', () => {
     await waitFor(() => expect(screen.getByTestId('line-chip-lines')).toBeTruthy());
     const links = screen
       .getAllByTitle(/Go to .*’s room/)
-      .map((link) => link.getAttribute('href'));
+      .map((link) => link.getAttribute('data-href'));
     // The main line first, with no ?line= — the address every link already in
     // circulation carries — then the variants in the order they were started.
     expect(links).toEqual([`/room/${REVIEW}`, `/room/${REVIEW}?line=line-b`]);
@@ -109,7 +109,7 @@ describe('LineChip — in a variant’s room', () => {
     fireEvent.click(screen.getByTestId('line-chip-button'));
 
     expect(screen.getByTestId('line-chip-lines').textContent).toContain('Main line');
-    expect(screen.getAllByTitle('Go to the main line’s room')[0].getAttribute('href')).toBe(`/room/${REVIEW}`);
+    expect(screen.getAllByTitle('Go to the main line’s room')[0].getAttribute('data-href')).toBe(`/room/${REVIEW}`);
   });
 
   it('carries the two decisions for whoever may change the review’s lines', () => {
@@ -132,7 +132,7 @@ describe('LineChip — on the main line', () => {
     fireEvent.click(screen.getByTestId('lines-menu-button'));
 
     await waitFor(() => expect(screen.getAllByTitle(/Go to .*’s room/).length).toBeGreaterThan(0));
-    const links = screen.getAllByTitle(/Go to .*’s room/).map((link) => link.getAttribute('href'));
+    const links = screen.getAllByTitle(/Go to .*’s room/).map((link) => link.getAttribute('data-href'));
     expect(links).toEqual([`/room/${REVIEW}?line=line-a`, `/room/${REVIEW}?line=line-b`]);
     // And the line this room is on is the main one, named rather than linked.
     expect(screen.getByTestId('line-chip-here').textContent).toContain('Main line');

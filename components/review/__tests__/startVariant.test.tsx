@@ -46,8 +46,19 @@ const StartVariant = (await import('../StartVariant')).default;
 
 const MAIN: ReviewLine = {
   id: 'line-main', reviewId: 'r1', kind: 'main', name: 'Main line', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: 'Coaco',
+  parentSessionId: null,
+  // Batch BX: where a line was started from and where it went are columns of their own,
+  // and a fixture without all three is not a ReviewLine any more. Both null on the main
+  // line, which came from nowhere and went nowhere.
+  parentLineId: null, mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: 'Coaco',
   createdAt: '2026-09-20T09:00:00.000Z', closedAt: null,
+};
+
+/** Variant A: the room this button is pressed in for the case batch BX made possible. */
+const VARIANT_A: ReviewLine = {
+  ...MAIN, id: 'line-a', kind: 'variant', name: 'Steel hinge pin', letter: 'A',
+  parentLineId: 'line-main', createdAt: '2026-09-21T09:00:00.000Z',
 };
 
 /** S3 on the main line: the meeting a variant started in a review that has met leaves from. */
@@ -55,6 +66,12 @@ const SESSION: LineSession = {
   id: 'sess-3', title: 'Cycle test', endedAt: '2026-09-24T16:00:00.000Z', participantCount: 3,
   attendeeNames: ['Coaco', 'Maria'], modelName: 'hinge.glb', lineId: 'line-main',
   seq: 3, revisionIds: ['r-c'], summary: null,
+};
+
+/** A1 on Variant A: a meeting held on a variant, which batch BX is what made reachable. */
+const SESSION_ON_VARIANT: LineSession = {
+  id: 'sess-a1', title: 'Nylon trial', endedAt: '2026-09-23T16:00:00.000Z', participantCount: 2,
+  modelName: 'hinge.glb', lineId: 'line-a', seq: 1, revisionIds: ['r-b2'], summary: null,
 };
 
 /** Stands in for the room the navigation lands in, so the address can be read. */
@@ -97,13 +114,19 @@ async function start(name: string) {
 }
 
 beforeEach(() => {
-  repo.lines.current = [MAIN];
+  repo.lines.current = [MAIN, VARIANT_A];
   repo.origin.current = SESSION;
   repo.resets = 0;
   explore.call.mockReset().mockResolvedValue({
     ok: true,
-    line: { ...MAIN, id: 'line-a', kind: 'variant', name: 'Steel hinge pin', letter: 'A', parentSessionId: 'sess-3' },
+    line: { ...VARIANT_A, id: 'line-new', kind: 'variant', name: 'Glass-filled nylon', letter: 'B', parentSessionId: 'sess-3' },
   });
+  // lib/reviews/openLine refuses to enter a room for a browser with no stored name and
+  // sends it to the lobby to be asked for one instead — right in the app, and a bounce to
+  // nowhere in a test of where starting a variant leaves you.
+  localStorage.clear();
+  sessionStorage.clear();
+  localStorage.setItem('vp_user', JSON.stringify({ name: 'Coaco', color: '#000' }));
 });
 
 afterEach(cleanup);
@@ -148,14 +171,58 @@ describe('starting a variant from a meeting', () => {
     await start('Steel hinge pin');
 
     expect(explore.call).toHaveBeenCalledTimes(1);
-    // (reviewId, parentSessionId, name, context)
+    // (reviewId, from, name, context) — batch BX made the second argument an OBJECT: it
+    // used to be the bare parentSessionId, and the line was implied by it, which is why a
+    // variant could only ever be started from a meeting of the main line.
     expect(explore.call.mock.calls[0][0]).toBe('r1');
-    expect(explore.call.mock.calls[0][1]).toBe('sess-3');
+    expect(explore.call.mock.calls[0][1]).toEqual({ parentSessionId: 'sess-3', parentLineId: 'line-main' });
     expect(explore.call.mock.calls[0][2]).toBe('Steel hinge pin');
     // The cache holds the lines as they were before the write, and the room this
     // navigates to resolves its line out of it.
     expect(repo.resets).toBe(1);
-    expect(screen.getByTestId('path').textContent).toBe('/room/r1?line=line-a');
+    expect(screen.getByTestId('path').textContent).toBe('/room/r1?line=line-new');
+  });
+
+  it('opens through the host when the host has its own way into a room', async () => {
+    // The lobby passes its own enterRoom, which submits the name form first. Navigating
+    // here instead would drop the person into a room the lobby has not told them about.
+    const opened = vi.fn<(lineId: string | null) => void>();
+    renderButton({ onOpenLine: opened });
+    await open();
+    await start('Steel hinge pin');
+
+    expect(opened).toHaveBeenCalledWith('line-new');
+    expect(screen.getByTestId('path').textContent).toBe('/room/r1');
+    expect(repo.resets).toBe(1);
+  });
+
+  it('leaves from the LINE the room is standing on when that is a variant', async () => {
+    // Batch BX, and the half that makes a variant of a variant possible: parentLineId is
+    // what the new room reads its model, its saved positions and its carried-over cards
+    // from. Sent as null inside Variant A, the new variant would open on the main line's
+    // model — the one answer that is wrong exactly here.
+    repo.origin.current = SESSION_ON_VARIANT;
+    renderButton({ lineId: 'line-a' });
+    await open();
+
+    expect(screen.getByTestId('start-variant-origin')).toHaveTextContent('Starts from: A1');
+
+    await start('Glass-filled nylon');
+
+    expect(explore.call.mock.calls[0][1]).toEqual({ parentSessionId: 'sess-a1', parentLineId: 'line-a' });
+    expect(screen.getByTestId('path').textContent).toBe('/room/r1?line=line-new');
+  });
+
+  it('still names the line it is standing on when the review’s lines cannot be read', async () => {
+    // An install whose lines cannot be read has no meeting to name either, but the room
+    // knows which line IT is on, and that is enough for the endpoint to write the parent.
+    repo.lines.current = [];
+    repo.origin.current = null;
+    renderButton({ lineId: 'line-a' });
+    await open();
+    await start('Glass-filled nylon');
+
+    expect(explore.call.mock.calls[0][1]).toEqual({ parentSessionId: null, parentLineId: 'line-a' });
   });
 
   it('passes the meeting-host claim on, for a deployment with no accounts to verify', async () => {
@@ -193,12 +260,13 @@ describe('starting a variant in a review that has never met', () => {
 
     await start('Glass-filled nylon');
 
-    // NULL, not an empty string and not a made-up session: api/reviews/lines.ts accepts
-    // a missing parent only when the line really has no sessions, and writes
-    // parent_session_id NULL so the map draws the variant leaving from the start of the
-    // main line rather than from a stop it was never given.
-    expect(explore.call.mock.calls[0][1]).toBeNull();
-    expect(screen.getByTestId('path').textContent).toBe('/room/r1?line=line-a');
+    // NULL for the meeting, not an empty string and not a made-up session:
+    // api/reviews/lines.ts accepts a missing parent only when the line really has no
+    // sessions, and writes parent_session_id NULL so the map draws the variant leaving from
+    // the start of the line rather than from a stop it was never given. The LINE still goes,
+    // and it is the whole answer for a variant of a variant that has never met anywhere.
+    expect(explore.call.mock.calls[0][1]).toEqual({ parentSessionId: null, parentLineId: 'line-main' });
+    expect(screen.getByTestId('path').textContent).toBe('/room/r1?line=line-new');
   });
 
   it('starts from the review\'s main line when the room is not standing on a line at all', async () => {

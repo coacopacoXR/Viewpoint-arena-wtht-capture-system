@@ -19,6 +19,7 @@ import {
   lineFilterLabel,
   lineLabel,
   lineStatusWord,
+  mergedIntoLabel,
   nextVariantLetter,
   shortLineLabel,
   type ReviewLine,
@@ -34,6 +35,9 @@ function line(overrides: Partial<ReviewLine> = {}): ReviewLine {
     name: 'Steel hinge pin',
     letter: 'A',
     parentSessionId: 'sess-3',
+    parentLineId: 'line-main',
+    mergedIntoLineId: null,
+    dropReason: null,
     status: 'active',
     createdBy: null,
     createdByName: 'Paco',
@@ -171,7 +175,12 @@ describe('closedCardLabel — how the tracker shows a card a drop closed', () =>
 });
 
 describe('the words on screen', () => {
-  it('never say branch, fork, merge or commit', () => {
+  it('never say branch, fork or commit', () => {
+    // "merge" came off this list in batch BX: the user asked for a variant that could be
+    // taken into another variant and described it as "merged", so it is the word on the
+    // button and in the sentence a card carries afterwards. What is still banned is the
+    // rest of the metaphor — and "merge" is pinned separately below, because a word that
+    // is allowed in one sentence is not allowed in all of them.
     const said = [
       lineFilterLabel(ADOPTED),
       lineFilterLabel(DROPPED),
@@ -182,7 +191,27 @@ describe('the words on screen', () => {
     ].filter((word): word is string => typeof word === 'string');
     expect(said.length).toBeGreaterThan(0);
     for (const word of said) {
-      expect(word.toLowerCase()).not.toMatch(/branch|fork|merge|commit/);
+      expect(word.toLowerCase()).not.toMatch(/branch|fork|commit/);
     }
+  });
+
+  it('say "merged into" only about what happened to a line, never as its status word', () => {
+    const merged = line({
+      status: 'adopted',
+      mergedIntoLineId: 'line-c',
+      closedAt: '2026-10-12T15:00:00.000Z',
+    });
+    const lines = [MAIN, line(), merged, line({ id: 'line-c', letter: 'C', name: 'Carbon' })];
+    expect(mergedIntoLabel(lines, merged)).toBe('merged into Variant C 12 Oct');
+    expect(adoptedCardLabel(merged, '2026-10-12T15:00:00.000Z', mergedIntoLabel(lines, merged)))
+      .toBe('Raised in Variant A · merged into Variant C 12 Oct');
+    // The line's own status word stays the database's, because that is what every row
+    // written since batch BL says and renaming it would rewrite them for a word nobody
+    // reads out of a column.
+    expect(lineStatusWord(merged)).toBe('adopted');
+    expect(lineFilterLabel(merged)).toBe('Variant A · Steel hinge pin · adopted');
+    // And a line that was merged before the destination was recorded says the older
+    // sentence rather than naming a line nobody can prove it went to.
+    expect(mergedIntoLabel(lines, ADOPTED)).toBeNull();
   });
 });

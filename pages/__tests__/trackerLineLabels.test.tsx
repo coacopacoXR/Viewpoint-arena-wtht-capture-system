@@ -18,6 +18,14 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import {
+  adoptedCardLabel,
+  lineFilterLabel,
+  lineStatusWord,
+  mergedIntoLabel,
+  toReviewLine,
+  type ReviewLine,
+} from '../../lib/reviews/lines';
 
 const { answers, curationsMock, revisionsMock } = vi.hoisted(() => {
   const tables: Record<string, Array<Record<string, unknown>>> = {};
@@ -90,6 +98,21 @@ const VARIANT_ROW = {
   id: VARIANT_ID, review_id: REVIEW_ID, kind: 'variant', name: 'Weld fix', letter: 'A',
   parent_session_id: 'meet-2', status: 'active', created_by: null, created_by_name: 'Paco',
   created_at: '2026-05-04T09:00:00.000Z', closed_at: null,
+};
+
+/**
+ * A variant that was merged INTO Variant A — batch BX's case, and the one the tracker
+ * has to name. `merged_into_line_id` is the column that says where it went; without it
+ * the card can only say "adopted", which is true and sends the reader to the wrong line.
+ */
+const MERGED_INTO_A_ID = 'line-b';
+/** When the merge happened: the line's own closing moment and the card's stamp agree. */
+const MERGED_AT = '2026-05-08T16:00:00.000Z';
+const MERGED_INTO_A_ROW = {
+  id: MERGED_INTO_A_ID, review_id: REVIEW_ID, kind: 'variant', name: 'Lighter frame', letter: 'B',
+  parent_session_id: 'meet-b1', parent_line_id: VARIANT_ID, status: 'adopted',
+  merged_into_line_id: VARIANT_ID, created_by: null, created_by_name: 'Paco',
+  created_at: '2026-05-06T09:00:00.000Z', closed_at: MERGED_AT,
 };
 
 function meeting(id: string, seq: number, lineId: string, endedAt: string): Record<string, unknown> {
@@ -288,6 +311,92 @@ describe('the tracker — the session map above its cards', () => {
   });
 });
 
+// ─── A card a merge moved ───────────────────────────────────────────────────
+//
+// Batch BX. A merge used to have one destination — the main line — so "adopted" was a
+// complete answer about where a card had got to. It is not any more: two variants that
+// turned out to agree can be brought together, and a card that says only "adopted 8 May"
+// sends its reader to the review's front page to look for a model that is standing on a
+// side line. What is pinned here is the sentence the board actually prints, and that the
+// DATABASE's word for a merged line is still 'adopted' — the column keeps its name, only
+// sentences changed, and a test that let the two drift would let a rename of the status
+// word through to every row already written.
+
+describe('the tracker — a card moved by a merge says where it went', () => {
+  /** Variant B's own meeting, whose cards ended up on Variant A when B was merged. */
+  const MEET_B2 = meeting('meet-b2', 2, MERGED_INTO_A_ID, '2026-05-07T16:00:00.000Z');
+
+  it('reads "Raised in Variant B · merged into Variant A 8 May" on the board', async () => {
+    answers['review_lines'] = [MAIN_ROW, VARIANT_ROW, MERGED_INTO_A_ROW];
+    resetLineCache();
+    answers['tracker_sessions'] = [MEET_3, MEET_2, MEET_A2, MEET_B2];
+    answers['tracker_items'] = [
+      card('item-7', 'Pin binds at full lock', MEET_B2, {
+        line_id: VARIANT_ID,
+        origin_line_id: MERGED_INTO_A_ID,
+        adopted_at: MERGED_AT,
+      }),
+    ];
+
+    await renderTracker();
+
+    expect(screen.getByText('Raised in Variant B · merged into Variant A 8 May')).toBeTruthy();
+    // The old sentence must not survive beside the new one: a card that said both would
+    // be a card that says it was adopted into the review AND into a side line.
+    expect(screen.queryByText(/Raised in Variant B · adopted/)).toBeNull();
+  });
+
+  it('leaves the closed line out of the filter, and its cards on the board', async () => {
+    // The line a merge closed has no room to be opened, so the filter does not offer it
+    // — and it does not need to: its cards are on the line they went to, each saying for
+    // itself where they came from.
+    answers['review_lines'] = [MAIN_ROW, VARIANT_ROW, MERGED_INTO_A_ROW];
+    resetLineCache();
+    answers['tracker_items'] = [
+      card('item-7', 'Pin binds at full lock', MEET_B2, {
+        line_id: VARIANT_ID,
+        origin_line_id: MERGED_INTO_A_ID,
+        adopted_at: MERGED_AT,
+      }),
+    ];
+
+    await renderTracker();
+    selectReview();
+    await waitFor(() => expect(screen.getByLabelText('Filter by line')).toBeTruthy());
+
+    const options = Array.from(
+      (screen.getByLabelText('Filter by line') as HTMLSelectElement).options,
+    ).map((option) => option.text);
+    expect(options).toEqual(['All lines', 'Main line', 'Variant A · Weld fix']);
+    // And the card is still there under 'All lines', which is the whole point of taking
+    // the entry out: hiding the line must not hide what it produced.
+    expect(screen.getByText('Pin binds at full lock')).toBeTruthy();
+  });
+
+  it('keeps the database word for a merged line, and puts "merged" only in a sentence', () => {
+    const merged = toReviewLine(MERGED_INTO_A_ROW);
+    const target = toReviewLine(VARIANT_ROW);
+    const main = toReviewLine(MAIN_ROW);
+    const lines = [main, target, merged].filter((line): line is ReviewLine => line !== null);
+    // The fixture is the thing under test's input; if it cannot be read the assertions
+    // below would pass on nulls and say nothing.
+    expect(lines).toHaveLength(3);
+
+    // 'adopted' is the status column's own word and stays exactly that.
+    expect(lineStatusWord(merged)).toBe('adopted');
+    expect(lineFilterLabel(merged)).toBe('Variant B · Lighter frame · adopted');
+    // "merged" is what a SENTENCE says, and only where the destination is known.
+    expect(mergedIntoLabel(lines, merged)).toBe('merged into Variant A 8 May');
+    expect(adoptedCardLabel(merged, MERGED_AT, mergedIntoLabel(lines, merged)))
+      .toBe('Raised in Variant B · merged into Variant A 8 May');
+    // No destination recorded — a database that predates the column, or a line since
+    // deleted — and the sentence falls back to the one it has always been.
+    expect(adoptedCardLabel(merged, MERGED_AT, null)).toBe('Raised in Variant B · adopted 8 May');
+    // Nothing about a line still being explored: it went nowhere.
+    expect(mergedIntoLabel(lines, target)).toBeNull();
+  });
+});
+
 // ─── What must not have moved ───────────────────────────────────────────────
 
 describe('the tracker — everything it already did', () => {
@@ -312,7 +421,15 @@ describe('the tracker — everything it already did', () => {
     expect(screen.queryByLabelText('Filter by line')).toBeNull();
   });
 
-  it('never says branch, fork, merge or commit', async () => {
+  it('never says branch, fork or commit', async () => {
+    // "merge" came OFF this list in batch BX, and it is pinned by the describe above
+    // rather than left unpinned. It is the user's own word for taking a variant's model
+    // and its cards into another line (2026-09-26), and the tracker now prints it in a
+    // sentence its reader needs — "Raised in Variant B · merged into Variant A 8 May".
+    // Banning it would ban the one fact a card that a merge moved has to state, and the
+    // database's own word for the state stays 'adopted' either way. The three that
+    // remain are the programming words the plan forbids: the drawing may LOOK like a
+    // branch and the icon like a fork, and nothing in this app is a commit.
     await renderTracker();
     selectReview();
     await waitFor(() => expect(screen.getByLabelText('Filter by line')).toBeTruthy());
@@ -320,7 +437,7 @@ describe('the tracker — everything it already did', () => {
     await waitFor(() => expect(screen.getByText('S3')).toBeTruthy());
 
     const shown = (document.body.textContent ?? '').toLowerCase();
-    for (const word of ['branch', 'fork', 'merge', 'commit']) {
+    for (const word of ['branch', 'fork', 'commit']) {
       expect(shown, `the tracker says "${word}"`).not.toContain(word);
     }
   });

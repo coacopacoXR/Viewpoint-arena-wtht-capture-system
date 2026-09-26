@@ -22,8 +22,9 @@ import RemoteAudioSink from '../components/UI/RemoteAudioSink';
 import { useJoinState } from '../lib/usePartyPresence';
 import JoinWaitingRoom from '../components/UI/JoinWaitingRoom';
 import { recordJoin, joinRoleFor, type ReviewRole } from '../lib/reviewParticipantsRepo';
-import { lineIdFromSearch, partyRoomName, type ReviewLine } from '../lib/reviews/lines';
+import { droppedLineReason, lineIdFromSearch, partyRoomName, type ReviewLine } from '../lib/reviews/lines';
 import { resolveLine } from '../lib/reviews/linesRepo';
+import { ENTERED_ROOM_KEY, markRoomEntered, openLine } from '../lib/reviews/openLine';
 
 function getMobileUserName(): string {
   try {
@@ -38,12 +39,6 @@ const RoomPage: React.FC = () => {
   const { roomId } = useParams<{ roomId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const isMeetingEnded = useStore(state => state.isMeetingEnded);
-  const isBoardroomMode = useStore(state => state.isBoardroomMode);
-
-  // Stable mobile detection: keyed off UA + pointer capability rather than viewport
-  // width, so a narrow desktop window never flips into the mobile UI mid-session.
-  const isMobile = useIsMobile();
 
   // The PLM launch this arrival carries, if it carries one (T5.3), and the room it
   // arrived at — a room can be navigated to from another room without this
@@ -68,10 +63,10 @@ const RoomPage: React.FC = () => {
     // reload of the room is let back in too: by then the launch has been handled
     // and its state cleared, so there is nothing left to say where this came from.
     if (arrivalLaunch !== null && roomId) {
-      sessionStorage.setItem('vp_enteredRoom', roomId);
+      markRoomEntered(roomId);
       return;
     }
-    const enteredRoom = sessionStorage.getItem('vp_enteredRoom');
+    const enteredRoom = sessionStorage.getItem(ENTERED_ROOM_KEY);
     const fromLobby = (location.state as { fromLobby?: boolean } | null)?.fromLobby;
     if (!fromLobby && enteredRoom !== roomId) {
       navigate('/', { state: { joinRoomId: roomId }, replace: true });
@@ -98,6 +93,20 @@ const RoomPage: React.FC = () => {
   const [lineState, setLineState] = useState<{ ready: boolean; line: ReviewLine | null }>(
     () => ({ ready: lineParam === null, line: null }),
   );
+  // Reset DURING the render in which the address changed, and not in the effect below.
+  // Batch BX: switching line from inside a room — main → variant, variant → variant,
+  // variant → main — is a navigation to the same route with a different `?line=`, so
+  // this component does not remount and `lineState` would still be holding the line
+  // this room was on a moment ago. One frame of that is one frame in which the socket
+  // opens on the room that was just left, which is exactly the cross-line presence and
+  // audio the sequencing above exists to prevent. Setting state while rendering is
+  // React's own answer to "derived state must not survive a prop change": it discards
+  // this render and starts again with the new value, committing nothing in between.
+  const [resolvedFor, setResolvedFor] = useState<string | null>(lineParam);
+  if (resolvedFor !== lineParam) {
+    setResolvedFor(lineParam);
+    setLineState({ ready: lineParam === null, line: null });
+  }
   useEffect(() => {
     if (!roomId) return;
     // No database to ask, so there is no line to resolve — and an ad-hoc room has
@@ -119,8 +128,57 @@ const RoomPage: React.FC = () => {
     return () => { cancelled = true; };
   }, [roomId, lineParam]);
 
-  const lineReady = lineState.ready;
-  const presence = usePartyPresence(lineReady ? partyRoomName(roomId ?? '', lineState.line) : undefined);
+  // The room's session, REMOUNTED whenever the line it is on changes.
+  //
+  // Not an optimisation and not a convenience: a line is a different PartyKit room, a
+  // different scene, a different set of carried-over cards, a different Edit lock and a
+  // different name on the chip, and every one of those is owned by an effect or a ref
+  // below whose dependency list has no line in it — because until batch BX a room could
+  // not change line without a page load. Keying the session on the address's `?line=`
+  // makes a switch from inside a room behave exactly like the arrival it is: the old
+  // session disconnects and releases its Edit lock, the store's review and line are
+  // cleared by its unmount, and the new one seeds, connects and resolves its own
+  // carried-over cards from scratch. The key is the PARAMETER and not the resolved
+  // line's id, so a room that is still resolving its line does not mount twice.
+  return (
+    <RoomSession
+      key={`${roomId ?? ''}|${lineParam ?? ''}`}
+      roomId={roomId ?? ''}
+      line={lineState.line}
+      lineReady={lineState.ready}
+      arrivalLaunch={arrivalLaunch}
+    />
+  );
+};
+
+/**
+ * One visit to one line of one design review.
+ *
+ * Everything here assumes the line is fixed for the lifetime of the component, which is
+ * what the key in RoomPage above guarantees. `lineReady` false means the line named by
+ * the address has not been read yet, and while it has not the socket is connected to
+ * nothing — see the sequencing comment above.
+ */
+const RoomSession: React.FC<{
+  roomId: string;
+  line: ReviewLine | null;
+  lineReady: boolean;
+  arrivalLaunch: ReturnType<typeof launchFromArrival>;
+}> = ({ roomId, line: resolvedLine, lineReady, arrivalLaunch }) => {
+  const navigate = useNavigate();
+  const isMeetingEnded = useStore(state => state.isMeetingEnded);
+  const isBoardroomMode = useStore(state => state.isBoardroomMode);
+
+  // Stable mobile detection: keyed off UA + pointer capability rather than viewport
+  // width, so a narrow desktop window never flips into the mobile UI mid-session.
+  const isMobile = useIsMobile();
+
+  // The reason this room's line was dropped, or null when it was not. Read off the
+  // line row that was already resolved to name the PartyKit room, so a room opened by
+  // its address says why in its first frame rather than after a second read.
+  const dropped = droppedLineReason(resolvedLine);
+
+  const presence = usePartyPresence(lineReady ? partyRoomName(roomId, resolvedLine) : undefined);
   const joinState = useJoinState();
 
   // Seed the active review for this room:
@@ -375,20 +433,59 @@ const RoomPage: React.FC = () => {
     <RecordingProvider>
       <RemoteAudioSink />
       {joinState !== 'admitted' ? (
-        <JoinWaitingRoom roomId={roomId ?? ''} />
-      ) : isMobile ? (
-        <MobileRoomView
-          roomId={roomId ?? ''}
-          userName={getMobileUserName()}
-        />
+        <JoinWaitingRoom roomId={roomId} />
       ) : (
-        <DesktopRoomLayout isMeetingEnded={isMeetingEnded} />
+        <>
+          {dropped && <DroppedLineBanner reason={dropped} onMainLine={() => openLine(navigate, roomId, null)} />}
+          {isMobile ? (
+            <MobileRoomView
+              roomId={roomId}
+              userName={getMobileUserName()}
+            />
+          ) : (
+            <DesktopRoomLayout isMeetingEnded={isMeetingEnded} />
+          )}
+        </>
       )}
     </RecordingProvider>
     </WebRTCContext.Provider>
     </PresenceContext.Provider>
   );
 };
+
+/**
+ * The banner over a room that is on a line nobody is exploring any more.
+ *
+ * Batch BX. A dropped variant is kept for the record and its address keeps working, so
+ * the room is still reachable — by a bookmark, by a link somebody pasted into a chat
+ * three weeks ago, by a browser history entry. What it is NOT is a meeting: the room
+ * server refuses scene changes and refuses to hand out Edit on a dropped line's room,
+ * because a change made here would be written into a slot of the review's positions
+ * that nothing else reads and into cards that have already moved or already closed.
+ * A room that quietly ignored every drag would be worse than one that said why.
+ *
+ * The reason is the one stored on the line's own row — the same sentence the cards it
+ * closed carry — and the way out is the main line, which is the one line of a review
+ * that is always still being explored.
+ */
+const DroppedLineBanner: React.FC<{ reason: string | null; onMainLine: () => void }> = ({ reason, onMainLine }) => (
+  <div
+    className="fixed top-3 left-1/2 -translate-x-1/2 z-[60] max-w-[min(92vw,640px)] flex items-center gap-3 px-3 py-2 rounded-md border border-gray-300 bg-white shadow-lg pointer-events-auto"
+    role="status"
+    data-testid="dropped-line-banner"
+  >
+    <p className="text-[11px] text-gray-700 leading-snug">
+      <span className="font-semibold">This variant was dropped{reason ? `: ${reason}` : '.'}</span>{' '}
+      It is kept for the record, and its model can no longer be changed.
+    </p>
+    <button
+      onClick={onMainLine}
+      className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded border border-black bg-black text-white text-[10px] font-semibold hover:bg-gray-800"
+    >
+      Go to the main line
+    </button>
+  </div>
+);
 
 // Desktop-only: viewport + Interface overlay, with an optional resizable
 // split-screen Manager workspace on the right (host-only, toggled from the

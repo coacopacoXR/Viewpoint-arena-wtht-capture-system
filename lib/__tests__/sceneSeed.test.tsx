@@ -155,7 +155,8 @@ const TWO_MODELS: ModelRevision[] = [
 
 const VARIANT_LINE: ReviewLine = {
   id: 'line-a', reviewId: ROOM, kind: 'variant', name: 'Steel hinge pin', letter: 'A',
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: 'Paco',
+  parentSessionId: null, parentLineId: 'line-main', mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: 'Paco',
   createdAt: '2026-09-20T09:00:00.000Z', closedAt: null,
 };
 

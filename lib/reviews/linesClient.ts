@@ -116,6 +116,9 @@ export function lineFromApi(value: unknown): ReviewLine | null {
     name: line['name'],
     letter: line['letter'],
     parent_session_id: line['parentSessionId'],
+    parent_line_id: line['parentLineId'],
+    merged_into_line_id: line['mergedIntoLineId'],
+    drop_reason: line['dropReason'],
     status: line['status'],
     created_by: line['createdBy'],
     created_by_name: line['createdByName'],
@@ -160,22 +163,45 @@ async function post(body: Record<string, unknown>): Promise<LineActionResult> {
 }
 
 /**
+ * Where a new variant leaves from.
+ *
+ * Batch BX. Until now the only thing a variant could leave from was a MEETING of the
+ * main line, which is why a variant of a variant was impossible: `parentSessionId` is
+ * a stop on the top row or nothing. The line is the other half of the answer, and from
+ * this batch it is the half that matters — a variant explored from a variant that has
+ * never met has no meeting to name at all.
+ *
+ * `parentLineId` is what the caller knows for certain (it is standing on the line, or
+ * it clicked a row in a list of them), so it is the one that is required; a meeting is
+ * offered as well where there is one, because the map draws the branch leaving from
+ * that stop and a branch leaving from nowhere is a line floating in mid-air.
+ */
+export interface ExploreFrom {
+  /** The LINE the variant is started from. Null means the review's main line. */
+  parentLineId?: string | null;
+  /** The MEETING it leaves from, when there is one to name. */
+  parentSessionId?: string | null;
+}
+
+/**
  * "Explore a variant from here."
  *
- * The variant starts from `parentSessionId`: the endpoint records it as the line's
- * parent_session_id, and lib/reviews/linesRepo then gives the new room that
- * session's model and its line's still-open cards rather than the review's newest
- * of either. The caller navigates to `roomPath(reviewId, result.line.id)`.
+ * The variant starts from the state its parent line is in now: the endpoint records
+ * both halves of where it came from, and lib/reviews/linesRepo then gives the new room
+ * that line's model, that line's saved positions and that line's still-open cards
+ * rather than the review's newest of any of them. The caller navigates with
+ * lib/reviews/openLine.openLine, never with a bare address — the room's entry guard
+ * admits an arrival by its router state and not by its URL.
  *
- * NULL for a review that has never recorded a meeting (batch BQ): there is no
- * session to leave from, and the variant starts from what the main line is showing
- * now. The endpoint accepts that only when the line really has no sessions — a
- * variant that leaves from nowhere in a review that HAS met would be a line the map
- * cannot draw and a room that opens on the wrong model.
+ * BOTH halves may be null, and only for a review that has never recorded a meeting
+ * (batch BQ): there is no session to leave from, and the variant starts from what its
+ * parent line is showing now. The endpoint accepts that only when the line really has
+ * no sessions — a variant that leaves from nowhere in a review that HAS met would be a
+ * line the map cannot draw and a room that opens on the wrong model.
  */
 export async function exploreVariant(
   reviewId: string,
-  parentSessionId: string | null,
+  from: ExploreFrom,
   name: string,
   context: LineActionContext = {},
 ): Promise<LineActionResult> {
@@ -183,30 +209,60 @@ export async function exploreVariant(
     action: 'explore',
     reviewId,
     // Omitted rather than sent as null, so the endpoint's `bodyString` sees the one
-    // thing it has to distinguish: no meeting named.
-    ...(parentSessionId ? { parentSessionId } : {}),
+    // thing it has to distinguish: no meeting named, no line named.
+    ...(from.parentSessionId ? { parentSessionId: from.parentSessionId } : {}),
+    ...(from.parentLineId ? { parentLineId: from.parentLineId } : {}),
     name,
     isMeetingHost: context.isMeetingHost === true,
   });
 }
 
 /**
- * "Adopt into main line."
+ * Which of two models a merge keeps, when both lines moved the same one.
+ *
+ * 'target' is the line being merged INTO and 'variant' the one being merged. Batch BX
+ * renamed the first from 'main', because the target is not always the main line any
+ * more and a `keep: 'main'` arriving for a merge into Variant A would be an answer
+ * about a line that is not in the question. The endpoint still accepts 'main' and reads
+ * it as 'target', so a browser holding the older bundle cannot break a review.
+ */
+export type AdoptKeep = 'target' | 'variant';
+
+export interface AdoptInto {
+  /**
+   * The line to take this variant into. Null or omitted is the review's main line,
+   * which is the whole of what this action could do before batch BX and is still the
+   * answer for every caller that has no chooser to offer.
+   */
+  targetLineId?: string | null;
+  /** The answer to the one plain question, when the endpoint asked it. */
+  keep?: AdoptKeep | null;
+}
+
+/**
+ * "Merge into…" — take a variant's model and its cards into another line.
  *
  * Answers `{ ok: false, question }` when both lines moved the same model and the
  * endpoint needs one answer before it will write anything. Post again with `keep`.
+ *
+ * The name keeps the database's own word on purpose: the endpoint's action is 'adopt',
+ * the status it writes is 'adopted', and lib/reviews/lines.lineStatusWord still reports
+ * 'adopted' — the SCREEN says "Merge into…" and "merged into Variant A", which is what
+ * the user asked for, and renaming the stored status would rewrite every row written
+ * since batch BL for a word nobody reads out of a column.
  */
 export async function adoptVariant(
   reviewId: string,
   lineId: string,
-  keep: 'main' | 'variant' | null = null,
+  into: AdoptInto = {},
   context: LineActionContext = {},
 ): Promise<LineActionResult> {
   return post({
     action: 'adopt',
     reviewId,
     lineId,
-    ...(keep ? { keep } : {}),
+    ...(into.targetLineId ? { targetLineId: into.targetLineId } : {}),
+    ...(into.keep ? { keep: into.keep } : {}),
     isMeetingHost: context.isMeetingHost === true,
   });
 }

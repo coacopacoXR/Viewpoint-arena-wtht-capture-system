@@ -259,3 +259,63 @@ export async function probeAuthService(
   }
   return { ok: true, detail: HEALTH_DETAILS.reachable };
 }
+
+// ─── Backups ─────────────────────────────────────────────────────────────────
+
+/** What probeBackups needs from the file system, injectable for tests. */
+export interface BackupFs {
+  readdir(dir: string): Promise<string[]>;
+  mtimeMs(path: string): Promise<number>;
+}
+
+const nodeBackupFs: BackupFs = {
+  async readdir(dir) {
+    const fs = await import('node:fs/promises');
+    return fs.readdir(dir);
+  },
+  async mtimeMs(path) {
+    const fs = await import('node:fs/promises');
+    return (await fs.stat(path)).mtimeMs;
+  },
+};
+
+/** The file names deploy/backup/backup.sh writes, and only those. */
+export const BACKUP_FILE_PATTERN = /^db-\d{8}-\d{6}\.sql\.gz$/;
+
+/**
+ * Whether the install is backing itself up (batch BY).
+ *
+ * Reads the backup folder the `db-backup` service writes (mounted read-only on the
+ * api) and looks at the newest `db-*.sql.gz`: ok when it is younger than
+ * `maxAgeHours` (twice the interval, so one late run is not an alarm), degraded
+ * when it is older or when there is none. Never reports a path or a file name —
+ * the details are the fixed sentences in HEALTH_DETAILS.
+ */
+export async function probeBackups(
+  dir: string,
+  maxAgeHours: number,
+  options: { fs?: BackupFs; now?: () => number } = {},
+): Promise<HealthCheckResult> {
+  const fs = options.fs ?? nodeBackupFs;
+  const now = (options.now ?? Date.now)();
+  let names: string[];
+  try {
+    names = (await fs.readdir(dir)).filter((name) => BACKUP_FILE_PATTERN.test(name));
+  } catch {
+    return { ok: false, detail: HEALTH_DETAILS.backupMissing };
+  }
+  if (names.length === 0) return { ok: false, detail: HEALTH_DETAILS.backupMissing };
+  let newest = 0;
+  for (const name of names) {
+    try {
+      newest = Math.max(newest, await fs.mtimeMs(`${dir.replace(/\/+$/, '')}/${name}`));
+    } catch {
+      // A file removed between the listing and the stat is simply not the newest.
+    }
+  }
+  if (newest === 0) return { ok: false, detail: HEALTH_DETAILS.backupMissing };
+  const ageHours = (now - newest) / 3_600_000;
+  return ageHours <= maxAgeHours
+    ? { ok: true, detail: HEALTH_DETAILS.backupRecent }
+    : { ok: false, detail: HEALTH_DETAILS.backupStale };
+}

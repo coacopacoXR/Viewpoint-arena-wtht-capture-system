@@ -30,6 +30,7 @@ import {
   lineById,
   mainLineOf,
   orderedLines,
+  placementSlotOrder,
   sessionLabel,
   toReviewLine,
   type ReviewLine,
@@ -39,7 +40,20 @@ interface LineRow extends Record<string, unknown> {
   id: string;
 }
 
+/**
+ * The columns a line read asks for, and the same list without the two batch BX added.
+ *
+ * `parent_line_id` and `merged_into_line_id` are named in the select rather than read
+ * off a `'*'`, because a select that names its columns is the one that can be answered
+ * from an index — and because the fallback below has to know exactly which two to drop.
+ * An install that has not had docs/supabase-schema.sql re-applied since batch BX
+ * answers Postgres' 42703 for the wider list, and the narrower one is then the truth
+ * about it: every variant there was started from the main line and merged into the main
+ * line, because those were the only two things a variant could do.
+ */
 const LINE_COLUMNS =
+  'id,review_id,kind,name,letter,parent_session_id,parent_line_id,merged_into_line_id,drop_reason,status,created_by,created_by_name,created_at,closed_at';
+const LINE_COLUMNS_WITHOUT_BX =
   'id,review_id,kind,name,letter,parent_session_id,status,created_by,created_by_name,created_at,closed_at';
 
 /**
@@ -91,6 +105,34 @@ async function readSessionRows(
 }
 
 /**
+ * Read lines, and survive a database that does not have batch BX's two columns.
+ *
+ * The same shape as `readSessionRows` below it and for the same reason: a read that
+ * fails on a column is a read that loses every row, and a review that cannot list its
+ * lines is a review whose map, chip, Lines list and tracker filter are all empty — which
+ * reads as a lost history rather than as an install that has not been upgraded.
+ */
+async function readLineRows(
+  build: (columns: string) => PromiseLike<SessionRowsAnswer>,
+): Promise<Array<Record<string, unknown>>> {
+  const first = await build(LINE_COLUMNS);
+  if (!first.error) return sessionRows(first.data);
+  if (first.error.code !== UNDEFINED_COLUMN) return [];
+  const again = await build(LINE_COLUMNS_WITHOUT_BX);
+  if (again.error) return [];
+  return sessionRows(again.data);
+}
+
+function parsedLines(rows: readonly Record<string, unknown>[]): ReviewLine[] {
+  const lines: ReviewLine[] = [];
+  for (const row of rows) {
+    const line = toReviewLine(row);
+    if (line) lines.push(line);
+  }
+  return orderedLines(lines);
+}
+
+/**
  * The lines this browser has already read for a review.
  *
  * Module-level for the reason lib/reviews/membersRepo.ts caches its claims: a room
@@ -107,6 +149,39 @@ export function resetLineCache(): void {
 }
 
 /**
+ * The lines of a review this browser has ALREADY read, without asking again.
+ *
+ * Batch BX. lib/scene/showCurationModel has to know which saved-position slots to look
+ * in, and which those are depends on the line's parent chain — a variant of a variant
+ * opens on its parent's positions until it moves something. That decision is made
+ * synchronously, in the middle of putting a scene up, so it cannot await a read; it
+ * reads this instead, and the read is already in the cache because pages/RoomPage
+ * resolves the line through `resolveLine` before the socket opens and therefore before
+ * any seed runs.
+ *
+ * [] when the review's lines were never read — a page that is not a room, an install
+ * with no database — and every caller answers [] as "no chain to walk", which is the
+ * pre-BX answer and the right one for a review with no lines.
+ */
+export function cachedLines(reviewId: string | null | undefined): ReviewLine[] {
+  if (!reviewId) return [];
+  return lineCache.get(reviewId) ?? [];
+}
+
+/**
+ * The saved-position slots ONE LINE opens on, in the order to look in them.
+ *
+ * The reading half of "a variant starts from its parent line's current state". Empty
+ * for the main line, whose positions are `asset.placements` and not a slot; the ids of
+ * the line and then its ancestors for a variant, so that
+ * lib/scene/placement.placementsForLine takes the first of them that has any.
+ */
+export function placementSlotsFor(reviewId: string | null | undefined, line: ReviewLine | null | undefined): string[] {
+  if (!line || line.kind !== 'variant') return [];
+  return placementSlotOrder(cachedLines(reviewId ?? line.reviewId), line.id);
+}
+
+/**
  * Every line of one design review, main line first then variants in the order they
  * were started.
  *
@@ -119,17 +194,11 @@ export async function listLines(reviewId: string | null | undefined): Promise<Re
   const cached = lineCache.get(reviewId);
   if (cached) return cached;
   try {
-    const { data, error } = await supabase
-      .from('review_lines')
-      .select(LINE_COLUMNS)
-      .eq('review_id', reviewId);
-    if (error || !data) return [];
-    const lines: ReviewLine[] = [];
-    for (const row of data as LineRow[]) {
-      const line = toReviewLine(row);
-      if (line) lines.push(line);
-    }
-    const ordered = orderedLines(lines);
+    const rows = await readLineRows((columns) =>
+      supabase.from('review_lines').select(columns).eq('review_id', reviewId),
+    );
+    if (rows.length === 0) return [];
+    const ordered = parsedLines(rows);
     lineCache.set(reviewId, ordered);
     return ordered;
   } catch (err) {
@@ -174,7 +243,7 @@ export async function ensureMainLine(reviewId: string | null | undefined): Promi
 
   const who = attribution();
   try {
-    const { data, error } = await supabase
+    const inserted = await supabase
       .from('review_lines')
       .insert({
         review_id: reviewId,
@@ -186,10 +255,14 @@ export async function ensureMainLine(reviewId: string | null | undefined): Promi
         created_by: who.createdBy,
         created_by_name: who.createdByName,
       })
-      .select(LINE_COLUMNS)
+      // `'*'` and not LINE_COLUMNS: the row was just written and this read is only
+      // here to hand it back, and naming batch BX's columns would fail on an install
+      // that has not been upgraded — where the insert above has already failed too,
+      // on the very same missing column, and the reread below is the answer.
+      .select('*')
       .single();
-    if (!error && data) {
-      const line = toReviewLine(data as LineRow);
+    if (!inserted.error && inserted.data) {
+      const line = toReviewLine(inserted.data as LineRow);
       if (line) {
         lineCache.set(reviewId, orderedLines([...existing, line]));
         return line;
@@ -202,7 +275,11 @@ export async function ensureMainLine(reviewId: string | null | undefined): Promi
     const reread = await listLines(reviewId);
     const raced = reread.find((line) => line.kind === 'main') ?? null;
     if (!raced) {
-      console.error('[linesRepo] could not create the main line:', error?.code ?? '', error?.message ?? '');
+      console.error(
+        '[linesRepo] could not create the main line:',
+        inserted.error?.code ?? '',
+        inserted.error?.message ?? '',
+      );
     }
     return raced;
   } catch (err) {
@@ -457,46 +534,63 @@ export async function lineOriginSession(line: ReviewLine | null | undefined): Pr
   return null;
 }
 
-/** One row of review_lines this read needs the adopted scene from. */
-interface AdoptedSceneRow {
-  closed_at: string | null;
-  adopted_revision_ids: string[] | null;
-}
+/** The columns the merge read asks for, and the same list without the batch BX one. */
+const MERGE_COLUMNS = 'closed_at,adopted_revision_ids,merged_into_line_id';
+const MERGE_COLUMNS_WITHOUT_BX = 'closed_at,adopted_revision_ids';
 
 /**
- * What the main line's scene became at the newest adoption, or null.
+ * What ONE LINE's scene became at the newest merge into it, or null.
  *
  * Read as its own query rather than as a column on ReviewLine on purpose: an
  * install that applied docs/supabase-schema.sql at batch BK has review_lines and
  * no `adopted_revision_ids`, and naming the column in the shared select would fail
  * the whole read and take the map with it. Here a 42703 answers null, which is
- * "no adoption to honour", and everything else carries on.
+ * "no merge to honour", and everything else carries on. The same is true of
+ * `merged_into_line_id`, added in batch BX, and it is retried without for the same
+ * reason — where it is missing, every merge that ever happened went into the main
+ * line, because that was the only line a variant could be taken into.
  *
- * Only honoured while it is NEWER than the main line's last meeting. A meeting held
- * after the adoption wrote its own revision_ids and is the newer fact about what
- * the main line is looking at, so nothing has to clear the column afterwards.
+ * Only honoured while it is NEWER than that line's last meeting. A meeting held
+ * after the merge wrote its own revision_ids and is the newer fact about what the
+ * line is looking at, so nothing has to clear the column afterwards.
+ *
+ * AND ONLY FOR THE LINE IT WENT INTO — batch BX, and the bug the column exists to
+ * prevent. A merge is now a choice of destination, so counting every merged variant of
+ * a review against its main line would make merging Variant B into Variant A silently
+ * change what the MAIN line shows: the main line would open on a model nobody took a
+ * decision about, and the map would still say the merge went into A.
  */
-async function adoptedSceneFor(reviewId: string, mainLineId: string): Promise<string[] | null> {
+async function adoptedSceneFor(
+  reviewId: string,
+  targetLineId: string,
+  targetIsMain: boolean,
+): Promise<string[] | null> {
   try {
-    const { data, error } = await supabase
-      .from('review_lines')
-      .select('closed_at,adopted_revision_ids')
-      .eq('review_id', reviewId)
-      .eq('status', 'adopted');
-    if (error || !data) return null;
-    let newest: AdoptedSceneRow | null = null;
-    for (const row of data as AdoptedSceneRow[]) {
-      const ids = Array.isArray(row.adopted_revision_ids)
-        ? row.adopted_revision_ids.filter((id): id is string => typeof id === 'string')
+    const query = (columns: string) =>
+      supabase.from('review_lines').select(columns).eq('review_id', reviewId).eq('status', 'adopted');
+    const first = await query(MERGE_COLUMNS);
+    // A row with no recorded destination is one written before batch BX, and every merge
+    // before this batch went into the main line — so a null counts for the main line only.
+    const withTarget = !(first.error?.code === UNDEFINED_COLUMN);
+    const answer = withTarget ? first : await query(MERGE_COLUMNS_WITHOUT_BX);
+    if (answer.error || !answer.data) return null;
+
+    let newest: { closedAt: string; ids: string[] } | null = null;
+    for (const raw of sessionRows(answer.data)) {
+      const ids = Array.isArray(raw['adopted_revision_ids'])
+        ? (raw['adopted_revision_ids'] as unknown[]).filter((id): id is string => typeof id === 'string')
         : [];
       if (ids.length === 0) continue;
-      if (!newest || (row.closed_at ?? '') > (newest.closed_at ?? '')) newest = { ...row, adopted_revision_ids: ids };
+      const closedAt = typeof raw['closed_at'] === 'string' ? raw['closed_at'] : '';
+      const into = raw['merged_into_line_id'];
+      const target = withTarget && typeof into === 'string' && into !== '' ? into : null;
+      if (target !== targetLineId && !(target === null && targetIsMain)) continue;
+      if (!newest || closedAt > newest.closedAt) newest = { closedAt, ids };
     }
     if (!newest) return null;
-    const ids = (newest.adopted_revision_ids ?? []).filter((id): id is string => typeof id === 'string');
-    const last = await lastSessionOnLine(mainLineId);
-    if (last?.endedAt && (newest.closed_at ?? '') <= last.endedAt) return null;
-    return ids.length > 0 ? ids : null;
+    const last = await lastSessionOnLine(targetLineId);
+    if (last?.endedAt && newest.closedAt <= last.endedAt) return null;
+    return newest.ids;
   } catch (err) {
     console.error('[linesRepo] adoptedSceneFor threw:', err);
     return null;
@@ -531,6 +625,13 @@ async function adoptedSceneFor(reviewId: string, mainLineId: string): Promise<st
  * what its last meeting was looking at, or — for a review that still has not met —
  * null, and the caller rebuilds from the review's stored revisions, which is exactly
  * the scene the main line's room would show.
+ *
+ * BATCH BX made that fallback a WALK. A variant is no longer always started from the
+ * main line, so "what would its parent show" is the question and not "what would the
+ * main line show": a variant of Variant A opens on Variant A's model, and a variant of
+ * a variant of Variant A opens on the same one until one of them has met. The walk is
+ * bounded by the number of lines and stops at the first answer, so a chain with a loop
+ * in it — a row nobody should have written — answers null rather than hanging a room.
  */
 export async function originRevisionIds(
   reviewId: string | null | undefined,
@@ -539,22 +640,58 @@ export async function originRevisionIds(
   if (!reviewId) return null;
   const line = await resolveLine(reviewId, lineId);
   if (!line) return null;
+  const lines = await listLines(reviewId);
+  return lineScene(reviewId, lines, line, lines.length + 1);
+}
+
+/**
+ * One line's own answer to "what is it looking at", and its parent's when it has none.
+ *
+ * Split out of `originRevisionIds` so the walk has one body and one bound. `budget` is
+ * the number of lines plus one, which is more steps than any chain of distinct lines
+ * can take and fewer than an infinite one.
+ */
+async function lineScene(
+  reviewId: string,
+  lines: readonly ReviewLine[],
+  line: ReviewLine,
+  budget: number,
+): Promise<string[] | null> {
+  if (budget <= 0) return null;
+
   if (isMainLine(line)) {
-    const adopted = await adoptedSceneFor(reviewId, line.id);
+    const adopted = await adoptedSceneFor(reviewId, line.id, true);
     if (adopted) return adopted;
+    const last = await lastSessionOnLine(line.id);
+    return last && last.revisionIds.length > 0 ? last.revisionIds : null;
   }
-  const origin = await lineOriginSession(line);
-  if (origin && origin.revisionIds.length > 0) return origin.revisionIds;
-  if (line.kind === 'variant' && line.parentSessionId === null) {
-    const main = mainLineOf(await listLines(reviewId));
-    if (main && main.id !== line.id) {
-      const adopted = await adoptedSceneFor(reviewId, main.id);
-      if (adopted) return adopted;
-      const last = await lastSessionOnLine(main.id);
-      if (last && last.revisionIds.length > 0) return last.revisionIds;
-    }
+
+  // Its own newest meeting first: a variant that HAS met starts from itself and never
+  // from the line it left, or meeting A2 would open on the main line's S3 again.
+  const own = await lastSessionOnLine(line.id);
+  if (own && own.revisionIds.length > 0) return own.revisionIds;
+
+  // Then what a merge put on it. Batch BX: a variant can now be a destination, so
+  // merging Variant B into Variant A changes what A shows until A meets again — exactly
+  // what a merge into the main line has always done to the main line. `adoptedSceneFor`
+  // already compares the merge's moment against the meeting above, so an A that has met
+  // since is not overwritten by it.
+  const merged = await adoptedSceneFor(reviewId, line.id, false);
+  if (merged) return merged;
+
+  // Then the meeting it left, when it left from one that named revisions.
+  if (line.parentSessionId) {
+    const left = await sessionById(line.parentSessionId);
+    if (left && left.revisionIds.length > 0) return left.revisionIds;
   }
-  return null;
+
+  // Then the line it was started from — batch BX, and the reason a variant of a
+  // variant shows what its parent shows. `parentLineId` null is a variant written
+  // before this column existed, and every one of those was started from the main
+  // line, so the main line is the honest fallback rather than a guess.
+  const parent = (line.parentLineId ? lineById(lines, line.parentLineId) : null) ?? mainLineOf(lines);
+  if (!parent || parent.id === line.id) return null;
+  return lineScene(reviewId, lines, parent, budget - 1);
 }
 
 /**
@@ -694,46 +831,88 @@ function raisedAtOrBefore(row: Record<string, unknown>, upto: LineSession): bool
  * "Carried over" group shows.
  *
  * For a line that has met, exactly `listOpenLineItems`: its own still-open cards,
- * each labelled by its own number. For a VARIANT THAT HAS NEVER MET, the cards its
- * parent line was still carrying at the session it left from (batch BL), because
- * the plan's rule is that a variant "begins with that session's model and open
- * cards" — and those cards are on the parent line, not on it.
+ * each labelled by its own number. For a VARIANT THAT HAS NEVER MET, the cards the
+ * line it was started from was still carrying, because the plan's rule is that a
+ * variant "begins with that session's model and open cards" — and those cards are on
+ * the parent line, not on it.
  *
  * They are the SAME tracker items, not copies: nothing here writes a row, and a
- * card closed in the variant's room is closed in the tracker and on the main line
- * too. Adopting the variant therefore does not move them either — they were never
- * on it. Only the cards the variant's own meetings raised move.
+ * card closed in the variant's room is closed in the tracker and on the parent line
+ * too. Merging the variant therefore does not move them either — they were never on
+ * it. Only the cards the variant's own meetings raised move.
  *
  * Once the variant has met, its own cards are what it carries and this answers them;
  * a variant that has met and closed everything is a variant with nothing to carry,
  * and reaching back to the parent would resurrect cards the people exploring it
  * dealt with on purpose.
+ *
+ * BATCH BX: "the line it was started from" is now `parent_line_id` and not only
+ * `parent_session_id`, and the walk continues. A variant of a variant that has never
+ * met carries what ITS parent carries, because a variant started from Variant A while
+ * Variant A itself had never met has no cards of its own to hand on — and stopping
+ * there would open the third line on an empty Capture panel in a review with four open
+ * risks on it. Where a meeting IS named, the cards are still narrowed to the ones
+ * raised at or before it, which is the only difference between "what that meeting was
+ * carrying" and "everything that line has ever left open".
  */
 export async function listCarriedOver(line: ReviewLine | null | undefined): Promise<CarriedOverItem[]> {
   if (!line) return [];
   const own = await listOpenLineItems(line);
-  const label = (items: CarriedOverItem[], from: ReviewLine | null): CarriedOverItem[] =>
-    items.map((item) => ({ ...item, fromLabel: sessionLabel(from, item.fromSeq) }));
-  if (own.length > 0) return label(own, line);
-  if (line.kind !== 'variant' || !line.parentSessionId) return own;
+  if (own.length > 0) return labelFrom(own, line);
+  if (line.kind !== 'variant') return own;
 
   const met = await lastSessionOnLine(line.id);
   if (met) return own;
-  const parent = await sessionById(line.parentSessionId);
-  if (!parent?.lineId) return own;
 
-  const rows = await readOpenRows(parent.lineId);
+  const lines = await listLines(line.reviewId);
+  return inheritedCards(line, lines, lines.length + 1);
+}
+
+/** The same cards, labelled by the line they were actually raised on. */
+function labelFrom(items: CarriedOverItem[], from: ReviewLine | null): CarriedOverItem[] {
+  return items.map((item) => ({ ...item, fromLabel: sessionLabel(from, item.fromSeq) }));
+}
+
+/**
+ * The open cards a variant that has never met inherits, walking up until a line has
+ * some. `budget` bounds the walk the same way `lineScene` does.
+ */
+async function inheritedCards(
+  line: ReviewLine,
+  lines: readonly ReviewLine[],
+  budget: number,
+): Promise<CarriedOverItem[]> {
+  if (budget <= 0) return [];
+
+  // The meeting it left, when it left from one: it narrows the cards to what that
+  // meeting was carrying and it names the line to read them from.
+  const left = line.parentSessionId ? await sessionById(line.parentSessionId) : null;
+  const parentId = left?.lineId ?? line.parentLineId ?? mainLineOf(lines)?.id ?? null;
+  if (!parentId || parentId === line.id) return [];
+  const parent = lineById(lines, parentId);
+
+  const rows = await readOpenRows(parentId);
   const carried: CarriedOverItem[] = [];
   for (const row of rows) {
-    if (!raisedAtOrBefore(row, parent)) continue;
+    // No meeting named means no moment to narrow to, and "the line's open cards" is
+    // then the whole of the answer — which is what a variant started from a line that
+    // has never met is a continuation of.
+    if (left && !raisedAtOrBefore(row, left)) continue;
     const item = toCarriedOver(row);
     if (item) carried.push(item);
   }
-  if (carried.length === 0) return own;
-  // The label is the PARENT line's, so a card raised in S3 reads "from S3" in a
-  // room that is on Variant A rather than "from A3".
-  const lines = await listLines(line.reviewId);
-  return label(carried, lineById(lines, parent.lineId));
+  if (carried.length > 0) {
+    // The label is the PARENT line's, so a card raised in S3 reads "from S3" in a
+    // room that is on Variant A rather than "from A3".
+    return labelFrom(carried, parent);
+  }
+  // Nothing open on the line it came from either. Keep walking while that line is a
+  // variant which has never met: a variant with a meeting of its own has had the
+  // chance to close what it was carrying, and resurrecting those cards here would
+  // undo a decision the people on it made.
+  if (!parent || parent.kind !== 'variant') return [];
+  if (await lastSessionOnLine(parent.id)) return [];
+  return inheritedCards(parent, lines, budget - 1);
 }
 
 
@@ -919,13 +1098,10 @@ export async function listLinesForReviews(
 ): Promise<Record<string, ReviewLine[]>> {
   if (reviewIds.length === 0) return {};
   try {
-    const { data, error } = await supabase
-      .from('review_lines')
-      .select(LINE_COLUMNS)
-      .in('review_id', [...reviewIds])
-      .limit(BATCH_LINE_LIMIT);
-    if (error || !data) return {};
-    const grouped = groupByReview(data as Array<Record<string, unknown>>, (row) => toReviewLine(row));
+    const rows = await readLineRows((columns) =>
+      supabase.from('review_lines').select(columns).in('review_id', [...reviewIds]).limit(BATCH_LINE_LIMIT),
+    );
+    const grouped = groupByReview(rows, (row) => toReviewLine(row));
     for (const [reviewId, list] of Object.entries(grouped)) {
       grouped[reviewId] = orderedLines(list);
     }

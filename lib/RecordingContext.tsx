@@ -168,7 +168,16 @@ export const RecordingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   // and a browser that still gated the UI on one config value would hide a
   // working feature from every one of them. Which AI answers is not this
   // component's business, and it no longer asks.
-  const canRecord = isHost && captureProvider !== 'mock';
+  // AND NOT ON A LINE NOBODY IS EXPLORING ANY MORE (docs/plan/15 batch BX). A dropped
+  // variant's address keeps working, because a dropped variant is kept for the record
+  // and the person who follows a three-week-old link should see it rather than be
+  // bounced — but it is a record and not a meeting. A recording made in it would write
+  // a tracker_sessions row onto a line the map draws greyed, number a session on a line
+  // whose cards have already been closed with a reason, and put the resulting cards on
+  // a line nobody will ever meet on again. The room server refuses its scene changes and
+  // refuses to hand out its Edit lock for the same reason; this is the third door.
+  const lineDropped = useStore((s) => s.activeLine?.status === 'dropped');
+  const canRecord = isHost && captureProvider !== 'mock' && !lineDropped;
 
   const provider = useMemo(() => new LocalCaptureProvider(), []);
 

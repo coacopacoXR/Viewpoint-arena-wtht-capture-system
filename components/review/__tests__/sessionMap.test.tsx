@@ -3,12 +3,14 @@
 //
 // Everything is fixture data: the map reads no database, so what is pinned here is
 // the drawing. A main line of numbered stops, a variant leaving from the session it
-// was started at, an adopted variant rejoining with a green stop, a dropped one
-// greyed and dashed and still on the map — and the panel one of them opens.
+// was started at, a merged variant coming back to a green stop on the line that took
+// it in, a dropped one off the map until it is asked for and then greyed and dashed —
+// and the panel one of them opens.
 //
 // The words are pinned too. This is the screen a hardware engineer reads the whole
-// history of a review on, and the plan is explicit that branch, fork, merge and
-// commit must not appear on it.
+// history of a review on, and the plan is explicit that branch, fork and commit must
+// not appear on it. "Merge" may: it is the user's own word for taking one line into
+// another, and from batch BX the map has to say WHICH line that was.
 
 import React from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
@@ -25,13 +27,15 @@ const REVIEW = 'review-1';
 
 const MAIN: ReviewLine = {
   id: 'line-main', reviewId: REVIEW, kind: 'main', name: 'Main line', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: '',
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: '',
   createdAt: '2026-03-01T09:00:00.000Z', closedAt: null,
 };
 
 const VARIANT_A: ReviewLine = {
   id: 'line-a', reviewId: REVIEW, kind: 'variant', name: 'Weld fix', letter: 'A',
-  parentSessionId: 'sess-2', status: 'active', createdBy: null, createdByName: 'Paco',
+  parentSessionId: 'sess-2', parentLineId: 'line-main', mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: 'Paco',
   createdAt: '2026-05-04T09:00:00.000Z', closedAt: null,
 };
 
@@ -102,10 +106,11 @@ describe('layoutSessionMap', () => {
 
   it('names the rows down the left edge, main line first, in the short form', () => {
     // The left edge has room for a chip and not for a sentence; the variant's own
-    // name goes in its tooltip and in the panel one of its stops opens.
+    // name, and the line it was started from, go in its tooltip and in the panel one of
+    // its stops opens.
     const layout = layoutSessionMap([VARIANT_A, MAIN], MAIN_SESSIONS, REVISIONS, []);
     expect(rowLabels(layout)).toEqual(['Main line', 'Variant A']);
-    expect(layout.rows[1].title).toBe('Variant A · Weld fix');
+    expect(layout.rows[1].title).toBe('Variant A · Weld fix · from Main line');
   });
 
   it('starts a variant to the right of the session it left from, on its own row', () => {
@@ -239,6 +244,77 @@ describe('layoutSessionMap — a variant that is finished with', () => {
     expect(layout.edges.some((edge) => edge.kind === 'rejoin' && !edge.dashed)).toBe(true);
   });
 
+  it('sends a variant merged into ANOTHER variant back to that variant\'s row', () => {
+    // Batch BX, and the report it came from: a merge could only ever go to the main
+    // line, so a variant taken into another variant drew its green return onto the top
+    // row — a picture of a decision the review did not make, on a row that never held
+    // the model.
+    const target: ReviewLine = {
+      ...VARIANT_A, id: 'line-b', letter: 'B', name: 'Lighter bracket',
+      parentSessionId: 'sess-1', createdAt: '2026-05-02T09:00:00.000Z',
+    };
+    const merged: ReviewLine = {
+      ...VARIANT_A, status: 'adopted', mergedIntoLineId: target.id,
+      closedAt: '2026-06-01T09:00:00.000Z',
+    };
+    const layout = layoutSessionMap(
+      [MAIN, merged, target],
+      [...MAIN_SESSIONS, session('v-1', 1, 'line-a'), session('w-1', 1, 'line-b'), session('w-2', 2, 'line-b')],
+      REVISIONS,
+      [],
+    );
+
+    const rejoin = layout.stops.find((stop) => stop.rejoin);
+    const targetRow = layout.rows.find((row) => row.id === 'line-b');
+    const onTargetRow = layout.stops.filter((stop) => !stop.rejoin && stop.y === targetRow?.y);
+    expect(rejoin?.y).toBe(targetRow?.y);
+    expect(rejoin?.line?.id).toBe('line-b');
+    // Past the row's last meeting rather than on top of it.
+    expect(rejoin?.x).toBeGreaterThan(Math.max(...onTargetRow.map((stop) => stop.x)));
+    // And nothing green landed on the main row, which took nothing in.
+    const mainRowY = layout.rows[0].y;
+    expect(layout.stops.filter((stop) => stop.rejoin && stop.y === mainRowY)).toHaveLength(0);
+    const back = layout.edges.find((edge) => edge.kind === 'rejoin');
+    expect(back?.to.y).toBe(targetRow?.y);
+  });
+
+  it('still brings a merge back to the main row when no target was recorded', () => {
+    // An install whose schema has not been upgraded: every merge it holds went to the
+    // main line, because that was the only line a merge could go to.
+    const merged: ReviewLine = {
+      ...VARIANT_A, status: 'adopted', mergedIntoLineId: null, closedAt: '2026-06-01T09:00:00.000Z',
+    };
+    const layout = layoutSessionMap([MAIN, merged], [...MAIN_SESSIONS, ...variantSessions], REVISIONS, []);
+    expect(layout.stops.find((stop) => stop.rejoin)?.y).toBe(layout.rows[0].y);
+  });
+
+  it('draws a variant started from another variant on the row below it', () => {
+    const parent: ReviewLine = { ...VARIANT_A, id: 'line-a', letter: 'A', name: 'Weld fix' };
+    const child: ReviewLine = {
+      ...VARIANT_A, id: 'line-b', letter: 'B', name: 'Weld fix, thinner',
+      parentLineId: parent.id, parentSessionId: 'v-1', createdAt: '2026-06-01T09:00:00.000Z',
+    };
+    const layout = layoutSessionMap(
+      [MAIN, parent, child],
+      [...MAIN_SESSIONS, session('v-1', 1, 'line-a'), session('w-1', 1, 'line-b')],
+      REVISIONS,
+      [],
+    );
+
+    // Rows run parent first, so a variant sits under the line it was started from
+    // rather than in whatever order the database answered in.
+    expect(rowLabels(layout)).toEqual(['Main line', 'Variant A', 'Variant B']);
+    const leave = layout.edges.find((edge) => edge.id === 'leave-line-b');
+    const parentStop = layout.stops.find((stop) => stop.session.id === 'v-1');
+    expect(leave?.from.x).toBe(parentStop?.x);
+    expect(leave?.from.y).toBe(parentStop?.y);
+    const childStop = layout.stops.find((stop) => stop.session.id === 'w-1');
+    expect(childStop?.y).toBeGreaterThan(parentStop?.y ?? 0);
+    // And the row's own tooltip says where it came from, which is the only place on the
+    // drawing that can: the left edge has room for a chip and not for a sentence.
+    expect(layout.rows[2].title).toBe('Variant B · Weld fix, thinner · from Variant A');
+  });
+
   it('does not rejoin a variant that is still being explored', () => {
     const layout = layoutSessionMap([MAIN, VARIANT_A], [...MAIN_SESSIONS, ...variantSessions], REVISIONS, []);
     expect(layout.stops.some((stop) => stop.rejoin)).toBe(false);
@@ -363,12 +439,63 @@ describe('SessionMap', () => {
     expect(screen.queryByLabelText('Close the session map')).toBeNull();
   });
 
+  it('leaves a dropped variant off the map until it is asked for', () => {
+    // Batch BX, and the second half of the report that started it: "when they are
+    // dropped they still show up". A review that has tried six answers and kept one
+    // drew six grey rows and one live line, and the live one was the hard thing to
+    // find. The row is not deleted — it is kept for the record, one press away.
+    const dropped: ReviewLine = { ...VARIANT_A, status: 'dropped', dropReason: 'Too expensive to tool' };
+    renderMap({
+      lines: [MAIN, dropped],
+      sessions: [...MAIN_SESSIONS, session('v-1', 1, VARIANT_A.id)],
+    });
+
+    expect(screen.queryByText('A1')).toBeNull();
+    expect(screen.queryByText('Variant A')).toBeNull();
+    // Its meetings go with it: a meeting on a row the map is not drawing has nowhere
+    // to be drawn, and one left floating on the main row would be a lie about it.
+    expect(screen.getAllByTestId('session-stop')).toHaveLength(3);
+    expect(screen.getByTestId('session-map-heading').textContent).toContain('3 sessions');
+
+    const toggle = screen.getByTestId('show-dropped');
+    expect(toggle.textContent).toBe('Show dropped (1)');
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(toggle);
+
+    expect(screen.getByText('A1')).toBeTruthy();
+    expect(screen.getByTestId('show-dropped').textContent).toBe('Hide dropped');
+    expect(screen.getByTestId('show-dropped').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('session-map-heading').textContent).toContain('4 sessions');
+  });
+
+  it('offers no toggle for a review that has dropped nothing', () => {
+    renderMap();
+    expect(screen.queryByTestId('show-dropped')).toBeNull();
+  });
+
+  it('keeps a MERGED variant drawn, because the review went through it', () => {
+    // Its model is on the line it went into and its cards say where they came from, so
+    // taking the row away would leave a green return with nothing leaving into it.
+    const merged: ReviewLine = {
+      ...VARIANT_A, status: 'adopted', mergedIntoLineId: MAIN.id, closedAt: '2026-06-01T09:00:00.000Z',
+    };
+    renderMap({
+      lines: [MAIN, merged],
+      sessions: [...MAIN_SESSIONS, session('v-1', 1, VARIANT_A.id)],
+    });
+
+    expect(screen.getByText('A1')).toBeTruthy();
+    expect(screen.getByText('✓')).toBeTruthy();
+    expect(screen.queryByTestId('show-dropped')).toBeNull();
+  });
+
   it('dashes a dropped variant\'s stops in the drawing, not only in the layout', () => {
     const dropped: ReviewLine = { ...VARIANT_A, status: 'dropped' };
     renderMap({
       lines: [MAIN, dropped],
       sessions: [...MAIN_SESSIONS, session('v-1', 1, VARIANT_A.id)],
     });
+    fireEvent.click(screen.getByTestId('show-dropped'));
     const circle = screen.getByText('A1').parentElement?.querySelector('circle');
     expect(circle?.getAttribute('stroke-dasharray')).toBeTruthy();
     const mainCircle = screen.getByText('S1').parentElement?.querySelector('circle');
@@ -462,10 +589,11 @@ describe('SessionMap — a stop opens its session', () => {
 // ─── The words ──────────────────────────────────────────────────────────────
 
 describe('SessionMap — the words on screen', () => {
-  it('never says branch, fork, merge or commit', () => {
+  it('never says branch, fork or commit', () => {
     const adopted: ReviewLine = { ...VARIANT_A, status: 'adopted', name: 'Thicker flange' };
     const dropped: ReviewLine = {
       ...VARIANT_A, id: 'line-b', letter: 'B', name: 'Old idea', status: 'dropped',
+      dropReason: 'Too expensive to tool',
     };
     const { container } = renderMap({
       lines: [MAIN, adopted, dropped],
@@ -476,13 +604,22 @@ describe('SessionMap — the words on screen', () => {
       ],
     });
     fireEvent.click(screen.getByText('S1'));
+    // The dropped row's own words are part of the check, and it is not drawn until
+    // asked for.
+    fireEvent.click(screen.getByTestId('show-dropped'));
+    fireEvent.click(screen.getAllByText('B1')[0]);
 
     // Every word the map itself puts on screen: the heading, the legend, the row
     // names, the stops, the panel and its labels.
     const shown = (container.textContent ?? '').toLowerCase();
-    for (const word of ['branch', 'fork', 'merge', 'commit']) {
+    for (const word of ['branch', 'fork', 'commit']) {
       expect(shown, `the map says "${word}"`).not.toContain(word);
     }
+    // "Merge" is not one of them any more: it is the user's own word for taking one
+    // line into another (2026-09-26), and the map has to name the line a green return
+    // went into — which from batch BX is not always the main one.
+    expect(screen.getByText('✓').parentElement?.querySelector('title')?.textContent)
+      .toContain('Merged into the main line');
   });
 
   it('calls them a design review, its lines and its sessions', () => {

@@ -41,7 +41,7 @@ const MAIN: ReviewLine = {
   kind: 'main',
   name: 'Main line',
   letter: null,
-  parentSessionId: null,
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null,
   status: 'active',
   createdBy: null,
   createdByName: 'Coaco',
@@ -49,7 +49,7 @@ const MAIN: ReviewLine = {
   closedAt: null,
 };
 
-const VARIANT: ReviewLine = { ...MAIN, id: 'line-a', kind: 'variant', name: 'Steel pin', letter: 'A', parentSessionId: 's1', status: 'adopted' };
+const VARIANT: ReviewLine = { ...MAIN, id: 'line-a', kind: 'variant', name: 'Steel pin', letter: 'A', parentSessionId: 's1', parentLineId: null, mergedIntoLineId: null, dropReason: null, status: 'adopted' };
 
 function review(over: Partial<LobbyReview> = {}): LobbyReview {
   return {

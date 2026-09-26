@@ -164,6 +164,9 @@ volumes:
   # geometry — and every curated review's — would go with it, leaving hashes
   # that point at nothing.
   models-data:
+  # Nightly backups of the database and the model files (batch BY), written by the
+  # db-backup service and read — only to report their age — by the api's health.
+  db-backups:
 
 services:
   # ── The only public entry point ──────────────────────────────────────────
@@ -271,6 +274,8 @@ services:
       # Not from .env: it is a compose service name, not a deployment choice, and
       # install.sh should not have to know it.
       CAPTURE_SERVICE_URL: ${CAPTURE_SERVICE_URL:-http://capture-service:8080}
+      BACKUP_STATUS_DIR: /backups
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
     volumes:
       # The per-deployment master config, written by install.sh. Read-only: the
       # API reads it, nothing in the stack may change it.
@@ -285,6 +290,8 @@ services:
       # mount, because a fresh named volume inherits the ownership of the
       # image's directory at the mount point.
       - models-data:/data/models
+      # Read-only: the api only reports how old the newest backup is (/api/health).
+      - db-backups:/backups:ro
 
   # ── Realtime room server ─────────────────────────────────────────────────
   partykit:
@@ -556,6 +563,42 @@ services:
       retries: 20
       # The image's first init runs dozens of migrations.
       start_period: 60s
+
+  # ── Backups (batch BY) ───────────────────────────────────────────────────
+  # The database (pg_dumpall) and the imported model files, every
+  # BACKUP_INTERVAL_HOURS and once at start, into the db-backups volume, keeping the
+  # newest BACKUP_KEEP. Same image as `db`, so the dump tool matches the server.
+  # Restore: deploy/backup/restore.sh <file> --yes (docs/INSTALL.md, "Backups").
+  db-backup:
+    image: supabase/postgres:${SUPABASE_POSTGRES_IMAGE_TAG:-17.6.1.136}
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ['sh', '/backup/backup.sh']
+    # Its own check, not the postgres image's (which asks for a server this container
+    # does not run): healthy once a backup exists. /api/health reports its AGE.
+    healthcheck:
+      test: ['CMD-SHELL', 'ls /backups/db-*.sql.gz >/dev/null 2>&1']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
+    environment:
+      PGHOST: db
+      PGUSER: supabase_admin
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
+      PGDATABASE: postgres
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      BACKUP_MODELS: ${BACKUP_MODELS:-true}
+    volumes:
+      - ./deploy/backup:/backup:ro
+      - db-backups:/backups
+      - models-data:/models:ro
 
   # ── PostgREST: /rest/v1/ ─────────────────────────────────────────────────
   # The tables supabase-js reads and writes: tracker_* and review_curations.

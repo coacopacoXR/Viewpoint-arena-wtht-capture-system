@@ -628,6 +628,20 @@ create policy "public update model revisions" on model_revisions for update usin
 -- review_id has deliberately NO foreign key, for the same reason
 -- tracker_sessions.review_id has none: a line belongs to a review by id, and a
 -- key would refuse the write for any room that has no curation row.
+--
+-- `parent_line_id` and `merged_into_line_id` (added 2026-09-26, batch BX) are the
+-- two halves of a variant's own story, and both DO have keys — to this same table,
+-- because both name a line of the same review and a line that does not exist is not
+-- a parent or a destination anybody can open. `parent_line_id` is where it was
+-- started from, which until batch BX could only ever be the main line and was
+-- therefore derivable from `parent_session_id`; from batch BX a variant can be
+-- explored from another variant, and the moment one is explored from a variant that
+-- has never met there is no session to derive it from at all.
+-- `merged_into_line_id` is where it went, and it is a column rather than a
+-- derivation because 'adopted' used to mean exactly one thing — taken into the main
+-- line — and now means "taken into the line named here". Both are NULL on every row
+-- written before this batch, and the backfill below fills in what those rows can be
+-- known to have meant.
 -- ─────────────────────────────────────────────────────────────────────────────
 create table if not exists review_lines (
   id uuid primary key default gen_random_uuid(),
@@ -636,11 +650,14 @@ create table if not exists review_lines (
   name text not null default '',
   letter text,
   parent_session_id uuid references tracker_sessions(id),
+  parent_line_id uuid references review_lines(id),
   status text not null default 'active' check (status in ('active', 'adopted', 'dropped')),
   created_by uuid,
   created_by_name text not null default '',
   created_at timestamptz not null default now(),
   closed_at timestamptz,
+  merged_into_line_id uuid references review_lines(id),
+  drop_reason text,
   adopted_revision_ids uuid[],
   unique (review_id, kind, letter)
 );
@@ -649,6 +666,26 @@ create table if not exists review_lines (
 -- column the two functions below write, added only where it is missing.
 alter table review_lines
   add column if not exists adopted_revision_ids uuid[];
+
+-- The same, for the two batch BX added: where a variant was started from, and
+-- where it was merged into. Both nullable, both keyed to this table, and both left
+-- NULL on a row this file has already written — the backfill further down fills in
+-- what a pre-BX row can be known to have meant, and a variant whose parent cannot
+-- be worked out keeps NULL, which every reader answers as "from the main line"
+-- because that is the only place a variant could be started from before this batch.
+alter table review_lines
+  add column if not exists parent_line_id uuid references review_lines(id);
+alter table review_lines
+  add column if not exists merged_into_line_id uuid references review_lines(id);
+-- Why a dropped variant was dropped. It was already stored — word for word, on every
+-- card the drop closed, as tracker_items.closed_reason — but a card's reason is only
+-- findable by reading that review's cards, and the room that opens on a dropped line
+-- has to say it in a banner before it has read anything but its own line row.
+alter table review_lines
+  add column if not exists drop_reason text;
+
+create index if not exists review_lines_parent_idx
+  on review_lines (parent_line_id) where parent_line_id is not null;
 
 -- Exactly one main line per design review. A partial index rather than a column
 -- constraint because `unique (review_id, kind, letter)` cannot express it: the
@@ -862,6 +899,37 @@ where s.id = i.session_id
   and s.line_id is not null
   and (i.line_id is null or i.origin_line_id is null);
 
+-- ─── Backfill: where every variant that already exists was started from ──────
+--
+-- Added 2026-09-26, docs/plan/15-sessions-and-variants.md batch BX. Every variant
+-- written before `parent_line_id` existed was started from a meeting of the review's
+-- MAIN line, because that was the only line a variant could leave from — so its
+-- parent is that meeting's line where the meeting is still there, and the review's
+-- main line where it is not (a meeting deleted since, which delete_review_session
+-- refuses for exactly that reason and which only an old row can be). Keyed on
+-- `is null`, so a second run adds nothing and never overwrites a parent batch BX has
+-- since written.
+update review_lines v
+set parent_line_id = coalesce(
+      (select s.line_id from tracker_sessions s where s.id = v.parent_session_id),
+      (select m.id from review_lines m where m.review_id = v.review_id and m.kind = 'main')
+    )
+where v.kind = 'variant'
+  and v.parent_line_id is null;
+
+-- And where an already-adopted variant went. Until batch BX there was exactly one
+-- answer — 'adopted' meant taken into the main line — so it is written rather than
+-- asked for, and the map can draw the green return into the right row for a merge
+-- that happened before the column existed.
+update review_lines v
+set merged_into_line_id = m.id
+from review_lines m
+where v.kind = 'variant'
+  and v.status = 'adopted'
+  and v.merged_into_line_id is null
+  and m.review_id = v.review_id
+  and m.kind = 'main';
+
 -- ─── Adopting and dropping a variant ─────────────────────────────────────────
 --
 -- Added 2026-09-25, docs/plan/15-sessions-and-variants.md batch BL. Two
@@ -869,15 +937,18 @@ where s.id = i.session_id
 -- api/reviews/lines.ts is that each one writes several tables that have to agree
 -- with each other:
 --
---   adopt_review_line   moves every card the variant raised onto the main line,
---                       stamps each one with the moment it was adopted, records
---                       what the main line's scene became, makes the positions the
---                       variant left its models at the main line's own, and marks
---                       the variant adopted — all of it or none of it.
+--   adopt_review_line   moves every card the variant raised onto the line it is
+--                       merged into, stamps each one with the moment it was merged,
+--                       records what that line's scene became, makes the positions
+--                       the variant left its models at that line's own, re-parents
+--                       the variant's own active variants onto it, and marks the
+--                       variant adopted — all of it or none of it.
 --   drop_review_line    marks the variant dropped, closes every card still open on
 --                       it with the reason, and writes the same status history the
 --                       tracker writes when somebody closes a card by hand, so
---                       lib/trackerContinuity can still say WHEN it closed.
+--                       lib/trackerContinuity can still say WHEN it closed. It
+--                       refuses while the variant has one of its own still being
+--                       explored.
 --
 -- Half of either is worse than neither. A variant whose cards have moved but whose
 -- status is still 'active' can be adopted a second time and move them again; a
@@ -896,6 +967,7 @@ where s.id = i.session_id
 -- ─────────────────────────────────────────────────────────────────────────────
 create or replace function adopt_review_line(
   p_variant uuid,
+  p_target uuid,
   p_revision_ids uuid[]
 ) returns jsonb
 language plpgsql
@@ -904,11 +976,14 @@ set search_path = public
 as $$
 declare
   v_variant review_lines;
-  v_main review_lines;
+  v_target review_lines;
+  v_walk review_lines;
+  v_depth int;
   v_moved int;
+  v_reparented int;
 begin
-  -- Locked, because two people adopting the same variant at the same moment must
-  -- produce one adoption: the second one waits, then reads a row whose status is
+  -- Locked, because two people merging the same variant at the same moment must
+  -- produce one merge: the second one waits, then reads a row whose status is
   -- no longer 'active' and is told it has already been done.
   select * into v_variant from review_lines where id = p_variant for update;
   if not found or v_variant.kind <> 'variant' then
@@ -918,70 +993,178 @@ begin
     return jsonb_build_object('ok', false, 'error', 'already_closed', 'status', v_variant.status);
   end if;
 
-  select * into v_main from review_lines
-   where review_id = v_variant.review_id and kind = 'main'
-   for update;
+  -- The line being merged INTO, locked too: it is about to own every card the
+  -- variant raised and every position the variant left a model at, and a target
+  -- being dropped in another transaction at the same moment would leave those cards
+  -- on a line nobody will ever meet on again.
+  select * into v_target from review_lines where id = p_target for update;
   if not found then
-    -- The api creates the main line before it calls this, so getting here means
-    -- the review's lines are in a state nobody wrote on purpose. Refusing leaves
-    -- the variant exactly as it was, which is the answer that can be retried.
-    return jsonb_build_object('ok', false, 'error', 'no_main_line');
+    return jsonb_build_object('ok', false, 'error', 'no_target_line');
+  end if;
+  -- Four refusals, and each is a fact about the pair rather than a preference:
+  -- another review's line is not a destination anybody in this meeting can open; a
+  -- closed one is a record and taking cards into it hides them; the variant itself
+  -- would be a merge that moves nothing and closes the line; and one of its own
+  -- descendants would make the descendant its own ancestor, so every card on both
+  -- lines would end up on a line whose history runs in a circle.
+  if v_target.review_id <> v_variant.review_id then
+    return jsonb_build_object('ok', false, 'error', 'other_review');
+  end if;
+  if v_target.id = v_variant.id then
+    return jsonb_build_object('ok', false, 'error', 'same_line');
+  end if;
+  if v_target.status <> 'active' then
+    return jsonb_build_object('ok', false, 'error', 'target_closed', 'status', v_target.status);
   end if;
 
-  -- Every card the variant raised, open or not: a risk it found is a risk the main
+  -- Up the target's own chain looking for the variant. A loop rather than a
+  -- recursive CTE because plpgsql cannot `return` out of a query, and bounded
+  -- because a chain with a loop in it is a row nobody should have written and must
+  -- not hang the transaction that found it.
+  v_walk := v_target;
+  v_depth := 0;
+  while v_walk.parent_line_id is not null and v_depth < 64 loop
+    if v_walk.parent_line_id = v_variant.id then
+      return jsonb_build_object('ok', false, 'error', 'own_descendant');
+    end if;
+    select * into v_walk from review_lines where id = v_walk.parent_line_id;
+    if not found then
+      exit;
+    end if;
+    v_depth := v_depth + 1;
+  end loop;
+
+  -- Every card the variant raised, open or not: a risk it found is a risk the target
   -- line now owns, and an already-closed one still has to say where it came from.
   -- origin_line_id is coalesced rather than left alone so a card that somehow never
   -- got one still ends up naming the variant, and never overwritten, so a card
   -- carried INTO the variant keeps the line it was raised on.
   update tracker_items
-     set line_id = v_main.id,
+     set line_id = v_target.id,
          origin_line_id = coalesce(origin_line_id, v_variant.id),
          adopted_at = now(),
          updated_at = now()
    where line_id = v_variant.id;
   get diagnostics v_moved = row_count;
 
+  -- Its own variants, still being explored, now hang off the line it went to
+  -- (batch BX). Merging a variant that has variants of its own is allowed and this
+  -- is what makes it safe: re-parented in the SAME transaction, so there is no
+  -- moment in which an active line's parent is a closed one, and no variant left
+  -- pointing at a line nobody can open. Closed children are left alone — their own
+  -- parent_line_id is part of their record, and rewriting where a dropped variant
+  -- came from would change what its cards say.
+  update review_lines
+     set parent_line_id = v_target.id
+   where parent_line_id = v_variant.id
+     and status = 'active';
+  get diagnostics v_reparented = row_count;
+
   update review_lines
      set status = 'adopted',
          closed_at = now(),
+         merged_into_line_id = v_target.id,
          adopted_revision_ids = p_revision_ids
    where id = v_variant.id;
 
-  -- The variant's own saved positions become the main line's (added 2026-09-26,
-  -- docs/plan/15-sessions-and-variants.md batch BV).
+  -- The variant's own saved positions become the target line's (added 2026-09-26,
+  -- docs/plan/15-sessions-and-variants.md batch BV; the target line rather than
+  -- always the main one, batch BX).
   --
   -- A review keeps where its models stand in its own row, because room storage is the
   -- room's and a review is opened again long after that room is gone: `asset.placements`
   -- is the MAIN line's and `asset.linePlacements[<review_lines.id>]` is one slot per
-  -- variant, so exploring a variant cannot move the main line's models. An adoption is
-  -- the moment the two become one answer — the variant's model IS the main line's model
-  -- from here — so its positions go with it, and in the same transaction as the cards
-  -- and the status: an adoption that moved the cards and left the main line standing
-  -- where it was would open on the model the meeting had just decided against, arranged
-  -- the way the meeting had just decided against.
+  -- variant, so exploring a variant cannot move another line's models. A merge is
+  -- the moment two lines become one answer — the variant's model IS the target's model
+  -- from here — so its positions go with it, and in the same transaction as the cards and
+  -- the status: a merge that moved the cards and left the target standing where it was
+  -- would open on the model the meeting had just decided against, arranged the way the
+  -- meeting had just decided against.
   --
   -- Written only where the variant HAS a slot of its own. One that does not never
-  -- diverged from the main line, so `asset.placements` already says where it stands and
-  -- a write would be a no-op that still bumped `updated_at` and moved the review up the
-  -- lobby's list. The slot is left in place either way, because it is the record of where
-  -- the answer the review took had got to — and a DROP leaves its own there for the same
-  -- reason, which is why drop_review_line has no counterpart of this statement.
-  update review_curations
-     set asset = jsonb_set(
-           asset,
-           '{placements}',
-           asset -> 'linePlacements' -> v_variant.id::text
-         )
-   where id = v_variant.review_id
-     and asset -> 'linePlacements' ? v_variant.id::text;
+  -- diverged from the line it came from, so that line's slot already says where it
+  -- stands and a write would be a no-op that still bumped `updated_at` and moved the
+  -- review up the lobby's list. The slot is left in place either way, because it is the
+  -- record of where the answer the review took had got to — and a DROP leaves its own
+  -- there for the same reason, which is why drop_review_line has no counterpart of this
+  -- statement.
+  if exists (
+    select 1 from review_curations
+     where id = v_variant.review_id
+       and asset -> 'linePlacements' ? v_variant.id::text
+  ) then
+    if v_target.kind = 'main' then
+      update review_curations
+         set asset = jsonb_set(
+               asset,
+               '{placements}',
+               asset -> 'linePlacements' -> v_variant.id::text
+             )
+       where id = v_variant.review_id;
+    else
+      -- A variant target keeps its own slot and gets the merged one written into it,
+      -- with `create_missing` so a target that has never moved a model — and so has no
+      -- slot of its own yet — still ends up with one.
+      update review_curations
+         set asset = jsonb_set(
+               asset,
+               array['linePlacements', v_target.id::text],
+               asset -> 'linePlacements' -> v_variant.id::text,
+               true
+             )
+       where id = v_variant.review_id;
+    end if;
+  end if;
 
   return jsonb_build_object(
     'ok', true,
     'moved', v_moved,
-    'mainLineId', v_main.id,
+    'reparented', v_reparented,
+    'targetLineId', v_target.id,
+    'mainLineId', v_target.id,
     'variantId', v_variant.id,
     'letter', v_variant.letter
   );
+end;
+$$;
+
+-- ─── The two-argument merge, kept so nothing already deployed breaks ──────────
+--
+-- Batch BX replaced `adopt_review_line(variant, revisions)` with the three-argument
+-- one above, because a merge has a destination and the destination is no longer
+-- always the main line. This is the old signature as a thin wrapper that answers the
+-- only question the old signature could answer — "into the main line" — and then
+-- delegates. It stays for two reasons: an install whose api bundle is older than its
+-- schema would otherwise call a function that no longer exists, and `error:
+-- 'no_main_line'` is a sentence api/reviews/lines.ts already translates.
+--
+-- It is NOT what the app calls. lib/reviews/linesClient.adoptVariant always names a
+-- target, and the endpoint always passes one.
+create or replace function adopt_review_line(
+  p_variant uuid,
+  p_revision_ids uuid[]
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_variant review_lines;
+  v_main review_lines;
+begin
+  select * into v_variant from review_lines where id = p_variant;
+  if not found or v_variant.kind <> 'variant' then
+    return jsonb_build_object('ok', false, 'error', 'no_such_variant');
+  end if;
+  select * into v_main from review_lines
+   where review_id = v_variant.review_id and kind = 'main';
+  if not found then
+    -- The api creates the main line before it calls this, so getting here means
+    -- the review's lines are in a state nobody wrote on purpose. Refusing leaves the
+    -- variant exactly as it was, which is the answer that can be retried.
+    return jsonb_build_object('ok', false, 'error', 'no_main_line');
+  end if;
+  return adopt_review_line(p_variant, v_main.id, p_revision_ids);
 end;
 $$;
 
@@ -996,6 +1179,7 @@ set search_path = public
 as $$
 declare
   v_variant review_lines;
+  v_child review_lines;
   v_closed int;
 begin
   select * into v_variant from review_lines where id = p_variant for update;
@@ -1004,6 +1188,33 @@ begin
   end if;
   if v_variant.status <> 'active' then
     return jsonb_build_object('ok', false, 'error', 'already_closed', 'status', v_variant.status);
+  end if;
+
+  -- A variant of its own, still being explored (batch BX). Refused rather than
+  -- repaired, and it is the simplest rule that is also the correct one: the child
+  -- was started from THIS line's answer, and dropping the line leaves it starting
+  -- from an answer the review has just rejected. Re-parenting it to the merge target
+  -- is what `adopt_review_line` does and is right there, because a merge says the
+  -- answer was taken; a drop says it was not, and there is then no line that is the
+  -- honest parent. Which of the two should go is a decision about the child, and it
+  -- belongs to the people exploring it — the same reason delete_review_session
+  -- refuses a meeting a variant leaves from. Checked inside the transaction rather
+  -- than only in the api, so two people dropping and exploring at the same moment
+  -- cannot both be told they succeeded.
+  select * into v_child from review_lines
+   where parent_line_id = v_variant.id
+     and status = 'active'
+   order by created_at
+   limit 1
+   for update;
+  if found then
+    return jsonb_build_object(
+      'ok', false,
+      'error', 'has_active_children',
+      'childId', v_child.id,
+      'letter', v_child.letter,
+      'name', v_child.name
+    );
   end if;
 
   -- 'Open' and 'In Review' are the two the app has always meant by still open
@@ -1027,7 +1238,13 @@ begin
 
   update review_lines
      set status = 'dropped',
-         closed_at = now()
+         closed_at = now(),
+         -- The reason on the LINE as well as on every card it closes, so a room that
+         -- opens on a dropped variant can say why in its banner without having read a
+         -- single card. It is the same sentence the cards carry, not a copy of it made
+         -- somewhere else: p_closed_reason is the one the endpoint built with
+         -- lib/reviews/lines.droppedCardReason.
+         drop_reason = p_closed_reason
    where id = v_variant.id;
 
   return jsonb_build_object(
@@ -1042,15 +1259,20 @@ $$;
 -- The service role is the ONLY caller. `revoke … from public` matters because
 -- PostgreSQL grants EXECUTE on a new function to PUBLIC by default, and the
 -- table-level grants further down this file do not cover functions — so without
--- these two lines the anon key the browser is built with could adopt or drop any
--- variant of any review on the install.
+-- these lines the anon key the browser is built with could merge or drop any
+-- variant of any review on the install. BOTH signatures of adopt_review_line are
+-- listed, because a grant is per function and the two-argument wrapper above is a
+-- function of its own: covering only the three-argument one would leave the old
+-- signature callable by anybody, and it does the same write.
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on function public.adopt_review_line(uuid, uuid, uuid[]) from public, anon, authenticated;
     revoke all on function public.adopt_review_line(uuid, uuid[]) from public, anon, authenticated;
     revoke all on function public.drop_review_line(uuid, text, text) from public, anon, authenticated;
   end if;
   if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.adopt_review_line(uuid, uuid, uuid[]) to service_role;
     grant execute on function public.adopt_review_line(uuid, uuid[]) to service_role;
     grant execute on function public.drop_review_line(uuid, text, text) to service_role;
   end if;

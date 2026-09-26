@@ -17,17 +17,21 @@
 // and unreadable is worse than a scrollbar.
 //
 // THE WORDS ARE THE SPEC. This is a "Design review" with a "Main line" and
-// "Variant A", and these are "Sessions". Branch, fork, merge and commit do not
-// appear anywhere in this file, in a label, in a title attribute or in a comment a
-// user could be shown: the people reading this map are hardware engineers and the
-// plan is explicit that the programming metaphor must not show through.
+// "Variant A", and these are "Sessions". Branch, fork and commit do not appear
+// anywhere in this file, in a label, in a title attribute or in a comment a user
+// could be shown: the people reading this map are hardware engineers and the plan is
+// explicit that the programming metaphor must not show through. "Merged" does, from
+// batch BX, because it is the user's own word for taking one line into another
+// (2026-09-26: asked for a variant that could be merged with another variant, they
+// said "merged") — and the map has to name the line a green return goes INTO, which
+// is no longer always the main one.
 //
 // Nothing here reads the database. The map is given lines, sessions, revisions and
 // cards and draws them, so it renders the same in the room, in the tracker and in a
 // test with fixture data; lib/reviews/useSessionMap.ts is the half that fetches.
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { Download, Trash2, X } from 'lucide-react';
 import {
   downloadTranscript,
@@ -39,16 +43,22 @@ import {
 } from '../../lib/capture/transcriptText';
 import {
   MAIN_LINE_NAME,
+  droppedLineReason,
+  hiddenLineCount,
+  isMainLine,
   lineLabel,
+  lineLabelWithOrigin,
   lineStatusWord,
   mainLineOf,
+  mergeTargetWord,
+  mergedIntoLabel,
   orderedLines,
-  roomPath,
   sessionLabel,
   shortLineLabel,
   variantLetter,
   type ReviewLine,
 } from '../../lib/reviews/lines';
+import { openLine } from '../../lib/reviews/openLine';
 import type { LineSession, SessionCardRef } from '../../lib/reviews/linesRepo';
 import { deleteSession } from '../../lib/reviews/deleteClient';
 import type { ModelRevision } from '../../lib/reviews/revisionsRepo';
@@ -156,15 +166,69 @@ function revisionsText(session: LineSession, revisions: readonly ModelRevision[]
 }
 
 /**
+ * Meetings in the order they happened: by their number on their own line, then by
+ * when they ended, then by id so that two recorded in the same second still draw in
+ * the same order every render.
+ *
+ * A meeting with no number — recorded before `seq` existed — sorts last rather than
+ * first, because a row that put an unnumbered meeting before S1 would say the review
+ * met in an order it did not.
+ */
+function inSessionOrder(list: readonly LineSession[]): LineSession[] {
+  return [...list].sort((a, b) => {
+    const sa = a.seq ?? Number.MAX_SAFE_INTEGER;
+    const sb = b.seq ?? Number.MAX_SAFE_INTEGER;
+    if (sa !== sb) return sa - sb;
+    return a.endedAt.localeCompare(b.endedAt) || a.id.localeCompare(b.id);
+  });
+}
+
+/**
+ * One row of the drawing, and what the rows that leave from it or come back to it
+ * need to know about it.
+ *
+ * The map is not a list of independent rows: a variant leaves from a meeting on
+ * ANOTHER row, and a merged one comes back onto the row of whichever line took it in,
+ * which is not necessarily the one above it. Both need the row's own meetings to have
+ * been placed first, which is what this holds.
+ */
+interface RowPlacement {
+  /** The line drawn on it, or null for a review whose lines have not been read. */
+  line: ReviewLine | null;
+  y: number;
+  /** The meetings on this row, in the order they happened. Not the row's markers. */
+  meetings: MapStop[];
+  /**
+   * Where the row begins: the x of its first meeting, or of the marker standing in
+   * for one when it has never met. A variant with no meeting to leave from leaves from
+   * here, because it did not leave from a meeting at all and drawing it from the end
+   * of the row would say it continues work that happened after it was started.
+   */
+  startX: number;
+  /** The rightmost thing drawn on the row before any green return is placed on it. */
+  endX: number;
+  /** How many green returns have been placed on it, so two do not land on top of each other. */
+  returns: number;
+}
+
+/**
  * Where the map puts everything.
  *
  * Pure, and the interesting work: the main line's stops are numbered in the order
  * they happened, each variant leaves from the session it was started at and runs to
- * the right of it on its own row, and an adopted variant's line comes back up to a
- * green stop on the main row. A variant whose parent session has been deleted leaves
- * from the main line's last stop instead, because a side line floating in mid-air
- * with nothing attached to it would look like a bug rather than like a gap in the
- * record.
+ * the right of it on its own row, and a merged variant's line comes back to a green
+ * stop on the row of the line that took it in. A variant whose parent session has
+ * been deleted leaves from that row's last stop instead, because a side line floating
+ * in mid-air with nothing attached to it would look like a bug rather than like a gap
+ * in the record.
+ *
+ * A variant can be started from ANOTHER variant and merged into any line still being
+ * explored, so a row's neighbours are not fixed: rows are ordered parent first, which
+ * puts a variant under the line it was started from, and the green returns are placed
+ * in a second pass once every row knows where its own meetings landed — a return onto
+ * a row drawn below the one it leaves would otherwise have nowhere to be measured
+ * from. A variant whose parent line is not among the lines it was given leaves from
+ * the main row, which is the only row the drawing can honestly attach it to.
  *
  * Sessions with no line — recorded before this batch, on an install the backfill has
  * not reached — go on the main row, which is where the backfill in
@@ -182,16 +246,10 @@ export function layoutSessionMap(
 
   const bySession = new Map<string, LineSession>();
   for (const session of sessions) bySession.set(session.id, session);
+  const byId = new Map<string, ReviewLine>();
+  for (const line of ordered) byId.set(line.id, line);
 
-  const inOrder = (list: LineSession[]): LineSession[] =>
-    [...list].sort((a, b) => {
-      const sa = a.seq ?? Number.MAX_SAFE_INTEGER;
-      const sb = b.seq ?? Number.MAX_SAFE_INTEGER;
-      if (sa !== sb) return sa - sb;
-      return a.endedAt.localeCompare(b.endedAt) || a.id.localeCompare(b.id);
-    });
-
-  const onMain = inOrder(
+  const onMain = inSessionOrder(
     sessions.filter((s) => !main || s.lineId === main.id || s.lineId === null),
   );
 
@@ -216,7 +274,8 @@ export function layoutSessionMap(
   };
 
   // ─── The main line ──────────────────────────────────────────────────────────
-  rows.push({ id: main?.id ?? '__main__', label: MAIN_LINE_NAME, title: MAIN_LINE_NAME, y: MAIN_Y, colour: INK, dropped: false });
+  const mainRowId = main?.id ?? '__main__';
+  rows.push({ id: mainRowId, label: MAIN_LINE_NAME, title: MAIN_LINE_NAME, y: MAIN_Y, colour: INK, dropped: false });
   const mainStops: MapStop[] = onMain.map((session, index) =>
     stopFor(session, main, PAD_X + index * STEP, MAIN_Y),
   );
@@ -232,11 +291,22 @@ export function layoutSessionMap(
     });
   }
 
+  const placed = new Map<string, RowPlacement>();
+  const mainRow: RowPlacement = {
+    line: main,
+    y: MAIN_Y,
+    meetings: mainStops,
+    startX: PAD_X,
+    endX: mainStops.length > 0 ? mainStops[mainStops.length - 1].x : PAD_X,
+    returns: 0,
+  };
+  placed.set(mainRowId, mainRow);
+
   // A main line that has never met still gets its start, as long as the review has
   // lines at all. One STEP of line rather than a dot on its own, so it reads as the
   // beginning of the row the meetings will be placed along and not as a stray mark.
   if (mainStops.length === 0 && ordered.length > 0) {
-    stops.push(markerStop(main, `start-${main?.id ?? '__main__'}`, PAD_X, MAIN_Y, 'Start', 'start'));
+    stops.push(markerStop(main, `start-${mainRowId}`, PAD_X, MAIN_Y, 'Start', 'start'));
     edges.push({
       id: 'main-start',
       from: { x: PAD_X, y: MAIN_Y },
@@ -248,45 +318,74 @@ export function layoutSessionMap(
   }
 
   // ─── The variants ───────────────────────────────────────────────────────────
-  // Rejoin stops are appended to the main row after the last real meeting, in the
-  // order the variants were started, so two adopted variants do not land on top of
-  // each other.
-  let rejoinIndex = 0;
-  const rejoinX = () => PAD_X + (mainStops.length + rejoinIndex++) * STEP;
+  // Rows in the order they are drawn: each variant directly under the line it was
+  // started from, so a variant of a variant sits below its own parent rather than in
+  // whatever order the database answered in. A variant whose parent line is not among
+  // the lines it was given — a row written before `parent_line_id` existed, or one
+  // whose parent has been deleted — belongs to the main row's family, which is the
+  // only place the drawing can attach it to.
+  const rowParentId = (variant: ReviewLine): string => {
+    const parent = variant.parentLineId ? byId.get(variant.parentLineId) ?? null : null;
+    return parent ? parent.id : mainRowId;
+  };
+  const rowOrder: ReviewLine[] = [];
+  const inRowOrder = new Set<string>();
+  const placeUnder = (parentId: string): void => {
+    for (const variant of variants) {
+      if (inRowOrder.has(variant.id) || rowParentId(variant) !== parentId) continue;
+      inRowOrder.add(variant.id);
+      rowOrder.push(variant);
+      placeUnder(variant.id);
+    }
+  };
+  placeUnder(mainRowId);
+  // Whatever is left is a line whose parent chain runs in a circle, which the database
+  // does not allow but a hand-written row could. Drawn rather than dropped: a variant
+  // that vanished from the map because of its own row's contents is a variant nobody
+  // can find again.
+  for (const variant of variants) {
+    if (inRowOrder.has(variant.id)) continue;
+    inRowOrder.add(variant.id);
+    rowOrder.push(variant);
+    placeUnder(variant.id);
+  }
 
-  variants.forEach((variant, rowIndex) => {
+  rowOrder.forEach((variant, rowIndex) => {
     const y = MAIN_Y + ROW_GAP * (rowIndex + 1);
     const dropped = variant.status === 'dropped';
     const adopted = variant.status === 'adopted';
     const colour = dropped ? DROPPED : adopted ? ADOPTED : VARIANT_INK;
     // The row is named in the short form — "Variant A" — because the left edge has
     // room for a chip and not for a sentence. The name the people exploring it gave
-    // it goes in the row's tooltip and in the panel one of its stops opens.
+    // it, and the line it was started from when that was another variant, go in the
+    // row's tooltip and in the panel one of its stops opens.
     rows.push({
       id: variant.id,
       label: shortLineLabel(variant) ?? 'Variant',
-      title: lineLabel(variant) ?? 'Variant',
+      title: lineLabelWithOrigin(ordered, variant) ?? 'Variant',
       y,
       colour,
       dropped,
     });
 
-    const own = inOrder(sessions.filter((s) => s.lineId === variant.id));
+    const own = inSessionOrder(sessions.filter((s) => s.lineId === variant.id));
 
-    // Where it leaves from: the session it was started at, or the main line's last
-    // meeting when that session is gone, or the START of the row for a variant that
-    // was started with no meeting to leave from — batch BQ, a review that had not met
-    // yet — or the start of the row when the review has never met on the main line at
-    // all. A parentless variant leaves at the start rather than at the last meeting
-    // because it did not leave from that meeting: drawing it from there would say the
-    // variant continues a scene it was never given.
+    // Where it leaves from: the session it was started at, or the end of the row it
+    // left when that session is gone, or the START of that row for a variant started
+    // with no meeting to leave from — batch BQ, a review that had not met yet, and
+    // batch BX, a variant of a variant nobody has met on. Leaving at the start rather
+    // than at the end is what keeps the drawing honest: a variant that left before any
+    // of that row's meetings did not continue the work they did.
+    const parentRow = placed.get(rowParentId(variant)) ?? mainRow;
     const parent = variant.parentSessionId ? bySession.get(variant.parentSessionId) ?? null : null;
-    const parentStop = parent ? mainStops.find((stop) => stop.session.id === parent.id) ?? null : null;
+    const parentStop = parent
+      ? parentRow.meetings.find((stop) => stop.session.id === parent.id) ?? null
+      : null;
     const originX = parentStop?.x
-      ?? (variant.parentSessionId === null || mainStops.length === 0
-        ? PAD_X
-        : mainStops[mainStops.length - 1].x);
-    const originY = MAIN_Y;
+      ?? (variant.parentSessionId === null || parentRow.meetings.length === 0
+        ? parentRow.startX
+        : parentRow.endX);
+    const originY = parentRow.y;
 
     const variantStops = own.map((session, index) =>
       stopFor(session, variant, originX + STEP * (index + 1), y),
@@ -313,7 +412,7 @@ export function layoutSessionMap(
       ));
     }
 
-    // The elbow off the main line: across, then down, then along.
+    // The elbow off the line it left: across, then down, then along.
     edges.push({
       id: `leave-${variant.id}`,
       from: { x: originX, y: originY },
@@ -335,49 +434,80 @@ export function layoutSessionMap(
       });
     }
 
-    if (adopted) {
-      const lastPoint = variantStops.length > 0
-        ? { x: variantStops[variantStops.length - 1].x, y }
-        : firstPoint;
-      const x = rejoinX();
-      const rejoinStop: MapStop = {
-        // Not a meeting: the moment the variant's model and cards became the main
-        // line's. It carries the variant's newest session so the panel has something
-        // true to show, and `rejoin` is what tells the drawing to make it green.
-        session: variantStops.length > 0
-          ? variantStops[variantStops.length - 1].session
-          : { ...(onMain[0] ?? emptySession()), id: `rejoin-${variant.id}` },
-        line: main,
-        x,
-        y: MAIN_Y,
-        label: '✓',
-        date: shortDate(variant.closedAt ?? '') ?? '',
-        revisions: '',
-        cards: 0,
-        dropped: false,
-        rejoin: true,
-      };
-      stops.push(rejoinStop);
+    const lastStop = variantStops.length > 0 ? variantStops[variantStops.length - 1] : null;
+    placed.set(variant.id, {
+      line: variant,
+      y,
+      meetings: variantStops,
+      startX: firstPoint.x,
+      endX: lastStop ? lastStop.x : firstPoint.x,
+      returns: 0,
+    });
+  });
+
+  // ─── The green returns ──────────────────────────────────────────────────────
+  // A second pass, and it has to be: a return lands on the row of the line the variant
+  // was merged INTO, which since batch BX is any line still being explored and may be
+  // drawn below the one it leaves. Placed after the row's last meeting rather than on
+  // top of it, one STEP apart per return so two variants merged into the same line do
+  // not land on each other.
+  //
+  // A merge from before `merged_into_line_id` existed — an install whose schema has not
+  // been upgraded, or a target line that has since been deleted — comes back to the
+  // main row, which is the only line a merge could go to before then.
+  for (const variant of rowOrder) {
+    if (variant.status !== 'adopted') continue;
+    const row = placed.get(variant.id);
+    if (!row) continue;
+    const targetId = variant.mergedIntoLineId !== null && placed.has(variant.mergedIntoLineId)
+      ? variant.mergedIntoLineId
+      : mainRowId;
+    const target = placed.get(targetId) ?? mainRow;
+    const x = target.endX + STEP * (target.returns + 1);
+    target.returns += 1;
+
+    const lastMeeting = row.meetings.length > 0 ? row.meetings[row.meetings.length - 1] : null;
+    const lastPoint = lastMeeting
+      ? { x: lastMeeting.x, y: row.y }
+      : { x: row.startX, y: row.y };
+    const targetLast = target.meetings.length > 0 ? target.meetings[target.meetings.length - 1] : null;
+
+    stops.push({
+      // Not a meeting: the moment the variant's model and cards became the other
+      // line's. It carries the variant's newest session so the panel has something
+      // true to show, and `rejoin` is what tells the drawing to make it green.
+      session: lastMeeting
+        ? lastMeeting.session
+        : { ...(target.meetings[0]?.session ?? emptySession()), id: `rejoin-${variant.id}` },
+      line: target.line,
+      x,
+      y: target.y,
+      label: '✓',
+      date: shortDate(variant.closedAt ?? '') ?? '',
+      revisions: '',
+      cards: 0,
+      dropped: false,
+      rejoin: true,
+    });
+    edges.push({
+      id: `rejoin-${variant.id}`,
+      from: lastPoint,
+      to: { x, y: target.y },
+      kind: 'rejoin',
+      dashed: false,
+      colour: ADOPTED,
+    });
+    if (targetLast) {
       edges.push({
-        id: `rejoin-${variant.id}`,
-        from: lastPoint,
-        to: { x, y: MAIN_Y },
-        kind: 'rejoin',
+        id: `rejoin-along-${variant.id}`,
+        from: { x: targetLast.x, y: target.y },
+        to: { x, y: target.y },
+        kind: 'along',
         dashed: false,
         colour: ADOPTED,
       });
-      if (mainStops.length > 0) {
-        edges.push({
-          id: `rejoin-along-${variant.id}`,
-          from: { x: mainStops[mainStops.length - 1].x, y: MAIN_Y },
-          to: { x, y: MAIN_Y },
-          kind: 'along',
-          dashed: false,
-          colour: ADOPTED,
-        });
-      }
     }
-  });
+  }
 
   const width = Math.max(PAD_X * 2 + STEP, ...stops.map((stop) => stop.x + PAD_X));
   const height = MAIN_Y + ROW_GAP * variants.length + PAD_BOTTOM + STOP_R * 2;
@@ -459,21 +589,21 @@ function startedFromText(
 }
 
 /**
- * How many meetings a line has held.
+ * The meetings a line has held, oldest first.
  *
- * A session with no `line_id` counts towards the main line, which is where the map
- * draws it and where the backfill in docs/supabase-schema.sql puts it.
+ * A session with no `line_id` belongs to the main line, which is where the map draws
+ * it and where the backfill in docs/supabase-schema.sql puts it.
  */
-function sessionsOnLine(
+function lineMeetings(
   line: ReviewLine,
   lines: readonly ReviewLine[],
   sessions: readonly LineSession[],
-): number {
+): LineSession[] {
   const main = mainLineOf(orderedLines(lines));
   const mine = main !== null && line.id === main.id;
-  return sessions.filter((session) =>
-    session.lineId === line.id || (mine && session.lineId === null),
-  ).length;
+  return inSessionOrder(
+    sessions.filter((session) => session.lineId === line.id || (mine && session.lineId === null)),
+  );
 }
 
 /** The elbow an edge takes: across first, then down (or up), then across again. */
@@ -497,6 +627,13 @@ export interface SessionMapProps {
   onClose?: () => void;
   /** Empty-state text, for a review that has not met yet. */
   emptyMessage?: string;
+  /**
+   * Whether dropped variants are shown, when the page holding the map also lists
+   * lines (the lobby preview): one switch for both, so "Show dropped" on either
+   * reveals them in the map AND the list. Uncontrolled when absent.
+   */
+  showDropped?: boolean;
+  onShowDroppedChange?: (shown: boolean) => void;
   /**
    * The review's id, and whether this person may change its lines. Both are needed
    * for the map to offer any of the three variant actions, and both are omitted
@@ -526,6 +663,23 @@ export interface SessionMapProps {
   isMeetingHost?: boolean;
   /** Read the lines, sessions and cards again, after an action changed them. */
   onChanged?: () => void;
+  /**
+   * How this host opens a line's room: null for the main line, an id for a variant.
+   *
+   * Handed in rather than linked to, and the reason is a bug the user found by pressing
+   * a button: pages/RoomPage's entry guard admits an arrival by its router state
+   * (`{ fromLobby: true }`) or by the sessionStorage mark a deliberate entry writes, and
+   * a plain <Link> to the correct address carries NEITHER — so the room the map linked
+   * to sent the person straight back to the lobby. Every "open a line" in the app goes
+   * through lib/reviews/openLine, which sets one of the two; a host that has a form to
+   * submit first (the lobby asks for a name before it lets anybody in) passes its own.
+   *
+   * Omitted and this map opens lines through `openLine` itself, which is the right
+   * answer everywhere except the lobby. Passed on to VariantActions and
+   * ExploreVariantButton, because a merge or a newly started variant navigates too and
+   * would otherwise bounce in exactly the same way.
+   */
+  onOpenLine?: (lineId: string | null) => void;
   /**
    * Read ONE meeting's transcript, so the panel can offer it as a .txt.
    *
@@ -649,6 +803,38 @@ const DeleteSessionButton: React.FC<{
 };
 
 /**
+ * "Show dropped (2)" / "Hide dropped" — the variants this review has finished with.
+ *
+ * A count in the label rather than a bare "Show dropped", because the button is the only
+ * place the map says anything at all about lines it is not drawing: without the number a
+ * review that dropped six answers and kept one offers a button that looks like a filter
+ * for nothing, and a reader who never presses it never learns the history is there.
+ *
+ * `aria-pressed` and not a checkbox: it changes what one drawing shows rather than
+ * choosing between two, and a screen reader user gets the same answer the key beside it
+ * gives a sighted one.
+ */
+const ShowDroppedButton: React.FC<{
+  count: number;
+  shown: boolean;
+  onToggle: () => void;
+}> = ({ count, shown, onToggle }) => (
+  <button
+    onClick={onToggle}
+    data-testid="show-dropped"
+    aria-pressed={shown}
+    title={
+      shown
+        ? 'Leave the variants this review dropped off the map'
+        : 'Draw the variants this review dropped, greyed, for the record'
+    }
+    className="flex-shrink-0 font-mono text-[9px] text-gray-400 underline decoration-dotted underline-offset-2 hover:text-black transition-colors"
+  >
+    {shown ? 'Hide dropped' : `Show dropped (${count})`}
+  </button>
+);
+
+/**
  * The map, and the panel one of its stops opens.
  *
  * Drawn in the app's own light style — white card, grey rules, black ink — because
@@ -663,28 +849,88 @@ const SessionMap: React.FC<SessionMapProps> = ({
   cards = [],
   onClose,
   emptyMessage = 'No sessions recorded in this design review yet.',
+  showDropped: showDroppedProp,
+  onShowDroppedChange,
   reviewId = null,
   mayEditLines = false,
   mayDelete = false,
   isMeetingHost = false,
   onChanged,
+  onOpenLine,
   readTranscript,
   compact = false,
 }) => {
+  const navigate = useNavigate();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // The line one of the map's two markers opened. Batch BV: a review whose variant
   // has never met has nothing to open a SESSION panel on, and the way into that
   // variant's room is the thing its reader is looking for.
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
-  const layout = useMemo(
-    () => layoutSessionMap(lines, sessions, revisions, cards),
-    [lines, sessions, revisions, cards],
+  /**
+   * Whether the variants this review dropped are drawn. Off, which is the answer the
+   * user asked for: a dropped variant is a decision the review made and its row is
+   * kept for the record, but a map of a review that has tried six answers and kept two
+   * is mostly grey rows nobody is meeting on, and the two live lines are hard to find
+   * in them. Per view and not remembered — a reader who wants the history back asks
+   * for it, and the next person to open the map gets the map that answers "where is
+   * this review now".
+   *
+   * Merged variants are NOT hidden. They are part of how the review got here: their
+   * model is on the line they went into and their cards say where they came from, so
+   * taking the row away would leave a green return on that line with nothing leaving
+   * into it.
+   */
+  const [showDroppedOwn, setShowDroppedOwn] = useState(false);
+  const showDropped = showDroppedProp ?? showDroppedOwn;
+  const setShowDropped = (next: (now: boolean) => boolean) => {
+    const value = next(showDropped);
+    if (onShowDroppedChange) onShowDroppedChange(value);
+    else setShowDroppedOwn(value);
+  };
+  const droppedCount = hiddenLineCount(lines);
+  const hiddenIds = useMemo(
+    () =>
+      new Set(
+        showDropped
+          ? []
+          : lines.filter((line) => line.status === 'dropped').map((line) => line.id),
+      ),
+    [lines, showDropped],
   );
+  // Filtered BEFORE the layout, so a hidden variant takes its row, its meetings and its
+  // edges with it rather than being drawn and then painted over: a row that stayed in
+  // the layout would still hold its place in the row order and leave a gap where the
+  // variants below it were.
+  const drawnLines = useMemo(
+    () => (hiddenIds.size === 0 ? lines : lines.filter((line) => !hiddenIds.has(line.id))),
+    [lines, hiddenIds],
+  );
+  const drawnSessions = useMemo(
+    () =>
+      hiddenIds.size === 0
+        ? sessions
+        : sessions.filter((session) => session.lineId === null || !hiddenIds.has(session.lineId)),
+    [sessions, hiddenIds],
+  );
+  const layout = useMemo(
+    () => layoutSessionMap(drawnLines, drawnSessions, revisions, cards),
+    [drawnLines, drawnSessions, revisions, cards],
+  );
+  // Counted from what is drawn and not from everything the review has, so the heading
+  // agrees with the picture under it: "4 sessions · 3 variants" over a map of three
+  // sessions and one variant is a heading about a review the reader cannot see.
+  const drawnVariants = drawnLines.filter((line) => line.kind === 'variant').length;
 
   const selected = layout.stops.find(
     (stop) => stop.session.id === selectedId && !stop.rejoin && !stop.start && !stop.variantEnd,
   ) ?? null;
-  const selectedLine = selectedLineId ? lines.find((line) => line.id === selectedLineId) ?? null : null;
+  // Resolved against the lines the map is DRAWING rather than against all of them: a
+  // variant dropped from its own panel comes back a moment later as a line that is no
+  // longer drawn, and a panel left open on a row that has gone is a panel about
+  // nothing — with a way into a room nobody is meeting in.
+  const selectedLine = selectedLineId
+    ? drawnLines.find((line) => line.id === selectedLineId) ?? null
+    : null;
 
   // The selected meeting's transcript, read when its stop is clicked and dropped
   // when another one is. The id travels with the rows so a slow answer about the
@@ -713,12 +959,51 @@ const SessionMap: React.FC<SessionMapProps> = ({
   }, [lines]);
 
   // The variants still being explored, which are the only ones with anything to
-  // adopt or drop. An adopted or dropped one is on the map for the record and offers
-  // nothing — that is what stops "Adopt into main line" being offered twice for the
-  // same decision, and what makes the greyed row on the map read as history.
+  // merge or drop. A merged or dropped one is on the map for the record and offers
+  // nothing — that is what stops a merge being offered twice for the same decision,
+  // and what makes the greyed row on the map read as history.
   const activeVariants = useMemo(
     () => lines.filter((line) => line.kind === 'variant' && line.status === 'active'),
     [lines],
+  );
+
+  /**
+   * The meetings on the line whose panel is open, and the newest of them.
+   *
+   * The newest is what "Explore a variant from here" leaves from when it is offered on
+   * a LINE rather than on one of its stops: a variant starts on the model its parent
+   * line is at now, and that model is the one its last meeting left on screen. Null for
+   * a line that has never met, which then offers no explore — there is no meeting to
+   * leave from, and the room of a line in that state has its own "Variant" button that
+   * starts one from the model as it is.
+   */
+  const selectedLineMeetings = selectedLine ? lineMeetings(selectedLine, lines, sessions) : [];
+  const newestOnSelectedLine =
+    selectedLineMeetings.length > 0
+      ? selectedLineMeetings[selectedLineMeetings.length - 1] ?? null
+      : null;
+  // Both read from EVERY line rather than from the ones being drawn: a merged variant
+  // names the line it went into and a variant names the one it was started from, and
+  // either of those may be a dropped one the map is not drawing at the moment.
+  const mergedIntoText = mergedIntoLabel(lines, selectedLine);
+  const droppedWhy = droppedLineReason(selectedLine);
+
+  /**
+   * How this map opens a line's room: the host's way when it handed one in, and
+   * lib/reviews/openLine's otherwise. Never a link — see the `onOpenLine` prop.
+   *
+   * The main line is asked for with null rather than with its own id, because its
+   * address carries no `?line=` and an id would be a second address for the same room.
+   */
+  const openLineFromMap = useCallback(
+    (lineId: string | null) => {
+      if (onOpenLine) {
+        onOpenLine(lineId);
+        return;
+      }
+      openLine(navigate, reviewId, lineId);
+    },
+    [navigate, onOpenLine, reviewId],
   );
 
   const selectedCards = selected ? cards.filter((card) => card.sessionId === selected.session.id) : [];
@@ -778,6 +1063,13 @@ const SessionMap: React.FC<SessionMapProps> = ({
           <span className="flex items-center gap-1">
             <span className="w-2.5 h-px border-t border-dashed" style={{ borderColor: FAINT }} /> Dropped
           </span>
+          {droppedCount > 0 && (
+            <ShowDroppedButton
+              count={droppedCount}
+              shown={showDropped}
+              onToggle={() => setShowDropped((now) => !now)}
+            />
+          )}
         </div>
       )}
       {/* Heading */}
@@ -791,11 +1083,9 @@ const SessionMap: React.FC<SessionMapProps> = ({
             {reviewTitle?.trim() || 'This design review'}
           </h2>
           <p className="text-[11px] text-gray-500 mt-0.5">
-            {sessions.length} {sessions.length === 1 ? 'session' : 'sessions'}
-            {lines.filter((line) => line.kind === 'variant').length > 0 &&
-              ` · ${lines.filter((line) => line.kind === 'variant').length} ${
-                lines.filter((line) => line.kind === 'variant').length === 1 ? 'variant' : 'variants'
-              }`}
+            {drawnSessions.length} {drawnSessions.length === 1 ? 'session' : 'sessions'}
+            {drawnVariants > 0 &&
+              ` · ${drawnVariants} ${drawnVariants === 1 ? 'variant' : 'variants'}`}
           </p>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
@@ -807,6 +1097,16 @@ const SessionMap: React.FC<SessionMapProps> = ({
             <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full border-2" style={{ borderColor: ADOPTED }} /> Adopted</span>
             <span className="flex items-center gap-1"><span className="w-3 h-px border-t border-dashed" style={{ borderColor: FAINT }} /> Dropped</span>
           </div>
+          {/* Outside the key's `hidden sm:flex`, and deliberately: the key is a
+              nicety a narrow window can do without, and this is the only way back to
+              rows the map has taken off it. */}
+          {droppedCount > 0 && (
+            <ShowDroppedButton
+              count={droppedCount}
+              shown={showDropped}
+              onToggle={() => setShowDropped((now) => !now)}
+            />
+          )}
           {onClose && (
             <button
               onClick={onClose}
@@ -920,7 +1220,10 @@ const SessionMap: React.FC<SessionMapProps> = ({
                 >
                   <title>
                     {stop.rejoin
-                      ? 'Adopted into the main line'
+                      ? // Names the line it went INTO, which since batch BX is not always
+                        // the main one: a green stop on Variant A's row that said "into
+                        // the main line" would describe a merge the map is not drawing.
+                        `Merged into ${mergeTargetWord(stop.line)}${stop.date ? ` · ${stop.date}` : ''}`
                       : marker
                         ? `${lineLabel(stop.line) ?? MAIN_LINE_NAME} — no sessions on it yet`
                         : `${stop.label} — ${stop.date}${stop.revisions ? ` — ${stop.revisions}` : ''}`}
@@ -998,9 +1301,11 @@ const SessionMap: React.FC<SessionMapProps> = ({
                 <VariantActions
                   reviewId={reviewId}
                   variant={variant}
+                  lines={lines}
                   mayEdit={mayEditLines}
                   isMeetingHost={isMeetingHost}
                   onChanged={onChanged}
+                  onOpenLine={openLineFromMap}
                 />
               </div>
             </div>
@@ -1008,17 +1313,21 @@ const SessionMap: React.FC<SessionMapProps> = ({
         </div>
       )}
 
-      {/* One LINE, opened — batch BV. Only the map's two markers open it: the main
-          line's start, and the hollow stop a variant nobody has met on ends at.
+      {/* One LINE, opened — batch BV, and from batch BX the panel of any line the map
+          draws, not only of the two markers: the main line's start, the hollow stop a
+          variant nobody has met on ends at, and the line a variant is drawn with, which
+          is the only thing on the map that says a variant exists until somebody has met
+          on it.
 
           It exists because a variant with no meetings had nothing to click and
           therefore no way into its own room from anywhere but its address: the map
           said "No sessions recorded", the lobby preview counted it and could not
           name it, and the person who had just spent twenty minutes moving a model
-          inside it read all of that as "the variant was not saved". What it offers
-          is the way in, then the same two decisions the map already offers for a
-          variant — and it offers them to exactly the same people, because
-          VariantActions is the component that asks. */}
+          inside it read all of that as "the variant was not saved". What it offers is
+          the way in, then the same decisions the map already offers for a variant —
+          and it offers them to exactly the same people, because VariantActions is the
+          component that asks. A line that is finished with offers neither, and says
+          what became of it instead. */}
       {selectedLine && (
         <div
           className="flex-shrink-0 border-t border-gray-100 bg-gray-50/40 px-4 py-3 max-h-[45%] overflow-y-auto custom-scrollbar"
@@ -1028,15 +1337,18 @@ const SessionMap: React.FC<SessionMapProps> = ({
             <div className="min-w-0">
               <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest">Line</p>
               <h3 className="text-sm font-semibold text-gray-900 leading-snug">
-                {lineLabel(selectedLine) ?? MAIN_LINE_NAME}
+                {lineLabelWithOrigin(lines, selectedLine) ?? MAIN_LINE_NAME}
               </h3>
               <p className="text-[11px] text-gray-500 mt-0.5">
                 {lineStatusWord(selectedLine) ?? 'active'}
+                {/* Where it went, when it went there, and into which line — the last of
+                    which is the half that used to have one answer. */}
+                {mergedIntoText ? ` · ${mergedIntoText}` : ''}
                 {selectedLine.kind === 'variant'
                   ? ` · started ${startedFromText(selectedLine, lines, sessions)}`
                   : ''}
-                {` · ${sessionsOnLine(selectedLine, lines, sessions)} ${
-                  sessionsOnLine(selectedLine, lines, sessions) === 1 ? 'session' : 'sessions'
+                {` · ${selectedLineMeetings.length} ${
+                  selectedLineMeetings.length === 1 ? 'session' : 'sessions'
                 }`}
               </p>
             </div>
@@ -1050,13 +1362,32 @@ const SessionMap: React.FC<SessionMapProps> = ({
             </button>
           </div>
 
-          {/* The way in. The main line's address carries no `?line=` — see
-              lib/reviews/lines.roomPath — so it is asked for with null rather than
-              with the main line's own id, which would be a second address for the
+          {/* A dropped variant is a decision, not somewhere to go. Its meetings stay
+              readable — they are the record of the answer the review tried, and the
+              cards closed with it all carry the reason — but the panel offers no way
+              in and nothing to decide, because a room nobody is meeting in any more is
+              a room that can only be edited by mistake. */}
+          {selectedLine.status === 'dropped' && (
+            <div className="mt-3" data-testid="dropped-line">
+              <p className="text-[11px] text-gray-600 leading-snug">
+                {droppedWhy ? `Dropped: ${droppedWhy}` : 'This variant was dropped.'}
+              </p>
+              <p className="mt-1 text-[10px] text-gray-400 leading-snug">
+                Its meetings stay on the map for the record, and the cards it left open closed with this reason on them.
+              </p>
+            </div>
+          )}
+
+          {/* The way in, for a line somebody is still meeting on. A BUTTON and not a
+              link: pages/RoomPage admits an arrival by its router state or by the mark
+              a deliberate entry writes, and a link to the right address carries
+              neither — it bounced the reader back to the lobby, which is the bug this
+              prop exists to end. The main line is asked for with null, because its
+              address carries no `?line=` and an id would be a second address for the
               same room. */}
-          {reviewId && (
-            <Link
-              to={roomPath(reviewId, selectedLine.kind === 'variant' ? selectedLine.id : null)}
+          {reviewId && selectedLine.status === 'active' && (
+            <button
+              onClick={() => openLineFromMap(isMainLine(selectedLine) ? null : selectedLine.id)}
               data-testid={selectedLine.kind === 'variant' ? 'open-variant' : 'open-main-line'}
               className={`${BUTTON} mt-3 border-black bg-black text-white hover:bg-gray-800`}
               title={
@@ -1066,18 +1397,39 @@ const SessionMap: React.FC<SessionMapProps> = ({
               }
             >
               {selectedLine.kind === 'variant' ? 'Open variant' : 'Open main line'}
-            </Link>
+            </button>
           )}
 
-          {reviewId && mayEditLines && selectedLine.kind === 'variant' && selectedLine.status === 'active' && (
-            <div className="mt-2.5 border-t border-gray-200/70 pt-2.5">
-              <VariantActions
-                reviewId={reviewId}
-                variant={selectedLine}
-                mayEdit={mayEditLines}
-                isMeetingHost={isMeetingHost}
-                onChanged={onChanged}
-              />
+          {reviewId && mayEditLines && selectedLine.status === 'active' && (
+            <div className="mt-2.5 border-t border-gray-200/70 pt-2.5 flex flex-col items-start gap-2">
+              {selectedLine.kind === 'variant' && (
+                <VariantActions
+                  reviewId={reviewId}
+                  variant={selectedLine}
+                  lines={lines}
+                  mayEdit={mayEditLines}
+                  isMeetingHost={isMeetingHost}
+                  onChanged={onChanged}
+                  onOpenLine={openLineFromMap}
+                />
+              )}
+              {/* Any line still being explored is somewhere a variant can leave from,
+                  whether or not the reader happens to have one of its meetings open:
+                  it leaves from the newest one, which is the model this line is at now.
+                  A line that has never met offers nothing here, because there is no
+                  meeting to leave from and its own room says so with a button of its
+                  own. */}
+              {newestOnSelectedLine && (
+                <ExploreVariantButton
+                  reviewId={reviewId}
+                  session={newestOnSelectedLine}
+                  line={selectedLine}
+                  mayEdit={mayEditLines}
+                  isMeetingHost={isMeetingHost}
+                  onChanged={onChanged}
+                  onOpenLine={openLineFromMap}
+                />
+              )}
             </div>
           )}
         </div>
@@ -1137,10 +1489,15 @@ const SessionMap: React.FC<SessionMapProps> = ({
             </div>
           </dl>
 
-          {/* Any session on any line is somewhere a variant can leave from — that is
-              what the map is for. Starting one takes its model and its still-open
-              cards and opens the new line's own room. */}
-          {reviewId && mayEditLines && (
+          {/* Any session on any line still being explored is somewhere a variant can
+              leave from — that is what the map is for. Starting one takes its model and
+              its still-open cards and opens the new line's own room.
+
+              Not offered on a meeting of a DROPPED variant, whose stops stay readable
+              because they are the record: a variant started from one would hang off a
+              line the review has finished with, on a model nobody is maintaining, and
+              the room it opens would be a room the map has just greyed out. */}
+          {reviewId && mayEditLines && !selected.dropped && (
             <div className="mt-3">
               <ExploreVariantButton
                 reviewId={reviewId}
@@ -1149,6 +1506,7 @@ const SessionMap: React.FC<SessionMapProps> = ({
                 mayEdit={mayEditLines}
                 isMeetingHost={isMeetingHost}
                 onChanged={onChanged}
+                onOpenLine={openLineFromMap}
               />
             </div>
           )}

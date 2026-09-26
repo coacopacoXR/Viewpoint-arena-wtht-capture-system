@@ -129,7 +129,11 @@ type RoomMessage =
   | { type: 'EDITING_START'; payload: { force?: boolean } }
   | { type: 'EDITING_STOP'; payload: Record<string, never> }
   | { type: 'EDITING_STATE'; payload: { editorUserId: string | null; editorName: string | null } }
-  | { type: 'EDITING_REFUSED'; payload: { reason: 'busy' | 'role'; editorName: string | null } }
+  // 'busy' names a colleague, 'role' names the review's roster, and 'dropped' names
+  // the LINE: this room is a variant the review has finished with, so there is no
+  // edit to hand out to anybody (batch BX). One sentence each, in
+  // components/review/ReviewEditingNotice.tsx.
+  | { type: 'EDITING_REFUSED'; payload: { reason: 'busy' | 'role' | 'dropped'; editorName: string | null } }
   | { type: 'EDITING_TAKEN_OVER'; payload: { byName: string } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }
@@ -210,6 +214,65 @@ function asModelReference(value: unknown): ModelReference | null {
     fileName: typeof record.fileName === 'string' ? record.fileName : undefined,
     size: typeof record.size === 'number' && Number.isFinite(record.size) ? record.size : undefined,
   };
+}
+
+/**
+ * How long one room believes what it read about its own line's status.
+ *
+ * REVIEW_FACTS_TTL_MS's number, for its reason: making a change to a review takes
+ * effect in a room within a minute of somebody making it, and nobody drops a variant
+ * mid-sentence. A room that has just been told its line is dropped keeps believing it
+ * for longer than this in practice, because nothing un-drops a line.
+ */
+const LINE_STATUS_TTL_MS = 60_000;
+
+/**
+ * Whether one variant of one review has been dropped, read from PostgREST.
+ *
+ * docs/plan/15-sessions-and-variants.md batch BX. A dropped variant is kept on the
+ * session map for the record, and its room name still resolves, so its room is still
+ * reachable by an address somebody typed or a link they kept. Without this the room
+ * server would go on applying, persisting and relaying scene changes there — and
+ * lib/scene/keepPlacements would go on writing them into the review's saved positions
+ * for a line nobody is exploring any more. The refusal belongs HERE rather than in the
+ * browser, because a browser's refusal is one devtools panel away from not being one.
+ *
+ * The same read party/reviewRoles.ts makes, for the same two reasons: it is open to the
+ * anon key (a participant's own screen renders the review's lines too, so this is not a
+ * privileged channel), and it answers FALSE — "not dropped, carry on" — on any failure.
+ * Fail-OPEN is the right direction for this one and is deliberately the opposite of
+ * readReviewFacts' fail-closed: there, an unreadable roster would make a review's models
+ * editable by whoever was standing in the room, while here an unreadable line status
+ * costs one dropped variant's model being changeable for as long as PostgREST is down —
+ * and a room server that refused every scene change whenever the database hiccuped would
+ * turn an outage into a meeting nobody could hold.
+ */
+async function readLineDropped(
+  restUrl: string,
+  anonKey: string,
+  reviewId: string,
+  letter: string,
+): Promise<boolean> {
+  if (!reviewId || !letter || !anonKey) return false;
+  try {
+    const response = await fetch(
+      `${restUrl}/review_lines?review_id=eq.${encodeURIComponent(reviewId)}` +
+        `&letter=eq.${encodeURIComponent(letter)}&select=status`,
+      { headers: { 'Authorization': `Bearer ${anonKey}`, 'apikey': anonKey } },
+    );
+    if (!response.ok) return false;
+    const rows = await response.json();
+    if (!Array.isArray(rows)) return false;
+    // Read as "any row says dropped" rather than "the first row says dropped": a
+    // review has at most one line per letter (unique (review_id, kind, letter)), so
+    // this is one row in practice, and answering on any of them is the direction that
+    // keeps a record a record.
+    return rows.some((row) => (row as { status?: unknown }).status === 'dropped');
+  } catch {
+    // Unreachable, a runtime without fetch, a body that is not JSON, a database that
+    // has not had review_lines at all. All of them are "carry on".
+    return false;
+  }
 }
 
 export default class RoomServer implements Party.Server {
@@ -334,6 +397,14 @@ export default class RoomServer implements Party.Server {
   // server instance: an un-updated client sends one per import, and a room that
   // retries would otherwise fill the container's log with the same line.
   private modelChangeDropLogged = false;
+  // Whether this room is on a line the review has dropped, and when it was last
+  // asked. Cached with the same shape as ReviewFactsCache — the PROMISE, so two scene
+  // changes arriving while the first read is in flight share one round trip — but not
+  // with the same gate: dropping a variant is something the meeting host may do on the
+  // default install, where identityRequired() is false and no roster is ever read, so
+  // hanging this off the roster cache would have left exactly that install unprotected.
+  // See readLineDropped for why a failure to read allows rather than refuses.
+  private droppedLineCache: { at: number; promise: Promise<boolean> } | null = null;
 
   constructor(readonly room: Party.Room) {}
 
@@ -578,8 +649,51 @@ export default class RoomServer implements Party.Server {
     };
   }
 
+  /**
+   * Whether this room is on a line the design review has DROPPED.
+   *
+   * One predicate, and every refusal that depends on it — a scene change, a seed, a
+   * model import, who may change models, and the Edit lock — asks this rather than
+   * reading a line row itself, so the six places cannot drift into six opinions about
+   * whether the record in front of them is still live.
+   *
+   * Only a VARIANT room can answer true, and it answers without a read for a main-line
+   * one: the room name carries the letter (`<reviewId>~A`, lib/reviews/lines.partyRoomName),
+   * and a main line has no status to be dropped by. That is also what keeps the default
+   * install and every ad-hoc room — no ANON_KEY, no review_lines, no database at all —
+   * on the path they were on before, paying nothing.
+   *
+   * Believed for a minute, which is REVIEW_FACTS_TTL_MS's own number and the same shape
+   * of trade: dropping a variant takes effect in its room within a minute of the meeting
+   * doing it, and nobody drops a variant mid-sentence. A `true` is never wrong to keep
+   * believing, because nothing un-drops a line.
+   */
+  private async droppedLine(): Promise<boolean> {
+    const roomId = this.room.id ?? '';
+    const cut = roomId.indexOf('~');
+    if (cut === -1) return false;
+    const reviewId = roomId.slice(0, cut);
+    const letter = roomId.slice(cut + 1);
+    if (!reviewId || !letter) return false;
+
+    const cached = this.droppedLineCache;
+    if (cached && Date.now() - cached.at < LINE_STATUS_TTL_MS) return cached.promise;
+
+    const anonKey = this.envValue('ANON_KEY');
+    if (!anonKey) return false;
+    const restUrl = (this.envValue('REST_URL') || 'http://rest:3000').replace(/\/+$/, '');
+    const promise = readLineDropped(restUrl, anonKey, reviewId, letter);
+    this.droppedLineCache = { at: Date.now(), promise };
+    return promise;
+  }
+
   /** Why this connection may not change the models, or null when it may. */
   private async sceneRefusalFor(connId: string): Promise<SceneRefusalReason | null> {
+    // The ROOM first, and before anybody's role is looked up: this is a fact about the
+    // line the room is on rather than about the person asking, and answering it second
+    // would tell the review's owner "only the host can change the models" in a room
+    // where the real answer is that nobody can.
+    if (await this.droppedLine()) return 'dropped-line';
     const { changeRefusal } = scenePermissions(await this.sceneAuthorityFor(connId));
     return changeRefusal;
   }
@@ -773,6 +887,20 @@ export default class RoomServer implements Party.Server {
   private async startEditing(conn: Party.Connection, force: boolean): Promise<void> {
     const userId = this.connToUser.get(conn.id);
     if (!userId) return;
+
+    // The room's own line first, and before this person's role: a dropped variant is a
+    // record, and this server is the one place that hands out the Edit lock, so handing
+    // it out here would be an offer the room cannot honour — the lock would turn on, the
+    // tools would appear, and every change made with them would then be refused by
+    // sceneRefusalFor. `force` is not an answer to it either, because taking the lock
+    // away from a colleague is a different question from whether there is a lock to give.
+    if (await this.droppedLine()) {
+      conn.send(JSON.stringify({
+        type: 'EDITING_REFUSED',
+        payload: { reason: 'dropped', editorName: null },
+      } as RoomMessage));
+      return;
+    }
 
     if (!(await this.mayEditReview(conn.id))) {
       conn.send(JSON.stringify({
@@ -1429,6 +1557,13 @@ export default class RoomServer implements Party.Server {
       // function tells the browser. lib/reviews/roles.ts's `setModelEditors` is
       // the row that says so.
       const senderId = this.connToUser.get(sender.id);
+      // A dropped line's room has no models anybody may change, so there is no
+      // setting to choose the people who may. Refused with the room's own reason
+      // rather than with a role one, for the reason sceneRefusalFor gives.
+      if (await this.droppedLine()) {
+        this.refuseScene(sender, 'dropped-line');
+        return;
+      }
       const authority = await this.sceneAuthorityFor(sender.id);
       const { editorsRefusal } = scenePermissions(authority);
       // Admission is a fact about this connection rather than a rule about who

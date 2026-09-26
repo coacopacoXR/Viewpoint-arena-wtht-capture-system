@@ -1,4 +1,4 @@
-// Which models the main line ends up showing when a variant is adopted into it.
+// Which models the line being merged into ends up showing.
 //
 // docs/plan/15-sessions-and-variants.md batch BL. The plan's rule, in the user's
 // own words: "the variant's latest model revision(s) become the main line's current
@@ -7,9 +7,18 @@
 //
 // So there are exactly three answers, and the third is a SENTENCE rather than a
 // screen. That is the whole design constraint here: two hardware engineers who have
-// spent a week on a variant and a fortnight on the main line are not being shown a
-// three-way comparison with coloured hunks, they are being asked which model to put
-// on the screen and given two buttons.
+// spent a week on a variant and a fortnight on the line it is being taken into are
+// not being shown a three-way comparison with coloured hunks, they are being asked
+// which model to put on the screen and given two buttons.
+//
+// BATCH BX generalised "the main line" to "the line it is being merged into", which
+// is what the user asked for ("variants can only be merged with the main line, not
+// with another variant"). Nothing about the decision changed — it is still per model,
+// still three answers, still one sentence — only WHOSE scene is being compared and
+// whose name goes in the sentence. The field names below keep saying `main…` for the
+// target line's half, and deliberately: they are the fields every caller and every
+// test already reads, and the target IS the main line in the case this was written
+// for. What must not stay constant is the WORDS, and those come from `targetLabel`.
 //
 // Everything is pure — revision ids in, a plan out. No reads, no clock, no React.
 // The same function decides in two places that share no runtime: api/reviews/lines.ts,
@@ -17,8 +26,8 @@
 // posts "adopt" and, when the endpoint answers that a question has to be asked, it
 // asks the one the endpoint wrote.
 //
-// THE WORDS ARE THE SPEC. Nothing in this file may print branch, fork, merge or
-// commit; the question it builds is read out loud in a meeting.
+// THE WORDS ARE THE SPEC. Nothing in this file may print branch, fork or commit; the
+// question it builds is read out loud in a meeting.
 
 import { revisionLabel } from '../trackerContinuity';
 import { MAIN_LINE_NAME } from './lines';
@@ -39,9 +48,12 @@ export interface AdoptFacts {
    * both lines agree on. Empty for a parent session recorded before
    * tracker_sessions.revision_ids existed — and then nothing can be proved to have
    * changed, so every difference is asked about rather than guessed at.
+   *
+   * Batch BX: the point both lines agree on is the variant's own parent line, which
+   * for a variant of a variant is that variant and not the review's main line.
    */
   parentRevisionIds: readonly string[];
-  /** What the main line is showing now. */
+  /** What the line being merged INTO is showing now. */
   mainRevisionIds: readonly string[];
   /** What the variant is showing now. */
   variantRevisionIds: readonly string[];
@@ -49,29 +61,51 @@ export interface AdoptFacts {
   revisions: readonly AdoptableRevision[];
   /** "Variant A" — how the question names the variant. Null names it "the variant". */
   variantLabel: string | null;
+  /**
+   * How the question names the line being merged INTO: "the main line", "Variant A".
+   *
+   * Batch BX, and the reason it is a field rather than the constant it was. Omitted
+   * and the question says "the main line", which is what every caller before this
+   * batch meant and what a caller that has not read a target still means.
+   */
+  targetLabel?: string | null;
 }
 
 /** The question, and the two complete scenes its two answers mean. */
 export interface AdoptChoice {
   /** One plain sentence, ending in a question mark. Shown as it is. */
   question: string;
-  /** The main line's scene if the answer is "keep the main line's". */
+  /** The target line's scene if the answer is "keep the target line's". */
   mainRevisionIds: string[];
-  /** The main line's scene if the answer is "take the variant's". */
+  /** The target line's scene if the answer is "take the variant's". */
   variantRevisionIds: string[];
 }
 
 export type AdoptPlan =
-  /** Neither line's models differ: adopting moves the cards and changes no scene. */
+  /** Neither line's models differ: merging moves the cards and changes no scene. */
   | { kind: 'unchanged'; revisionIds: string[] }
-  /** Only the variant moved, so its models become the main line's. No question. */
+  /** Only the variant moved, so its models become the target line's. No question. */
   | { kind: 'take'; revisionIds: string[] }
   /** Both moved the same model. One question, two answers. */
   | { kind: 'ask'; choice: AdoptChoice };
 
 /** Which of the two answers the caller gave. Anything else is no answer at all. */
-export function asAdoptKeep(value: unknown): 'main' | 'variant' | null {
-  return value === 'main' || value === 'variant' ? value : null;
+export type AdoptKeep = 'target' | 'variant';
+
+/**
+ * Which of the two answers a request gave, or null when it gave neither.
+ *
+ * 'target' is the line being merged into and 'variant' the one being merged. Batch BX
+ * renamed the first from 'main' — the target is not always the main line any more, and
+ * a `keep: 'main'` arriving for a merge into Variant A would be an answer about a line
+ * that is not in the question — but 'main' is still READ as 'target', so a browser
+ * holding the bundle from before the rename cannot break a review by answering in the
+ * old word.
+ */
+export function asAdoptKeep(value: unknown): AdoptKeep | null {
+  if (value === 'variant') return 'variant';
+  if (value === 'target' || value === 'main') return 'target';
+  return null;
 }
 
 /** One model line's newest visible revision, out of a set of revision ids. */
@@ -194,7 +228,7 @@ export function adoptPlan(facts: AdoptFacts): AdoptPlan {
   return {
     kind: 'ask',
     choice: {
-      question: adoptQuestion(conflicts, facts.variantLabel, revisions),
+      question: adoptQuestion(conflicts, facts.variantLabel, revisions, facts.targetLabel ?? null),
       mainRevisionIds: withSide('main'),
       variantRevisionIds: withSide('variant'),
     },
@@ -208,33 +242,40 @@ export function adoptPlan(facts: AdoptFacts): AdoptPlan {
  * both lines moved, and the same sentence with the revisions listed for the rare
  * review where two models moved on both — still one question with the same two
  * answers, because two questions in a row is the beginning of a conflict screen.
+ *
+ * `targetLabel` is batch BX: the first half names the line being merged INTO, which
+ * is "the main line" when that is where it is going and "Variant A" when it is not.
+ * A question that said "the main line" about a merge into Variant A would be asking
+ * somebody to choose between two models and then writing the answer onto a third.
  */
 export function adoptQuestion(
   conflicts: readonly { main: string; variant: string }[],
   variantLabel: string | null,
   revisions: readonly AdoptableRevision[],
+  targetLabel: string | null = null,
 ): string {
   const theirs = variantLabel ?? 'the variant';
+  const ours = targetLabel?.trim() || `the ${MAIN_LINE_NAME.toLowerCase()}`;
   const join = (ids: readonly string[]): string => {
     const names = ids.map((id) => nameOf(id, revisions));
     if (names.length <= 1) return names[0] ?? 'the model';
     return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
   };
-  const ours = join(conflicts.map((conflict) => conflict.main));
+  const ourList = join(conflicts.map((conflict) => conflict.main));
   const theirList = join(conflicts.map((conflict) => conflict.variant));
-  return `Keep ${ours} from the ${MAIN_LINE_NAME.toLowerCase()} or ${theirList} from ${theirs}?`;
+  return `Keep ${ourList} from ${ours} or ${theirList} from ${theirs}?`;
 }
 
 /**
- * The scene the main line gets, once the answer is known.
+ * The scene the target line gets, once the answer is known.
  *
  * Null when the plan asked a question and `keep` is not one of its two answers —
  * the caller then asks rather than choosing, which is the whole point of the plan
  * being a plan.
  */
-export function adoptRevisionIds(plan: AdoptPlan, keep: 'main' | 'variant' | null): string[] | null {
+export function adoptRevisionIds(plan: AdoptPlan, keep: AdoptKeep | null): string[] | null {
   if (plan.kind === 'ask') {
-    if (keep === 'main') return plan.choice.mainRevisionIds;
+    if (keep === 'target') return plan.choice.mainRevisionIds;
     if (keep === 'variant') return plan.choice.variantRevisionIds;
     return null;
   }

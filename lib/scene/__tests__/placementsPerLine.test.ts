@@ -32,10 +32,13 @@ const VARIANT_SLOT: StoredPlacement = {
 
 const VARIANT: ReviewLine = {
   id: 'line-a', reviewId: 'rev-1', kind: 'variant', name: 'Frame forward', letter: 'A',
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: 'Paco',
+  parentSessionId: null, parentLineId: 'line-main', mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: 'Paco',
   createdAt: '2026-09-25T09:00:00.000Z', closedAt: null,
 };
-const MAIN: ReviewLine = { ...VARIANT, id: 'line-main', kind: 'main', name: 'Main line', letter: null };
+const MAIN: ReviewLine = {
+  ...VARIANT, id: 'line-main', kind: 'main', name: 'Main line', letter: null, parentLineId: null,
+};
 
 function baseDraft(asset: ReviewDraft['asset'] = { modelType: 'headphones', references: [] }): ReviewDraft {
   return {
@@ -86,6 +89,52 @@ describe('placementsForLine — which slot a line opens on', () => {
   it('answers nothing for a review with no asset, which is a review with no positions', () => {
     expect(placementsForLine(undefined, 'line-a')).toBeUndefined();
     expect(placementsForLine(null, null)).toBeUndefined();
+  });
+
+  // ─── Batch BX: a variant of a variant opens on its PARENT’s positions ────────
+  //
+  // `slotOrder` is the chain lib/reviews/lines.placementSlotOrder works out — the
+  // line's own id and then its ancestors', stopping before the main line, whose
+  // positions are `asset.placements` and have no id in them. Until batch BX a
+  // variant with no slot of its own jumped straight to the main line's, which is
+  // wrong for a variant started from another variant: "a variant starts from its
+  // parent line's current state" means Variant B, explored from Variant A after A
+  // moved the frame, opens with the frame moved.
+
+  it('walks up the chain to the first line that has a slot of its own', () => {
+    const asset = { placements: [MAIN_SLOT], linePlacements: { 'line-a': [VARIANT_SLOT] } };
+    // B was started from A and nobody has moved anything in B: B shows A.
+    expect(placementsForLine(asset, 'line-b', ['line-b', 'line-a'])).toEqual([VARIANT_SLOT]);
+    // C was started from B, which itself has no slot: C shows A too, and not the main
+    // line's — the chain is walked all the way up rather than one step.
+    expect(placementsForLine(asset, 'line-c', ['line-c', 'line-b', 'line-a'])).toEqual([VARIANT_SLOT]);
+  });
+
+  it('stops at the first slot it finds, so a line that has diverged keeps its own', () => {
+    const asset = {
+      placements: [MAIN_SLOT],
+      linePlacements: { 'line-a': [VARIANT_SLOT], 'line-b': [] },
+    };
+    // B moved everything back, which is a divergence and not an absence: C, started
+    // from B, inherits the empty slot rather than reaching past it to A's.
+    expect(placementsForLine(asset, 'line-c', ['line-c', 'line-b', 'line-a'])).toEqual([]);
+    expect(placementsForLine(asset, 'line-b', ['line-b', 'line-a'])).toEqual([]);
+  });
+
+  it('falls back to the main line when no line in the chain has a slot', () => {
+    const asset = { placements: [MAIN_SLOT], linePlacements: {} };
+    expect(placementsForLine(asset, 'line-c', ['line-c', 'line-b', 'line-a'])).toEqual([MAIN_SLOT]);
+  });
+
+  it('ignores an order it was given nothing in', () => {
+    // A caller with no lines in hand still gets the pre-BX answer rather than the
+    // main line's positions being forced on a variant that HAS a slot of its own: an
+    // EMPTY order means "no chain was worked out", so the id it named is the order.
+    const asset = { placements: [MAIN_SLOT], linePlacements: { 'line-a': [VARIANT_SLOT] } };
+    expect(placementsForLine(asset, 'line-a', [])).toEqual([VARIANT_SLOT]);
+    // An order with nothing usable IN it is a different case: it was worked out and it
+    // named no line, so there is no slot to honour and the main line's is the answer.
+    expect(placementsForLine(asset, 'line-a', ['', '   '])).toEqual([MAIN_SLOT]);
   });
 });
 

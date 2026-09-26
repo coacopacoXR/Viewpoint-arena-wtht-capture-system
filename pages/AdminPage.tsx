@@ -1208,6 +1208,17 @@ function formatAuditEvent(e: AuditEvent): string {
       return `${actor} declined ${subject} · room ${room} · ${when}`;
     case 'join_policy':
       return `${actor} set join policy to ${e.detail} · room ${room} · ${when}`;
+    // Batch BY: the irreversible ones, written by the api with the verified caller.
+    case 'review_deleted':
+      return `${actor} deleted the design review "${e.subject_name || room}"${e.detail ? ` (${e.detail})` : ''} · ${when}`;
+    case 'session_deleted':
+      return `${actor} deleted a session of "${e.subject_name || room}"${e.detail ? ` (${e.detail})` : ''} · ${when}`;
+    case 'variant_dropped':
+      return `${actor} dropped ${e.subject_name || 'a variant'}${e.detail ? `: ${e.detail}` : ''} · room ${room} · ${when}`;
+    case 'variant_merged':
+      return `${actor} merged ${e.subject_name || 'a variant'}${e.detail ? ` (${e.detail})` : ''} · room ${room} · ${when}`;
+    case 'review_editing':
+      return `${actor} edited the review · room ${room} · ${when}`;
     default:
       return `${actor} ${e.action} · room ${room} · ${when}`;
   }
@@ -1239,8 +1250,9 @@ const ActivitySection: React.FC = () => {
         Activity
       </h2>
       <p className="text-gray-500 text-[11px] leading-relaxed mb-3">
-        This records grants made through the app; it is not a tamper-proof
-        ledger, and names are self-asserted.
+        Who admitted people, edited reviews, and deleted, dropped or merged
+        anything. Not a tamper-proof ledger: on installs without accounts, names
+        are self-asserted.
       </p>
       {!result ? (
         <p className="text-gray-600 text-xs">Loading…</p>

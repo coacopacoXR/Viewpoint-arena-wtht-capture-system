@@ -222,6 +222,38 @@ old settings files are backed up next to the new ones
 
 ---
 
+## 7b. Backups and restore
+
+The install backs itself up. The `db-backup` service writes, every 24 hours and
+once when it starts:
+
+- `db-YYYYMMDD-HHMMSS.sql.gz`: the whole database (reviews, meetings, cards,
+  accounts);
+- `models-YYYYMMDD-HHMMSS.tar.gz`: the imported 3D model files.
+
+They go into the `db-backups` Docker volume, and the newest 14 of each are kept.
+Change that in `.env`: `BACKUP_INTERVAL_HOURS`, `BACKUP_KEEP`, and
+`BACKUP_MODELS=false` to skip the model files. Then run `docker compose up -d`.
+
+**Check it is working:** `docker compose logs db-backup` prints one
+`backup ok: …` line per file. The admin console's health, and
+`https://<your-address>/api/health`, report `backup: ok` while the newest backup
+is recent.
+
+**Copy them off the machine.** A backup on the same disk does not survive the
+disk. For example, copy them to the current folder:
+
+```bash
+docker compose run --rm --no-deps -v "$PWD":/out --entrypoint sh db-backup -c 'cp /backups/* /out/'
+```
+
+**Restore** (this replaces the current database with the backup's):
+
+```bash
+docker compose run --rm --no-deps --entrypoint sh db-backup -c 'ls -1 /backups'   # pick one
+deploy/backup/restore.sh db-20260926-020000.sql.gz --yes
+```
+
 ## 8. Reset or remove
 
 | To | Run |

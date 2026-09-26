@@ -40,7 +40,8 @@ const HOLLOW = '#ffffff';
 
 const MAIN: ReviewLine = {
   id: MAIN_ID, reviewId: REVIEW, kind: 'main', name: '', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: '',
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: '',
   createdAt: '2026-03-01T09:00:00.000Z', closedAt: null,
 };
 
@@ -48,7 +49,8 @@ const MAIN: ReviewLine = {
 function variant(overrides: Partial<ReviewLine> = {}): ReviewLine {
   return {
     id: VARIANT_ID, reviewId: REVIEW, kind: 'variant', name: 'Steel hinge pin', letter: 'A',
-    parentSessionId: 'sess-2', status: 'active', createdBy: null, createdByName: 'Rae',
+    parentSessionId: 'sess-2', parentLineId: MAIN_ID, mergedIntoLineId: null, dropReason: null,
+    status: 'active', createdBy: null, createdByName: 'Rae',
     createdAt: '2026-05-04T09:00:00.000Z', closedAt: null, ...overrides,
   };
 }
@@ -175,21 +177,41 @@ describe('the miniature of a review with a variant', () => {
     expect(num(circleOf(current), 'cx')).toBeLessThan(num(circleOf(rejoin[0]), 'cx'));
   });
 
-  it('draws a dropped variant greyed and dashed, and keeps its meeting on the card', () => {
+  it('does not draw a dropped variant, or the meeting that was held on it', () => {
+    // Batch BX. A dropped variant is kept for the record and the record is the map and
+    // the Lines list, both of which have a "Show dropped" toggle — this strip has room
+    // for the shape of the review as it stands and nothing else, and a row of grey
+    // dashes in it reads as a drawing that went wrong rather than as history. Its
+    // meetings go with it: a stop with no row to sit on is a dot in mid-air.
     const lines = [MAIN, variant({ status: 'dropped', closedAt: '2026-05-06T10:00:00.000Z' })];
     const { container } = draw({ lines, sessions: [...MAIN_SESSIONS, ...VARIANT_SESSIONS] });
 
-    const dropped = container.querySelectorAll('[data-testid="mini-stop"][data-dropped]');
-    expect(dropped).toHaveLength(1);
-    expect(attr(circleOf(dropped[0]), 'stroke')).toBe(DROPPED);
-    expect(circleOf(dropped[0])?.hasAttribute('stroke-dasharray')).toBe(true);
-    expect(rejoins(container)).toHaveLength(0);
+    expect(container.querySelectorAll('[data-testid="mini-stop"][data-dropped]')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-testid="mini-stop"][data-line="variant"]')).toHaveLength(0);
+    // Nothing is drawn in the dropped grey at all, so there is no half-hidden row left
+    // behind for somebody to wonder about.
+    expect(container.innerHTML).not.toContain(DROPPED);
+    // The main line's own meetings are untouched, and so is the count in the label:
+    // a card that said "Main line and 1 variant" about a review that has rejected its
+    // only variant would be describing a review that no longer exists.
+    expect(container.querySelectorAll('[data-testid="mini-stop"][data-line="main"]'))
+      .toHaveLength(MAIN_SESSIONS.length);
+    expect(attr(screen.getByTestId('mini-session-map'), 'aria-label')).toBe('Main line, no variants');
+  });
 
-    // The line that leaves for it is dashed too: a dropped variant reads as history
-    // in the stroke, not in a label this drawing has no room for.
-    const dashed = [...container.querySelectorAll('path[stroke-dasharray]')];
-    expect(dashed.length).toBeGreaterThan(0);
-    expect(dashed.every((path) => attr(path, 'stroke') === DROPPED)).toBe(true);
+  it('still draws a variant that was merged, because that is how the review got here', () => {
+    // The other half of the same rule, and the reason the filter is on 'dropped' and not
+    // on "finished with": a merged line is part of the answer the review settled on, and
+    // the green return into the line it went to is the most informative thing this
+    // miniature can say about a review that has been through a variant.
+    const lines = [
+      MAIN,
+      variant({ status: 'adopted', closedAt: '2026-05-06T10:00:00.000Z', mergedIntoLineId: MAIN_ID }),
+    ];
+    const { container } = draw({ lines, sessions: [...MAIN_SESSIONS, ...VARIANT_SESSIONS] });
+
+    expect(container.querySelectorAll('[data-testid="mini-stop"][data-line="variant"]')).toHaveLength(1);
+    expect(attr(screen.getByTestId('mini-session-map'), 'aria-label')).toBe('Main line and 1 variant');
   });
 
   it('draws a variant in its own colour, not the main line\'s', () => {

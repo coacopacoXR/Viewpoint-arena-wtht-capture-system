@@ -40,7 +40,7 @@ import { identityRequired, publicIdentityOf } from '../lib/auth/authRules';
 import { useConnectorConfig } from '../lib/config/ConfigContext';
 import { getCurationSummary, createReview, type CurationSummary } from '../lib/curationsRepo';
 import { useReviewSetupStore, createReviewDraft, reviewTitleFrom, NEW_REVIEW_TITLE } from '../lib/reviewSetupStore';
-import { roomPath } from '../lib/reviews/lines';
+import { joinLineIdOf, markRoomEntered, roomHref } from '../lib/reviews/openLine';
 import { can, resolveRole } from '../lib/reviews/roles';
 import LobbyTopBar from '../components/lobby/LobbyTopBar';
 import LobbyActions from '../components/lobby/LobbyActions';
@@ -90,6 +90,15 @@ const LobbyPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const joinRoomId: string | undefined = (location.state as { joinRoomId?: string } | null)?.joinRoomId;
+  // The LINE this browser was sent here to enter, when the arrival named one.
+  //
+  // lib/reviews/openLine puts it in the router state, and it is the reason this page
+  // reads anything but the review: a room will not admit a browser that has no name, so
+  // openLine sends a nameless one HERE with the review AND the line and lets this page
+  // ask. Dropping the line on the way in — entering the review's main line instead —
+  // would land somebody who pressed "Open" on Variant B in a different meeting looking
+  // at a different model, with no idea the bounce had cost them anything.
+  const joinLineId = joinLineIdOf(location.state);
 
   const [identity, setIdentity] = useIdentity();
   // An accountId in vp_user means the name came from a signed-in account: this page does
@@ -203,7 +212,14 @@ const LobbyPage: React.FC = () => {
 
   /** True when this browser has no account behind its name, so the name is typed here. */
   const nameEditable = !accountId;
-  const needsName = nameEditable && name.trim() === '';
+  // Once asked, the name field STAYS until this browser leaves the page: it used to
+  // be shown only while the name was empty, so the first letter typed into it made it
+  // disappear, and the person could neither finish their name nor press Enter.
+  const [askedForName, setAskedForName] = useState(false);
+  useEffect(() => {
+    if (nameEditable && name.trim() === '') setAskedForName(true);
+  }, [nameEditable, name]);
+  const needsName = nameEditable && (askedForName || name.trim() === '');
 
   async function handleSignOut() {
     setError('');
@@ -218,15 +234,21 @@ const LobbyPage: React.FC = () => {
   /**
    * Open a room, as the review's own permanent address.
    *
-   * `roomPath` rather than a string built here, so a variant's `?line=` is spelled the
+   * `roomHref` rather than a string built here, so a variant's `?line=` is spelled the
    * one way lib/reviews/lines spells it and the room resolves itself to the line the
-   * link named instead of to its main line.
+   * link named instead of to its main line — and so `edit=1` is appended as a SECOND
+   * parameter. It used to be `${path}?edit=1`, which on a path that already carried
+   * `?line=` produced `?line=<id>?edit=1`: a line id nobody can resolve, so the room
+   * quietly opened on the main line and the variant somebody pasted a link for looked
+   * like it had never existed. `markRoomEntered` writes the same mark
+   * lib/reviews/openLine writes, which is what lets a RELOAD of the room back in.
    */
   function enterRoom(roomId: string, options: { edit?: boolean; lineId?: string | null } = {}) {
     setIdentity(buildIdentity());
-    sessionStorage.setItem('vp_enteredRoom', roomId);
-    const path = roomPath(roomId, options.lineId ?? null);
-    navigate(options.edit ? `${path}?edit=1` : path, { state: { fromLobby: true } });
+    markRoomEntered(roomId);
+    navigate(roomHref(roomId, options.lineId ?? null, options.edit === true), {
+      state: { fromLobby: true },
+    });
   }
 
   /**
@@ -268,13 +290,18 @@ const LobbyPage: React.FC = () => {
    * Nothing is created here: the review either exists already or the person who started
    * it created it, and minting a room out of a mistyped link is how a lobby fills up with
    * reviews nobody will ever open again.
+   *
+   * The line is the box's own when it names one and the arrival's otherwise: this is the
+   * function a nameless browser bounced here by lib/reviews/openLine ends up in, and the
+   * box is prefilled with the bare review id, which carries no `?line=`. Without that
+   * second half the bounce would lose the variant the person was trying to open.
    */
   function handleJoin() {
     if (!name.trim()) { setError('Enter your name first.'); return; }
     const target = parseJoinTarget(joinCode);
     if (!target) { setError('Enter a room code or link.'); return; }
     setError('');
-    enterRoom(target.roomId, { lineId: target.lineId });
+    enterRoom(target.roomId, { lineId: target.lineId ?? joinLineId });
   }
 
   // ─── Deletes ────────────────────────────────────────────────────────────────
@@ -322,6 +349,10 @@ const LobbyPage: React.FC = () => {
     );
   };
 
+  // The panel is showing the review an invitation named, so its button says "Join" and
+  // it enters the LINE that invitation carried rather than the review's main one.
+  const invitedTo = !!joinRoomId && selected?.id === joinRoomId;
+
   return (
     // Its own scroll container: index.html fixes the body and hides its overflow
     // for the 3D room, so a page that is taller than the window must scroll
@@ -355,7 +386,17 @@ const LobbyPage: React.FC = () => {
               type="text"
               value={name}
               onChange={(event) => { setName(event.target.value); setError(''); }}
-              onKeyDown={(event) => { if (event.key === 'Enter') void handleNewDesignReview(''); }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return;
+                // Enter in the name field finishes whatever this browser came here to
+                // do. With an invitation in the router state that is entering the
+                // review — and the LINE — it named; without one it is starting a new
+                // review, which is the page's headline button. The invited case used to
+                // create a review too, so the natural thing to do after typing a name
+                // was the one thing nobody arriving by a link wanted.
+                if (joinRoomId) handleJoin();
+                else void handleNewDesignReview('');
+              }}
               placeholder="e.g. Alex Chen"
               maxLength={40}
               autoFocus
@@ -442,12 +483,18 @@ const LobbyPage: React.FC = () => {
               <ReviewPreview
                 key={selected.id}
                 review={selected}
-                invited={!!joinRoomId && selected.id === joinRoomId}
+                invited={invitedTo}
                 mayDelete={mayDelete(selected)}
                 mayEdit={mayEditReview(selected)}
                 isMeetingHost={!accountsOn}
                 accountsOn={accountsOn}
-                onOpen={() => enterRoom(selected.id)}
+                onOpen={() => enterRoom(selected.id, { lineId: invitedTo ? joinLineId : null })}
+                // Every "open a line" inside the panel goes through the lobby's own
+                // door rather than through lib/reviews/openLine, because this page has
+                // a name to write first: openLine refuses to invent one and would
+                // bounce back here, and a bounce from the panel that is already here
+                // is a button that appears to do nothing.
+                onOpenLine={(lineId) => enterRoom(selected.id, { lineId })}
                 onDeleted={() => {
                   lobby.forget(selected.id);
                   setSelectedId(null);

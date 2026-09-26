@@ -48,6 +48,12 @@ export const HEALTH_DETAILS = {
   routeUnavailable: 'route unavailable',
   /** healthCheck threw. The reason is in the server log, never here. */
   checkFailed: 'health check failed',
+  /** The newest database backup is within twice the backup interval. */
+  backupRecent: 'recent backup found',
+  /** The newest database backup is older than twice the backup interval. */
+  backupStale: 'last backup is older than expected',
+  /** No database backup exists yet, or the backup folder cannot be read. */
+  backupMissing: 'no backup found',
 } as const;
 
 export type HealthDetail = (typeof HEALTH_DETAILS)[keyof typeof HEALTH_DETAILS];

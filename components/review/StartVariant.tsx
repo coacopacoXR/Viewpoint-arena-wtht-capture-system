@@ -34,7 +34,8 @@ import {
   type LineActionResult,
 } from '../../lib/reviews/linesClient';
 import { lineOriginSession, listLines, resetLineCache } from '../../lib/reviews/linesRepo';
-import { roomPath, sessionLabel } from '../../lib/reviews/lines';
+import { openLine } from '../../lib/reviews/openLine';
+import { sessionLabel } from '../../lib/reviews/lines';
 import { shortDate } from '../../lib/trackerContinuity';
 
 const FIELD =
@@ -46,6 +47,18 @@ const BUTTON =
 interface Origin {
   /** The meeting it leaves from, or null for a line that has never met. */
   sessionId: string | null;
+  /**
+   * The LINE it leaves from, or null when this review has no lines at all.
+   *
+   * Batch BX, and the half that makes a variant of a variant possible: the endpoint
+   * records it as `parent_line_id`, and lib/reviews/linesRepo then reads the new room's
+   * model, its saved positions and its carried-over cards from that line rather than
+   * from the review's main one. Worked out here rather than left to the endpoint's
+   * fallback because this panel already has the lines in hand and because a null sent
+   * for a variant's room would mean "the main line" — the one answer that is wrong
+   * exactly when the button is pressed inside a variant.
+   */
+  lineId: string | null;
   /** The sentence the panel shows after "Starts from:". */
   text: string;
 }
@@ -90,6 +103,14 @@ export interface StartVariantProps extends LineActionContext {
   inFlow?: boolean;
   /** Called once the variant exists, before the navigation, so a host can re-read. */
   onStarted?: () => void;
+  /**
+   * How this host opens a line's room. The lobby passes its own `enterRoom`, which
+   * submits the name form first; every other host omits it and lib/reviews/openLine is
+   * used, which is what sets the room's entry guard. A plain <Link> is never right:
+   * pages/RoomPage admits an arrival by its router state, so a link to the correct
+   * address bounces back to the lobby.
+   */
+  onOpenLine?: (lineId: string | null) => void;
   'data-testid'?: string;
 }
 
@@ -103,6 +124,7 @@ const StartVariant: React.FC<StartVariantProps> = ({
   look = 'bar',
   inFlow = false,
   onStarted,
+  onOpenLine,
   'data-testid': testId = 'start-variant',
 }) => {
   const navigate = useNavigate();
@@ -136,7 +158,10 @@ const StartVariant: React.FC<StartVariantProps> = ({
       const from = await lineOriginSession(line);
       if (cancelled) return;
       if (!from) {
-        setOrigin({ sessionId: null, text: 'the model as it is now' });
+        // No meeting to name, but the LINE is still known and still goes: the endpoint
+        // writes it as parent_line_id, and a variant of a variant with no meetings
+        // anywhere reads its model, its positions and its cards from its parent.
+        setOrigin({ sessionId: null, lineId: line?.id ?? null, text: 'the model as it is now' });
         return;
       }
       // Labelled by the line the meeting is actually ON: a variant that has never met
@@ -145,7 +170,11 @@ const StartVariant: React.FC<StartVariantProps> = ({
       const onLine = lines.find((each) => each.id === from.lineId) ?? line;
       const when = shortDate(from.endedAt);
       const which = sessionLabel(onLine, from.seq) ?? (from.title || 'the last session');
-      setOrigin({ sessionId: from.id, text: when ? `${which} · ${when}` : which });
+      setOrigin({
+        sessionId: from.id,
+        lineId: onLine?.id ?? line?.id ?? null,
+        text: when ? `${which} · ${when}` : which,
+      });
     })();
     return () => { cancelled = true; };
   }, [open, reviewId, lineId]);
@@ -155,7 +184,12 @@ const StartVariant: React.FC<StartVariantProps> = ({
     if (wanted === '' || busy) return;
     setBusy(true);
     setError(null);
-    const result: LineActionResult = await exploreVariant(reviewId, origin?.sessionId ?? null, wanted, { isMeetingHost });
+    const result: LineActionResult = await exploreVariant(
+      reviewId,
+      { parentSessionId: origin?.sessionId ?? null, parentLineId: origin?.lineId ?? lineId },
+      wanted,
+      { isMeetingHost },
+    );
     setBusy(false);
     if (!result.ok || !result.line) {
       setError(result.error ?? 'The variant could not be started.');
@@ -165,8 +199,9 @@ const StartVariant: React.FC<StartVariantProps> = ({
     // navigation opens resolves its line from it.
     resetLineCache();
     onStarted?.();
-    navigate(roomPath(reviewId, result.line.id));
-  }, [busy, isMeetingHost, name, navigate, onStarted, origin, reviewId]);
+    if (onOpenLine) onOpenLine(result.line.id);
+    else openLine(navigate, reviewId, result.line.id);
+  }, [busy, isMeetingHost, lineId, name, navigate, onOpenLine, onStarted, origin, reviewId]);
 
   if (!mayEdit) return null;
 

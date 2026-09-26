@@ -136,13 +136,20 @@ describe('docs/supabase-schema.sql — adopting and dropping a variant', () => {
   // BOUNDED slices, to the next statement rather than to the end of the file: batch BN
   // added `delete_review` below these two, and it legitimately deletes review_lines —
   // so an open-ended slice made "never deletes the variant" match a different
-  // function's work and say something untrue about this one.
-  const ADOPT = SQL.slice(
-    SQL.indexOf('create or replace function adopt_review_line'),
-    SQL.indexOf('create or replace function drop_review_line'),
-  );
+  // function's work and say something untrue about this one. Batch BX split the merge
+  // into a three-argument function and a two-argument wrapper that keeps the old
+  // signature alive, and those are sliced apart for the same reason: an assertion about
+  // what the merge WRITES must not be satisfied by what the wrapper merely forwards.
+  const ADOPT_START = SQL.indexOf('create or replace function adopt_review_line');
+  const WRAPPER_START = SQL.indexOf('create or replace function adopt_review_line', ADOPT_START + 1);
+  const DROP_START = SQL.indexOf('create or replace function drop_review_line');
+  expect(ADOPT_START).toBeGreaterThanOrEqual(0);
+  expect(WRAPPER_START).toBeGreaterThan(ADOPT_START);
+  expect(DROP_START).toBeGreaterThan(WRAPPER_START);
+  const ADOPT = SQL.slice(ADOPT_START, WRAPPER_START);
+  const WRAPPER = SQL.slice(WRAPPER_START, DROP_START);
   const DROP = SQL.slice(
-    SQL.indexOf('create or replace function drop_review_line'),
+    DROP_START,
     SQL.indexOf('revoke all on function public.adopt_review_line'),
   );
 
@@ -157,11 +164,12 @@ describe('docs/supabase-schema.sql — adopting and dropping a variant', () => {
     // variant whose cards have moved but whose status is still 'active' can be
     // adopted a second time and move them again.
     expect(ADOPT).toContain('update tracker_items');
-    expect(ADOPT).toContain('set line_id = v_main.id');
+    expect(ADOPT).toContain('set line_id = v_target.id');
     expect(ADOPT).toContain('adopted_at = now()');
     expect(ADOPT).toContain("set status = 'adopted'");
     expect(ADOPT).toContain('closed_at = now()');
     expect(ADOPT).toContain('adopted_revision_ids = p_revision_ids');
+    expect(ADOPT).toContain('merged_into_line_id = v_target.id');
   });
 
   it('keeps where an adopted card was raised, which is the whole point of two columns', () => {
@@ -172,6 +180,100 @@ describe('docs/supabase-schema.sql — adopting and dropping a variant', () => {
     expect(ADOPT).toContain("if v_variant.status <> 'active' then");
     expect(ADOPT).toContain("'error', 'already_closed'");
     expect(ADOPT).toContain("if not found or v_variant.kind <> 'variant' then");
+  });
+
+  // ─── Batch BX: a merge has a destination, and the destination is checked ────
+
+  it('takes the line to merge into as an argument, and locks it', () => {
+    // Locked for the same reason the variant is: the target is about to own every card
+    // the variant raised and every position it left a model at, and a target being
+    // dropped in another transaction at the same moment would leave those cards on a
+    // line nobody will ever meet on again.
+    expect(ADOPT).toContain('p_target uuid');
+    expect(ADOPT).toContain('select * into v_target from review_lines where id = p_target for update');
+  });
+
+  it('refuses a destination that is not somewhere the cards can go', () => {
+    // Each is a fact about the pair rather than a preference: another review's line is
+    // not a destination anybody in this meeting can open; a closed one is a record; the
+    // variant itself would move nothing and close the line; and one of its own
+    // descendants would make that descendant its own ancestor.
+    expect(ADOPT).toContain("'error', 'no_target_line'");
+    expect(ADOPT).toContain("'error', 'other_review'");
+    expect(ADOPT).toContain("'error', 'same_line'");
+    expect(ADOPT).toContain("'error', 'target_closed'");
+    expect(ADOPT).toContain("'error', 'own_descendant'");
+    expect(ADOPT).toContain('if v_target.review_id <> v_variant.review_id then');
+    expect(ADOPT).toContain("if v_target.status <> 'active' then");
+  });
+
+  it('walks the target’s own chain looking for the variant, and cannot walk for ever', () => {
+    // A recursive CTE cannot `return` out of a query, and an unbounded loop over a
+    // chain somebody wrote a cycle into would hang the transaction that found it.
+    expect(ADOPT).toContain('while v_walk.parent_line_id is not null and v_depth < 64 loop');
+    expect(ADOPT).toContain('if v_walk.parent_line_id = v_variant.id then');
+  });
+
+  it('puts the merged variant’s positions into the TARGET’s slot, not always the main line’s', () => {
+    // A review keeps where its models stand in its own row: `asset.placements` is the
+    // main line's and `asset.linePlacements[<id>]` is one slot per variant. A merge is
+    // the moment two lines become one answer, so the positions go with the cards — and
+    // into whichever slot belongs to the line that is left standing.
+    expect(ADOPT).toContain("if v_target.kind = 'main' then");
+    expect(ADOPT).toMatch(/jsonb_set\(\s*asset,\s*'\{placements\}',/);
+    expect(ADOPT).toContain("array['linePlacements', v_target.id::text]");
+    // Only where the variant has a slot of its own: one that never diverged has nothing
+    // to hand over, and a write would still bump updated_at and move the review up the
+    // lobby's list.
+    expect(ADOPT).toContain("and asset -> 'linePlacements' ? v_variant.id::text");
+  });
+
+  it('re-parents the merged variant’s own live variants onto the target, in the same call', () => {
+    // The fourth thing in the transaction. Without it, merging Variant A while Variant C
+    // is being explored from it leaves C hanging off a line that has just been closed:
+    // a parent the map cannot draw and the chip cannot offer a way back from. Closed
+    // children are deliberately left alone — where a dropped variant came from is part
+    // of its record, and rewriting it would change what its own cards say.
+    expect(ADOPT).toContain('set parent_line_id = v_target.id');
+    expect(ADOPT).toContain('where parent_line_id = v_variant.id');
+    expect(ADOPT).toContain("and status = 'active'");
+    expect(ADOPT).toContain('v_reparented');
+  });
+
+  it('keeps the two-argument signature alive, forwarding to the main line', () => {
+    // An install whose api bundle is older than its schema would otherwise call a
+    // function that no longer exists. It is a wrapper and not a second copy: one body
+    // decides what a merge writes, and a second copy is a second way for the two to
+    // disagree about it.
+    expect(WRAPPER).toContain('p_variant uuid');
+    expect(WRAPPER).toContain('p_revision_ids uuid[]');
+    expect(WRAPPER).not.toContain('p_target');
+    expect(WRAPPER).toContain('return adopt_review_line(p_variant, v_main.id, p_revision_ids)');
+    expect(WRAPPER).toContain("where review_id = v_variant.review_id and kind = 'main'");
+    expect(WRAPPER).toContain("'error', 'no_main_line'");
+    // It writes nothing of its own.
+    expect(WRAPPER).not.toContain('update tracker_items');
+    expect(WRAPPER).not.toContain('update review_curations');
+  });
+
+  it('refuses to drop a variant that one of its own is still being explored from', () => {
+    // The simplest rule that is also the correct one: the child was started from this
+    // line's answer, and dropping the line leaves it starting from an answer the review
+    // has just rejected. Re-parenting is what the MERGE does and is right there, because
+    // a merge says the answer was taken; a drop says it was not, and there is then no
+    // line that is the honest parent. Checked in the transaction and not only in the
+    // api, so dropping and exploring at the same moment cannot both be told they worked.
+    expect(DROP).toContain("where parent_line_id = v_variant.id");
+    expect(DROP).toContain("and status = 'active'");
+    expect(DROP).toContain("'error', 'has_active_children'");
+    expect(DROP).toContain("'childId', v_child.id");
+  });
+
+  it('stores the reason on the line as well as on the cards it closes', () => {
+    // A room that opens on a dropped variant has to say why in a banner, and a banner
+    // that had to read the review's cards first would show the line's name for a moment
+    // and the reason afterwards.
+    expect(DROP).toContain('drop_reason = p_closed_reason');
   });
 
   it('drops in one transaction: the variant is marked AND its open cards close with the reason', () => {
@@ -203,17 +305,61 @@ describe('docs/supabase-schema.sql — adopting and dropping a variant', () => {
       expect(SQL).toMatch(new RegExp(`revoke all on function public\\.${name}[^;]*from public, anon, authenticated`));
       expect(SQL).toContain(`grant execute on function public.${name}`);
     }
+    // BOTH signatures of the merge, because a grant is per function and the
+    // two-argument wrapper is a function of its own that does the same write.
+    // Covering only the three-argument one would leave the old signature callable by
+    // anybody holding the published anon key.
+    expect(SQL).toContain('revoke all on function public.adopt_review_line(uuid, uuid, uuid[]) from public, anon, authenticated');
+    expect(SQL).toContain('revoke all on function public.adopt_review_line(uuid, uuid[]) from public, anon, authenticated');
+    expect(SQL).toContain('grant execute on function public.adopt_review_line(uuid, uuid, uuid[]) to service_role');
+    expect(SQL).toContain('grant execute on function public.adopt_review_line(uuid, uuid[]) to service_role');
     expect(ADOPT).toContain('security definer');
+    expect(WRAPPER).toContain('security definer');
     expect(DROP).toContain('security definer');
     // A definer function with no search_path is one that can be hijacked by a schema
     // an attacker created first.
     expect(ADOPT).toContain('set search_path = public');
+    expect(WRAPPER).toContain('set search_path = public');
     expect(DROP).toContain('set search_path = public');
   });
 
   it('adds the column the adoption records, only where it is missing', () => {
     expect(SQL).toContain('alter table review_lines\n  add column if not exists adopted_revision_ids uuid[];');
     expect(LINES_TABLE).toContain('adopted_revision_ids uuid[]');
+  });
+
+  it('adds the three columns batch BX records, only where they are missing', () => {
+    // install.sh re-applies this file on EVERY run, so an upgrade is a second run of it:
+    // an unconditional add column fails on the second run, and it fails on somebody's
+    // database rather than at install time.
+    expect(SQL).toContain('alter table review_lines\n  add column if not exists parent_line_id uuid references review_lines(id);');
+    expect(SQL).toContain('alter table review_lines\n  add column if not exists merged_into_line_id uuid references review_lines(id);');
+    expect(SQL).toContain('alter table review_lines\n  add column if not exists drop_reason text;');
+    // And in the create, so a fresh install has them without the alters having to run.
+    expect(LINES_TABLE).toContain('parent_line_id uuid references review_lines(id)');
+    expect(LINES_TABLE).toContain('merged_into_line_id uuid references review_lines(id)');
+    expect(LINES_TABLE).toContain('drop_reason text');
+    // The lookup the drop guard and the merge's descendant walk both make.
+    expect(SQL).toContain('create index if not exists review_lines_parent_idx');
+  });
+
+  it('fills in where every variant that already exists was started from', () => {
+    // Every variant written before this column existed was started from a meeting of the
+    // review's MAIN line, because that was the only line a variant could leave from — so
+    // the backfill is a fact about the old code and not a guess. Keyed on `is null` so a
+    // second run adds nothing and never overwrites a parent batch BX has since written.
+    const backfill = section('update review_lines v\nset parent_line_id = coalesce(');
+    expect(backfill).toContain('(select s.line_id from tracker_sessions s where s.id = v.parent_session_id)');
+    expect(backfill).toContain("where m.review_id = v.review_id and m.kind = 'main'");
+    expect(backfill).toContain("where v.kind = 'variant'");
+    expect(backfill).toContain('and v.parent_line_id is null');
+  });
+
+  it('records where every variant that was already merged went', () => {
+    const backfill = section('update review_lines v\nset merged_into_line_id = m.id');
+    expect(backfill).toContain("and v.status = 'adopted'");
+    expect(backfill).toContain('and v.merged_into_line_id is null');
+    expect(backfill).toContain("and m.kind = 'main'");
   });
 });
 

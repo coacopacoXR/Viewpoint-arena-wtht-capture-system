@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import IntegrationsPanel from '../components/UI/IntegrationsPanel';
 import AssigneeComboBox from '../components/UI/AssigneeComboBox';
@@ -13,7 +13,8 @@ import { listModelRevisions, type ModelRevision } from '../lib/reviews/revisions
 import { listLines } from '../lib/reviews/linesRepo';
 import { useSessionMap } from '../lib/reviews/useSessionMap';
 import { useReviewRole, isMeetingHostOf } from '../lib/reviews/useReviewRole';
-import { lineFilterLabel, type ReviewLine } from '../lib/reviews/lines';
+import { activeLines, lineFilterLabel, type ReviewLine } from '../lib/reviews/lines';
+import { openLine } from '../lib/reviews/openLine';
 import { isClosed } from '../lib/trackerContinuity';
 import {
   groupSessions,
@@ -1180,7 +1181,7 @@ const SessionSidebar: React.FC<{
   }
 
   return (
-    <aside className="hidden lg:flex flex-col w-56 flex-shrink-0 bg-white border-r border-gray-200 h-full overflow-y-auto">
+    <aside className="hidden lg:flex flex-col w-56 flex-shrink-0 bg-white border-r border-gray-200 self-stretch overflow-y-auto">
       <div className="px-3 pt-5 pb-4">
         <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest px-2 mb-3">Sessions</p>
         <button onClick={() => onSelect(null)} className={clsx('w-full text-left px-3 py-2.5 rounded-md text-sm font-semibold transition-colors mb-1', selectedSessionId === null ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-100 hover:text-black')}>
@@ -1784,6 +1785,11 @@ const SessionMap = React.lazy(() => import('../components/review/SessionMap'));
 
 const TrackerPage: React.FC = () => {
   const location = useLocation();
+  // Opening a line's room from the map below. `openLine` and not a <Link> to the same
+  // address: pages/RoomPage admits an arrival by its router state or by the mark
+  // openLine leaves in sessionStorage, and a link carries neither — so it navigates to
+  // exactly the right address and is bounced straight back here.
+  const navigate = useNavigate();
   // A link in from the session map names the meeting it wants
   // (/tracker?session=<id>&review=<id>), so a card listed under a stop on the map
   // lands on that card's board rather than on the tracker's front door. Read once,
@@ -2123,20 +2129,36 @@ const TrackerPage: React.FC = () => {
 
   const stats = useMemo(() => computeStats(reviewItems), [reviewItems]);
 
-  // What the line filter offers: the review's own lines, named the way the session
-  // map names them, plus what became of each one. A variant that has been adopted or
-  // dropped stays in the list — its cards are still in the tracker and still say they
-  // came from it, so a filter that hid it would hide the only way to find them — but
-  // it says so, because "Variant B" on its own is an offer to look at a line nobody
-  // is meeting on any more. Empty until the review's lines have been read, which is
-  // also when the select hides itself — a filter with one entry in it is not a filter.
+  // What the line filter offers: the lines of this review that are still being explored,
+  // named the way the session map names them. Batch BX took the finished ones OUT, and
+  // it is a narrowing rather than a loss: a merged variant's cards are on the line it
+  // went into, and a dropped one's are closed with the reason on them, so both are
+  // already reachable from the filter entries that remain — and each of those cards says
+  // for itself where it came from ("Raised in Variant B · merged into Variant A 26
+  // Sep"), which is the sentence a filter entry can never carry. What an entry for a
+  // closed line WAS is a board that cannot be opened: its room has nobody in it. Empty
+  // until the review's lines have been read, which is also when the select hides itself
+  // — a filter with one entry in it is not a filter.
   const lineOptions = useMemo<ReviewOption[]>(() => {
     if (!selectedReviewId) return [];
-    return (linesByReview[selectedReviewId] ?? []).map(line => ({
+    return activeLines(linesByReview[selectedReviewId] ?? []).map(line => ({
       id: line.id,
       label: lineFilterLabel(line) ?? 'Line',
     }));
   }, [selectedReviewId, linesByReview]);
+
+  // A filter narrowed to a line that has just been merged or dropped has to be let go of
+  // here, because its own select can no longer do it: the entry is gone from the list, so
+  // the select shows "All lines" while `filters.line` still names the closed line and the
+  // board stays empty with nothing on it to press. Only once this review's lines have
+  // actually been read — `afterLineChange` empties the table before the re-read lands, and
+  // a read in flight must not look like a line that went away.
+  useEffect(() => {
+    if (!selectedReviewId || !(selectedReviewId in linesByReview)) return;
+    if (filters.line === 'All') return;
+    if (lineOptions.some(option => option.id === filters.line)) return;
+    setFilters(f => (f.line === 'All' ? f : { ...f, line: 'All' }));
+  }, [filters.line, lineOptions, linesByReview, selectedReviewId]);
 
   // The map of the review being looked at, drawn above its cards. Read only while it
   // is open AND a review is selected: with 'All design reviews' there is no one
@@ -2271,7 +2293,7 @@ const TrackerPage: React.FC = () => {
         {reviewItems.length > 0 && <StatsBar stats={stats} />}
 
         {/* Body */}
-        <div className="flex flex-1 overflow-hidden min-h-[420px]">
+        <div className="flex flex-1 overflow-hidden min-h-[calc(100dvh-9rem)]">
           <SessionSidebar sessions={visibleSessions} allItems={reviewItems} selectedSessionId={selectedSessionId}
             onSelect={id => { setSelectedSessionId(id); setSelectedItem(null); }}
             onDeleteSession={deleteSession}
@@ -2378,6 +2400,7 @@ const TrackerPage: React.FC = () => {
                         mayEditLines={mayEditLines}
                         isMeetingHost={trackerHostsTheMeeting}
                         onChanged={afterLineChange}
+                        onOpenLine={lineId => openLine(navigate, selectedReviewId, lineId)}
                         readTranscript={sessionMap.readTranscript}
                       />
                     </React.Suspense>

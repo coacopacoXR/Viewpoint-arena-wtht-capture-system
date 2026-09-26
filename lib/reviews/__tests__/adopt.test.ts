@@ -17,7 +17,7 @@
 // somebody added beside the product would be a decision nobody made.
 
 import { describe, it, expect } from 'vitest';
-import { adoptPlan, adoptRevisionIds, asAdoptKeep, type AdoptFacts } from '../adopt';
+import { adoptPlan, adoptQuestion, adoptRevisionIds, asAdoptKeep, type AdoptFacts } from '../adopt';
 
 const REVISIONS = [
   { id: 'r-a', line: 'Bracket', revision: 'A' },
@@ -160,11 +160,64 @@ describe('adoptRevisionIds — the answer', () => {
   });
 
   it('reads an answer off the wire strictly', () => {
-    expect(asAdoptKeep('main')).toBe('main');
+    expect(asAdoptKeep('target')).toBe('target');
     expect(asAdoptKeep('variant')).toBe('variant');
+    // 'main' is the word from before batch BX, when the only line a variant could be
+    // taken into WAS the main one. Still read, and read as the target, so a browser
+    // holding the older bundle cannot break a review by answering in the old word.
+    expect(asAdoptKeep('main')).toBe('target');
     expect(asAdoptKeep('MAIN')).toBeNull();
+    expect(asAdoptKeep('mainline')).toBeNull();
     expect(asAdoptKeep(undefined)).toBeNull();
-    expect(asAdoptKeep(['main'])).toBeNull();
+    expect(asAdoptKeep(['target'])).toBeNull();
+  });
+
+  it('answers the target’s half for either spelling of the same answer', () => {
+    const asked = adoptPlan(facts({
+      parentRevisionIds: ['r-a'],
+      mainRevisionIds: ['r-c'],
+      variantRevisionIds: ['r-b2'],
+    }));
+    expect(asked.kind).toBe('ask');
+    expect(adoptRevisionIds(asked, 'target')).toEqual(['r-c']);
+    expect(adoptRevisionIds(asked, 'variant')).toEqual(['r-b2']);
+    expect(adoptRevisionIds(asked, null)).toBeNull();
+  });
+});
+
+describe('adoptQuestion — which line the sentence names', () => {
+  // Batch BX: a merge has a destination and the destination is not always the main
+  // line, so the words follow it. A question that said "the main line" about a merge
+  // into Variant A would ask somebody to choose between two models and then write the
+  // answer onto a third.
+  const conflicts = [{ main: 'r-c', variant: 'r-b2' }];
+
+  it('names the main line when that is where the variant is going', () => {
+    expect(adoptQuestion(conflicts, 'Variant B', REVISIONS, 'the main line'))
+      .toBe('Keep Rev C from the main line or Rev B2 from Variant B?');
+  });
+
+  it('names the target line when the variant is going into another variant', () => {
+    expect(adoptQuestion(conflicts, 'Variant B', REVISIONS, 'Variant A'))
+      .toBe('Keep Rev C from Variant A or Rev B2 from Variant B?');
+  });
+
+  it('says the main line when no target was named at all', () => {
+    expect(adoptQuestion(conflicts, 'Variant B', REVISIONS)).toContain('from the main line');
+    expect(adoptPlan(facts({ variantLabel: 'Variant B' })).kind).toBe('unchanged');
+  });
+
+  it('carries the target’s name through the plan the endpoint builds', () => {
+    const asked = adoptPlan(facts({
+      parentRevisionIds: ['r-a'],
+      mainRevisionIds: ['r-c'],
+      variantRevisionIds: ['r-b2'],
+      variantLabel: 'Variant B',
+      targetLabel: 'Variant A',
+    }));
+    expect(asked.kind).toBe('ask');
+    expect(asked.kind === 'ask' && asked.choice.question)
+      .toBe('Keep Rev C from Variant A or Rev B2 from Variant B?');
   });
 });
 

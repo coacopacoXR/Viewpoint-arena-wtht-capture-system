@@ -44,14 +44,14 @@ const B_ID = 'line-b';
 function line(overrides: Partial<ReviewLine> = {}): ReviewLine {
   return {
     id: MAIN_ID, reviewId: REVIEW, kind: 'main', name: 'Main line', letter: null,
-    parentSessionId: null, status: 'active', createdBy: null, createdByName: '',
+    parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null, status: 'active', createdBy: null, createdByName: '',
     createdAt: '2026-03-01T09:00:00.000Z', closedAt: null, ...overrides,
   };
 }
 
 const MAIN = line();
-const VARIANT_A = line({ id: A_ID, kind: 'variant', name: 'Steel hinge pin', letter: 'A', parentSessionId: 'sess-1', createdAt: '2026-05-04T09:00:00.000Z' });
-const VARIANT_B = line({ id: B_ID, kind: 'variant', name: 'Weld fix', letter: 'B', parentSessionId: 'sess-1', status: 'dropped', closedAt: '2026-06-01T09:00:00.000Z', createdAt: '2026-05-05T09:00:00.000Z' });
+const VARIANT_A = line({ id: A_ID, kind: 'variant', name: 'Steel hinge pin', letter: 'A', parentSessionId: 'sess-1', parentLineId: null, mergedIntoLineId: null, dropReason: null, createdAt: '2026-05-04T09:00:00.000Z' });
+const VARIANT_B = line({ id: B_ID, kind: 'variant', name: 'Weld fix', letter: 'B', parentSessionId: 'sess-1', parentLineId: null, mergedIntoLineId: null, dropReason: null, status: 'dropped', closedAt: '2026-06-01T09:00:00.000Z', createdAt: '2026-05-05T09:00:00.000Z' });
 
 function session(id: string, lineId: string | null, seq: number | null, endedAt: string): LineSession {
   return {
@@ -122,7 +122,7 @@ describe('the session map — what it offers, and to whom', () => {
   it('lists every variant still being explored, with both of its actions', () => {
     renderMap({ reviewId: REVIEW, mayEditLines: true });
     expect(screen.getByTestId('map-variants')).toBeTruthy();
-    expect(screen.getByText('Adopt into main line')).toBeTruthy();
+    expect(screen.getByText('Merge into…')).toBeTruthy();
     expect(screen.getByText('Drop variant')).toBeTruthy();
   });
 
@@ -134,15 +134,18 @@ describe('the session map — what it offers, and to whom', () => {
     expect(within(strip).getByText('Variant A · Steel hinge pin')).toBeTruthy();
   });
 
-  it('does not list a variant that was dropped, which is on the map for the record', () => {
+  it('hides a dropped variant until asked, and never offers it anything', () => {
     renderMap({ reviewId: REVIEW, mayEditLines: true });
     const strip = screen.getByTestId('map-variants');
-    // Not offered anything: it is drawn, greyed, and that is all.
+    // Not offered anything.
     expect(within(strip).queryByText(/Weld fix/)).toBeNull();
-    // It is still DRAWN, because a dropped variant is an answer the review tried.
+    // Batch BX (user: "when they are dropped they still show up"): hidden by default…
+    expect(screen.queryAllByText('Variant B · Weld fix')).toHaveLength(0);
+    // …and kept for the record behind "Show dropped (1)".
+    fireEvent.click(screen.getByText('Show dropped (1)'));
     expect(screen.getAllByText('Variant B · Weld fix').length).toBeGreaterThan(0);
     // One active variant, so one set of actions.
-    expect(within(strip).getAllByText('Adopt into main line')).toHaveLength(1);
+    expect(within(strip).getAllByText('Merge into…')).toHaveLength(1);
   });
 
   it('offers nothing to somebody who may not edit the review', () => {
@@ -182,6 +185,6 @@ describe('the session map — the words on it', () => {
   it('never say branch, fork, merge or commit', () => {
     const { container } = renderMap({ reviewId: REVIEW, mayEditLines: true });
     fireEvent.click(screen.getAllByTestId('session-stop')[0]);
-    expect((container.textContent ?? '').toLowerCase()).not.toMatch(/branch|fork|merge|commit/);
+    expect((container.textContent ?? '').toLowerCase()).not.toMatch(/branch|fork|commit/);
   });
 });

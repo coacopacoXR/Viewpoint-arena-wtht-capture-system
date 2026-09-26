@@ -33,12 +33,15 @@ const VARIANT_B = 'line-b';
 function line(overrides: Partial<ReviewLine> = {}): ReviewLine {
   return {
     id: VARIANT_A, reviewId: REVIEW, kind: 'variant', name: 'Steel hinge pin', letter: 'A',
-    parentSessionId: 'sess-3', status: 'active', createdBy: null, createdByName: 'Paco',
+    parentSessionId: 'sess-3', parentLineId: MAIN_ID, mergedIntoLineId: null, dropReason: null,
+    status: 'active', createdBy: null, createdByName: 'Paco',
     createdAt: '2026-05-04T09:00:00.000Z', closedAt: null, ...overrides,
   };
 }
 
-const MAIN = line({ id: MAIN_ID, kind: 'main', name: 'Main line', letter: null, parentSessionId: null });
+const MAIN = line({
+  id: MAIN_ID, kind: 'main', name: 'Main line', letter: null, parentSessionId: null, parentLineId: null,
+});
 const ADOPTED_A = line({ status: 'adopted', closedAt: '2026-10-12T15:00:00.000Z' });
 const DROPPED_B = line({ id: VARIANT_B, letter: 'B', name: 'Weld fix', status: 'dropped', closedAt: '2026-10-12T15:00:00.000Z' });
 

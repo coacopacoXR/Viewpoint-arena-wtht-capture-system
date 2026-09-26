@@ -31,17 +31,18 @@
 // no database.
 
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { ArrowRight, ChevronDown } from 'lucide-react';
 import { clsx } from 'clsx';
+import { useNavigate } from 'react-router-dom';
 import {
   lineLabel,
   orderedLines,
-  roomPath,
   shortLineLabel,
   type ReviewLine,
 } from '../../../lib/reviews/lines';
 import { listLines } from '../../../lib/reviews/linesRepo';
+import { openLine, roomHref } from '../../../lib/reviews/openLine';
+import StartVariant from '../../review/StartVariant';
 import { VariantActions } from '../../review/VariantActions';
 
 export interface LineChipProps {
@@ -62,6 +63,7 @@ const ROW =
   'h-8 px-2 flex items-center gap-1.5 rounded-sm border transition-colors text-[10px] font-bold uppercase tracking-wide';
 
 const LineChip: React.FC<LineChipProps> = ({ roomId, line, mayEdit, isMeetingHost }) => {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   /** Every line of the review, read when the panel is first opened. Null until then. */
   const [all, setAll] = useState<ReviewLine[] | null>(null);
@@ -83,7 +85,21 @@ const LineChip: React.FC<LineChipProps> = ({ roomId, line, mayEdit, isMeetingHos
   const full = lineLabel(line) ?? 'Variant';
   const short = onVariant ? shortLineLabel(line) ?? 'Variant' : 'Lines';
 
-  // One row per line: its name, its room, and whether this browser is standing in it.
+  /**
+   * Move this room onto another line of the same review.
+   *
+   * `openLine` and NOT a <Link>, and that is the whole of batch BX's first fix: the
+   * room's entry guard admits an arrival by its router state or by a sessionStorage
+   * mark, and a plain link carries neither — so the address was right and the room
+   * still sent the person straight back to the lobby. The helper writes the mark and
+   * the state, which is also what makes the reload of the room it lands in work.
+   */
+  const go = (lineId: string | null) => {
+    setOpen(false);
+    openLine(navigate, roomId, lineId);
+  };
+
+  // One row per line: its name, and whether this browser is standing in it.
   const known = orderedLines(all ?? []);
   const current = known.find((one) => one.id === line.id) ?? line;
   // The main line is ALWAYS a row, and it is the first one. It is the way back, and on
@@ -91,12 +107,18 @@ const LineChip: React.FC<LineChipProps> = ({ roomId, line, mayEdit, isMeetingHos
   // panel with nothing but its own name in it is a dead end with the address bar as the
   // only exit, which is what this chip was written to remove. The variants after it are
   // the ones still being explored, plus this one whatever its status: a variant that
-  // was adopted while its room was open is still the room somebody is standing in.
-  const rows: Array<{ key: string; name: string; to: string; title: string; here: boolean }> = [
+  // was merged while its room was open is still the room somebody is standing in.
+  //
+  // Merged and dropped lines are otherwise NOT here (batch BX). Both are records, and
+  // a row in a menu is an offer to go somewhere — into a room whose model can no longer
+  // be changed and whose cards have already moved. The map and the lobby's Lines list
+  // are where they are kept, and the map has a "Show dropped" toggle for the person who
+  // wants to look at one.
+  const rows: Array<{ key: string; name: string; lineId: string | null; title: string; here: boolean }> = [
     {
       key: 'main',
       name: 'Main line',
-      to: roomPath(roomId, null),
+      lineId: null,
       title: 'Go to the main line’s room',
       here: !onVariant,
     },
@@ -104,7 +126,7 @@ const LineChip: React.FC<LineChipProps> = ({ roomId, line, mayEdit, isMeetingHos
       .filter((one) => one.kind === 'variant' && (one.status === 'active' || one.id === current.id))
       .map((one) => {
         const name = lineLabel(one) ?? 'Variant';
-        return { key: one.id, name, to: roomPath(roomId, one.id), title: `Go to ${name}’s room`, here: one.id === current.id };
+        return { key: one.id, name, lineId: one.id, title: `Go to ${name}’s room`, here: one.id === current.id };
       }),
   ];
 
@@ -125,7 +147,7 @@ const LineChip: React.FC<LineChipProps> = ({ roomId, line, mayEdit, isMeetingHos
         title={
           onVariant
             ? mayEdit
-              ? `You are on ${full}. Adopt it into the main line, or drop it.`
+              ? `You are on ${full}. Merge it into another line, or drop it.`
               : `You are on ${full}`
             : 'This design review’s lines'
         }
@@ -146,7 +168,7 @@ const LineChip: React.FC<LineChipProps> = ({ roomId, line, mayEdit, isMeetingHos
         <div
           className={clsx(
             'absolute top-10 left-0 z-50 max-w-[80vw] bg-white border border-gray-200 rounded-md shadow-lg p-3 pointer-events-auto',
-            mayEdit && onVariant ? 'w-[380px]' : 'w-64',
+            mayEdit ? 'w-[380px]' : 'w-64',
           )}
           data-testid="line-chip-panel"
         >
@@ -157,6 +179,7 @@ const LineChip: React.FC<LineChipProps> = ({ roomId, line, mayEdit, isMeetingHos
           {/* Every line still being explored. The one this room is on is named rather
               than linked: a link to the room you are standing in is a thing to press
               by accident, and it would look like the other rows. */}
+          <p className="font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Go to…</p>
           <ul className="flex flex-col gap-1" data-testid="line-chip-lines">
             {rows.map((row) => (
               <li key={row.key}>
@@ -169,26 +192,56 @@ const LineChip: React.FC<LineChipProps> = ({ roomId, line, mayEdit, isMeetingHos
                     <span className="ml-auto font-mono text-[9px] text-gray-400">here</span>
                   </span>
                 ) : (
-                  <Link
-                    to={row.to}
+                  <button
+                    onClick={() => go(row.lineId)}
                     title={row.title}
-                    className={clsx(ROW, 'border-gray-200 bg-white text-gray-600 hover:border-gray-400 hover:text-black')}
+                    // Where it goes, readable without navigating: tests and anybody
+                    // inspecting the page. The navigation itself is openLine's.
+                    data-href={roomHref(roomId, row.lineId)}
+                    data-testid="line-chip-go"
+                    className={clsx(
+                      ROW,
+                      'w-full text-left border-gray-200 bg-white text-gray-600 hover:border-gray-400 hover:text-black',
+                    )}
                   >
                     <span className="truncate normal-case font-semibold tracking-normal">{row.name}</span>
                     <ArrowRight size={12} className="ml-auto shrink-0" />
-                  </Link>
+                  </button>
                 )}
               </li>
             ))}
           </ul>
+
+          {/* Start a variant from the line this room is on — batch BX, and offered on
+              EVERY line rather than only in the map's session panel, because the person
+              who has just moved a model and wants a second answer to it is standing here
+              and not looking at a diagram. The same component the top bar's own Variant
+              button uses, so the words, the prompt and the write cannot drift. */}
+          {mayEdit && (
+            <div className="mt-3 border-t border-gray-100 pt-3">
+              <StartVariant
+                reviewId={roomId}
+                lineId={line.id}
+                mayEdit={mayEdit}
+                isMeetingHost={isMeetingHost}
+                label="Explore a variant from here"
+                look="row"
+                inFlow
+                data-testid="line-chip-explore"
+                onStarted={() => setAll(null)}
+              />
+            </div>
+          )}
 
           {onVariant && mayEdit && (
             <div className="mt-3 border-t border-gray-100 pt-3">
               <VariantActions
                 reviewId={roomId}
                 variant={line}
+                lines={all ?? undefined}
                 mayEdit={mayEdit}
                 isMeetingHost={isMeetingHost}
+                onOpenLine={go}
                 inRoom
               />
             </div>

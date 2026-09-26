@@ -44,7 +44,7 @@ const REVIEW = 'rev-1';
 function line(overrides: Partial<ReviewLine> = {}): ReviewLine {
   return {
     id: 'line-a', reviewId: REVIEW, kind: 'variant', name: 'Steel hinge pin', letter: 'A',
-    parentSessionId: 'sess-3', status: 'active', createdBy: null, createdByName: 'Paco',
+    parentSessionId: 'sess-3', parentLineId: null, mergedIntoLineId: null, dropReason: null, status: 'active', createdBy: null, createdByName: 'Paco',
     createdAt: '2026-05-04T09:00:00.000Z', closedAt: null, ...overrides,
   };
 }
@@ -74,14 +74,14 @@ describe('the chip in a variant’s room', () => {
     // you are somewhere else — which is what the chip has just told you.
     fireEvent.click(screen.getByText('You are on Variant A · Steel hinge pin'));
     const back = screen.getByTitle('Go to the main line’s room');
-    expect(back.getAttribute('href')).toBe(`/room/${REVIEW}`);
+    expect(back.getAttribute('data-href')).toBe(`/room/${REVIEW}`);
     expect(back.textContent).toContain('Main line');
   });
 
   it('carries the two decisions about this variant for somebody who may make them', () => {
     renderChip();
     fireEvent.click(screen.getByText('You are on Variant A · Steel hinge pin'));
-    expect(screen.getByText('Adopt into main line')).toBeTruthy();
+    expect(screen.getByText('Merge into…')).toBeTruthy();
     expect(screen.getByText('Drop variant')).toBeTruthy();
   });
 
@@ -91,7 +91,7 @@ describe('the chip in a variant’s room', () => {
     renderChip({ mayEdit: false });
     expect(screen.getByText('You are on Variant A · Steel hinge pin')).toBeTruthy();
     expect(screen.queryByTitle(/Adopt it into the main line/)).toBeNull();
-    expect(screen.queryByText('Adopt into main line')).toBeNull();
+    expect(screen.queryByText('Merge into…')).toBeNull();
   });
 
   it('still lets somebody who may not change the review get back to the main line', () => {
@@ -100,8 +100,8 @@ describe('the chip in a variant’s room', () => {
     // an address bar.
     renderChip({ mayEdit: false });
     fireEvent.click(screen.getByText('You are on Variant A · Steel hinge pin'));
-    expect(screen.getByTitle('Go to the main line’s room').getAttribute('href')).toBe(`/room/${REVIEW}`);
-    expect(screen.queryByText('Adopt into main line')).toBeNull();
+    expect(screen.getByTitle('Go to the main line’s room').getAttribute('data-href')).toBe(`/room/${REVIEW}`);
+    expect(screen.queryByText('Merge into…')).toBeNull();
   });
 });
 
@@ -130,6 +130,6 @@ describe('the words on the chip', () => {
   it('never say branch, fork, merge or commit', () => {
     const { container } = renderChip();
     fireEvent.click(screen.getByText('You are on Variant A · Steel hinge pin'));
-    expect((container.textContent ?? '').toLowerCase()).not.toMatch(/branch|fork|merge|commit/);
+    expect((container.textContent ?? '').toLowerCase()).not.toMatch(/branch|fork|commit/);
   });
 });

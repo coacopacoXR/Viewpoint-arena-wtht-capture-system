@@ -1664,6 +1664,17 @@ COMPOSE_FILE=${compose_file}
 COMPOSE_PROFILES=${profile_list}
 COMPOSE
 
+  cat <<'BACKUPS'
+
+# ── 7c. Backups ──────────────────────────────────────────────────────────────
+# The db-backup service dumps the database and archives the model files into the
+# db-backups volume every BACKUP_INTERVAL_HOURS, keeping the newest BACKUP_KEEP.
+# Copy them off this machine as well (docs/INSTALL.md, "Backups and restore").
+BACKUP_INTERVAL_HOURS=24
+BACKUP_KEEP=14
+BACKUP_MODELS=true
+BACKUPS
+
   cat <<'FOOTER'
 
 # ── 8. Optional ──────────────────────────────────────────────────────────────

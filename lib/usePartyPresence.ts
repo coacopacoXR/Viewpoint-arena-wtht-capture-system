@@ -73,7 +73,7 @@ type RoomMessage =
   | { type: 'EDITING_START'; payload: { force?: boolean } }
   | { type: 'EDITING_STOP'; payload: Record<string, never> }
   | { type: 'EDITING_STATE'; payload: { editorUserId: string | null; editorName: string | null } }
-  | { type: 'EDITING_REFUSED'; payload: { reason: 'busy' | 'role'; editorName: string | null } }
+  | { type: 'EDITING_REFUSED'; payload: { reason: 'busy' | 'role' | 'dropped'; editorName: string | null } }
   | { type: 'EDITING_TAKEN_OVER'; payload: { byName: string } }
   | { type: 'HOST_CHANGE'; payload: { hostId: string | null } }
   | { type: 'HOST_TRANSFER'; payload: { toUserId: string } }

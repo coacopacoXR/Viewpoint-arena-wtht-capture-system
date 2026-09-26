@@ -80,7 +80,8 @@ const ReviewPreview = (await import('../ReviewPreview')).default;
 
 const MAIN: ReviewLine = {
   id: 'line-main', reviewId: 'r1', kind: 'main', name: 'Main line', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: 'Coaco',
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: 'Coaco',
   createdAt: '2026-09-20T09:00:00.000Z', closedAt: null,
 };
 
@@ -221,9 +222,16 @@ describe('the preview panel — starting a variant', () => {
     });
 
     expect(explore.call).toHaveBeenCalledTimes(1);
-    // Leaving from the newest meeting on the review's main line, which is what the panel
-    // said it would do.
-    expect(explore.call.mock.calls[0][1]).toBe('sess-3');
+    // Both halves of where the variant leaves from: the MEETING, which is what the map
+    // draws the branch leaving from, and the LINE, which is what the new room reads its
+    // model, its saved positions and its carried-over cards from. Batch BX is what split
+    // the two apart — before it the line was implied by the meeting and could therefore
+    // only ever be the main one, which is exactly why a variant of a variant was
+    // impossible and why every variant branched off the top row of the map.
+    expect(explore.call.mock.calls[0][1]).toEqual({
+      parentSessionId: 'sess-3',
+      parentLineId: 'line-main',
+    });
   });
 
   it('is not offered to somebody who may not change the review', () => {

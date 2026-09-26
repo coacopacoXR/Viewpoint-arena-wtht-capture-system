@@ -160,6 +160,62 @@ function lineOf(id: string) {
   return toReviewLine(row ?? null);
 }
 
+// ─── Batch BX: a variant started from ANOTHER variant ───────────────────────
+//
+// Until this batch a variant could only leave from one of the MAIN line's meetings, so
+// the cards it opens on had one place to come from. It can now be started from a
+// variant — including one that has never met and therefore has no cards of its own to
+// hand on. A room that stopped at that parent would open on an empty Capture panel in a
+// review with risks still on it, which reads as "nothing to carry" rather than as "we
+// could not find them".
+
+const UNMET_PARENT_ID = 'line-c';
+const CHILD_OF_UNMET_ID = 'line-d';
+const MET_PARENT_ID = 'line-e';
+const CHILD_OF_MET_ID = 'line-f';
+
+const SESS_E1 = meeting('sess-e1', MET_PARENT_ID, 1, '2026-05-08T16:00:00.000Z', ['r-e']);
+
+const BX_LINES = [
+  // Variant C left the main line with no meeting to leave from, and has never met.
+  lineRow({
+    id: UNMET_PARENT_ID, kind: 'variant', name: 'Lighter frame', letter: 'C',
+    parent_session_id: null, parent_line_id: MAIN_ID, created_at: '2026-05-08T09:00:00.000Z',
+  }),
+  // Variant D was started from Variant C, not from the main line.
+  lineRow({
+    id: CHILD_OF_UNMET_ID, kind: 'variant', name: 'Two ribs', letter: 'D',
+    parent_session_id: null, parent_line_id: UNMET_PARENT_ID, created_at: '2026-05-09T09:00:00.000Z',
+  }),
+  // Variant E HAS met, and left one risk open on itself.
+  lineRow({
+    id: MET_PARENT_ID, kind: 'variant', name: 'Steel hinge pin', letter: 'E',
+    parent_session_id: 'sess-3', parent_line_id: MAIN_ID, created_at: '2026-05-10T09:00:00.000Z',
+  }),
+  // Variant F was started from Variant E afterwards, and has not met.
+  lineRow({
+    id: CHILD_OF_MET_ID, kind: 'variant', name: 'Weld fix', letter: 'F',
+    parent_session_id: null, parent_line_id: MET_PARENT_ID, created_at: '2026-05-11T09:00:00.000Z',
+  }),
+];
+
+/** The seeded review plus the four lines above it, and a cache that has not seen them. */
+function seedBX(): void {
+  db.tables['review_lines'] = [...LINES, ...BX_LINES];
+  db.tables['tracker_sessions'] = [...(db.tables['tracker_sessions'] ?? []), SESS_E1];
+  db.tables['tracker_items'] = [
+    ...(db.tables['tracker_items'] ?? []),
+    card('item-e1', MET_PARENT_ID, SESS_E1, 'Open'),
+  ];
+  resetLineCache();
+}
+
+/** A line as the repo would read it back, rather than as the fixture above states it. */
+function lineFromDb(id: string) {
+  const row = (db.tables['review_lines'] ?? []).find((line) => line['id'] === id);
+  return toReviewLine(row ?? null);
+}
+
 beforeEach(() => {
   for (const key of Object.keys(db.tables)) delete db.tables[key];
   seed();
@@ -294,5 +350,61 @@ describe('the cards a variant\'s room starts with', () => {
     // The read the map and the flush use is unchanged: one line, its own cards.
     expect((await listOpenLineItems({ id: FRESH_ID })).map((item) => item.id)).toEqual([]);
     expect((await listOpenLineItems({ id: MET_ID })).map((item) => item.id)).toEqual(['item-b1']);
+  });
+});
+
+describe('the cards a variant of ANOTHER variant starts with (batch BX)', () => {
+  it('are the open cards of the line it was started from, labelled with that line', async () => {
+    seedBX();
+    const carried = await listCarriedOver(lineFromDb(CHILD_OF_MET_ID));
+    expect(carried.map((item) => item.id)).toEqual(['item-e1']);
+    // "from E1" in a room that is on Variant F. "F1" would be a meeting Variant F has
+    // never held, on a card it did not raise — the same lie the main line's "S2" was
+    // kept out of in batch BL, one line further down.
+    expect(carried.map((item) => item.fromLabel)).toEqual(['E1']);
+  });
+
+  it('are the whole of that line\'s open cards when no meeting is named', async () => {
+    seedBX();
+    // Variant C left the main line without a meeting to leave from, so there is no
+    // moment to narrow to and everything the main line still has open is what C is a
+    // continuation of — including the card raised in S4, which batch BL would have
+    // left out had C named a session.
+    const carried = await listCarriedOver(lineFromDb(UNMET_PARENT_ID));
+    expect(carried.map((item) => item.id)).toEqual(['item-1', 'item-2', 'item-3']);
+    expect(carried.map((item) => item.fromLabel)).toEqual(['S2', 'S3', 'S4']);
+  });
+
+  it('keep coming from above while the line it was started from has never met', async () => {
+    seedBX();
+    // Variant C has no cards and no meetings, so stopping at it would open Variant D on
+    // an empty Capture panel in a review with two risks still open on the main line —
+    // and the people on D would explore a third answer with no idea what the first two
+    // left unresolved.
+    const carried = await listCarriedOver(lineFromDb(CHILD_OF_UNMET_ID));
+    expect(carried.map((item) => item.id)).toEqual(['item-1', 'item-2', 'item-3']);
+    // Still the main line's numbering: the cards were raised there, two lines up.
+    expect(carried.map((item) => item.fromLabel)).toEqual(['S2', 'S3', 'S4']);
+  });
+
+  it('are nothing for a variant started from a line that has met and closed everything', async () => {
+    seedBX();
+    db.tables['tracker_items'] = (db.tables['tracker_items'] ?? []).map((row) =>
+      row['id'] === 'item-e1' ? { ...row, status: 'Rejected' } : row,
+    );
+    // The walk stops at a line that HAS met, and so it must: Variant E had the chance to
+    // deal with its risk and did. Handing it to Variant F anyway would put a rejected
+    // risk back in front of a meeting as though nobody had decided anything about it.
+    expect(await listCarriedOver(lineFromDb(CHILD_OF_MET_ID))).toEqual([]);
+  });
+
+  it('are nothing at all for a variant that has met and closed everything itself', async () => {
+    seedBX();
+    db.tables['tracker_items'] = (db.tables['tracker_items'] ?? []).map((row) =>
+      row['id'] === 'item-e1' ? { ...row, status: 'Rejected' } : row,
+    );
+    // The same rule one line up, and the reason the walk is only ever started for a line
+    // with no meeting of its own.
+    expect(await listCarriedOver(lineFromDb(MET_PARENT_ID))).toEqual([]);
   });
 });

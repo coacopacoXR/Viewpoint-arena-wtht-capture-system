@@ -160,7 +160,8 @@ describe('the mobile room', () => {
 describe('the desktop room — which design review it is holding', () => {
   const VARIANT: ReviewLine = {
     id: 'line-a', reviewId: 'room-1', kind: 'variant', name: 'Steel hinge pin', letter: 'A',
-    parentSessionId: 'sess-3', status: 'active', createdBy: null, createdByName: 'Coaco',
+    parentSessionId: 'sess-3', parentLineId: 'line-main', mergedIntoLineId: null, dropReason: null,
+    status: 'active', createdBy: null, createdByName: 'Coaco',
     createdAt: '2026-09-20T09:00:00.000Z', closedAt: null,
   };
 

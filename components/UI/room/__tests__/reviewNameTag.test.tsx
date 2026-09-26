@@ -19,13 +19,14 @@ import type { ReviewLine } from '../../../../lib/reviews/lines';
 
 const MAIN: ReviewLine = {
   id: 'line-main', reviewId: 'r1', kind: 'main', name: 'Main line', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: 'Coaco',
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: 'Coaco',
   createdAt: '2026-09-20T09:00:00.000Z', closedAt: null,
 };
 
 const VARIANT: ReviewLine = {
   ...MAIN, id: 'line-a', kind: 'variant', name: 'Steel hinge pin', letter: 'A',
-  parentSessionId: 's1',
+  parentSessionId: 's1', parentLineId: 'line-main',
 };
 
 afterEach(cleanup);

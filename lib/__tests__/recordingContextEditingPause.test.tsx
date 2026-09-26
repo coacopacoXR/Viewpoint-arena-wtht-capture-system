@@ -32,6 +32,8 @@ import type { SummaryOutcome } from '../RecordingContext';
 interface FakeStoreState {
   sessionHostId: string | null;
   reviewEditing: { userId: string; name: string } | null;
+  /** The line this room is on, which is what says whether it is still being explored. */
+  activeLine: { kind: string; status: string } | null;
   chatHistory: unknown[];
   activeModelType: string;
   importedSceneTree: null;
@@ -44,6 +46,7 @@ const fakes = vi.hoisted(() => ({
     current: {
       sessionHostId: 'host-1',
       reviewEditing: null,
+      activeLine: null,
       chatHistory: [],
       activeModelType: 'headphones',
       importedSceneTree: null,
@@ -52,6 +55,7 @@ const fakes = vi.hoisted(() => ({
     } as {
       sessionHostId: string | null;
       reviewEditing: { userId: string; name: string } | null;
+      activeLine: { kind: string; status: string } | null;
       chatHistory: unknown[];
       activeModelType: string;
       importedSceneTree: null;
@@ -134,6 +138,8 @@ interface RecordingApi {
   state: string;
   outcome: SummaryOutcome | null;
   summarising: boolean;
+  /** Whether the room offers Record at all — the gate a dropped line closes. */
+  canRecord: boolean;
   stop(): Promise<void>;
   generateCards(): Promise<void>;
   retry(): Promise<void>;
@@ -183,9 +189,65 @@ function lastSlicerRecording(): boolean | undefined {
   return args.length === 0 ? undefined : args[args.length - 1];
 }
 
+/**
+ * Change the line this room is on, the way pages/RoomPage does when it resolves one.
+ *
+ * A separate helper from `setEditing` and not a parameter on it, because the two facts
+ * are unrelated and a test that had to set both to change one would not be saying which
+ * one it was about.
+ */
+async function setLine(activeLine: FakeStoreState['activeLine']) {
+  fakes.store.current = { ...fakes.store.current, activeLine };
+  await act(async () => {
+    mounted?.rerender(tree());
+  });
+}
+
+describe('RecordingContext — no capture on a line nobody is exploring', () => {
+  // docs/plan/15-sessions-and-variants.md batch BX. A dropped variant's address keeps
+  // working, because it is kept for the record and the person who follows an old link
+  // should see it rather than be bounced — but it is a record and not a meeting, and the
+  // third door into it is the one this file can see. The other two are the room server's:
+  // it refuses scene changes and refuses to hand out the Edit lock on a dropped line's
+  // room, and those are the ones that cannot be lifted with devtools.
+
+  beforeEach(() => {
+    fakes.store.current = { ...fakes.store.current, activeLine: null, reviewEditing: null };
+  });
+
+  afterEach(() => {
+    cleanup();
+    mounted = null;
+  });
+
+  it('does not offer Record in a room on a dropped line', async () => {
+    mountProvider();
+    expect(ctx?.canRecord).toBe(true);
+
+    await setLine({ kind: 'variant', status: 'dropped' });
+
+    // The host, on a deployment that can capture, in a room that is recording: every
+    // other reason to refuse is absent, so what closed the gate is the line.
+    expect(ctx?.canRecord).toBe(false);
+  });
+
+  it('offers Record on a line still being explored, and on one that was merged', async () => {
+    // A merged line is a record too, but it is a record of an answer the review TOOK,
+    // and the room it belongs to is the target's. Only a dropped line's own room is a
+    // room with nothing left to say in it.
+    mountProvider();
+
+    await setLine({ kind: 'variant', status: 'active' });
+    expect(ctx?.canRecord).toBe(true);
+
+    await setLine({ kind: 'main', status: 'active' });
+    expect(ctx?.canRecord).toBe(true);
+  });
+});
+
 describe('RecordingContext — capture pauses while the review is edited', () => {
   beforeEach(() => {
-    fakes.store.current = { ...fakes.store.current, reviewEditing: null, isPrivacyMode: false };
+    fakes.store.current = { ...fakes.store.current, reviewEditing: null, activeLine: null, isPrivacyMode: false };
     fakes.micArgs.current = [];
     fakes.recorderStop.mockReset().mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }));
     // An array, because that is what the provider's `captureRecording` answers: the

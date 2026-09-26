@@ -58,13 +58,15 @@ import { useStore } from '../../../store';
 
 const MAIN: ReviewLine = {
   id: 'line-main', reviewId: 'review-1', kind: 'main', name: 'Main line', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: '',
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: '',
   createdAt: '2026-03-01T09:00:00.000Z', closedAt: null,
 };
 
 const VARIANT_A: ReviewLine = {
   id: 'line-a', reviewId: 'review-1', kind: 'variant', name: 'Weld fix', letter: 'A',
-  parentSessionId: 'sess-2', status: 'active', createdBy: null, createdByName: 'Paco',
+  parentSessionId: 'sess-2', parentLineId: 'line-main', mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: 'Paco',
   createdAt: '2026-05-04T09:00:00.000Z', closedAt: null,
 };
 

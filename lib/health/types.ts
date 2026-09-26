@@ -65,6 +65,8 @@ export interface HealthReport {
      */
     identity?: ConnectorHealth;
     modelImport?: ConnectorHealth;
+    /** The install's own database backups (deploy/backup), when the api can see them. */
+    backup?: ConnectorHealth;
     notifications?: Record<string, ConnectorHealth>;
   };
   /**

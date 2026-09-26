@@ -15,7 +15,7 @@ import { sceneModelPrefix } from './roomScene';
 import { sceneModelEntry } from './sceneEntries';
 import { applyStoredPlacements, placementsForLine, type PlacementSlots } from './placement';
 import { listModelRevisions, revisionsForSession, sceneFromRevisions } from '../reviews/revisionsRepo';
-import { originRevisionIds } from '../reviews/linesRepo';
+import { originRevisionIds, placementSlotsFor } from '../reviews/linesRepo';
 
 /**
  * The part of a curation's asset that decides what to show.
@@ -37,17 +37,26 @@ export interface CurationAssetModel extends PlacementSlots {
 }
 
 /**
- * The line whose slot of the review's positions this browser should open on.
+ * The slot of the review's positions this browser should open on, and the order of
+ * slots to look in.
  *
- * Null for the main line, and null for the four cases that mean the same thing: a
- * room on the main line, an ad-hoc room with no review, an install with no lines, and
- * the curator's setup page, which has no room at all. `activeLine` is resolved by
- * pages/RoomPage BEFORE the socket opens, so by the time a seed runs it is already the
- * line this room is on.
+ * `slot` is null for the main line, and null for the four cases that mean the same
+ * thing: a room on the main line, an ad-hoc room with no review, an install with no
+ * lines, and the curator's setup page, which has no room at all. `activeLine` is
+ * resolved by pages/RoomPage BEFORE the socket opens, so by the time a seed runs it is
+ * already the line this room is on.
+ *
+ * `order` is batch BX's addition and it is the one `placementsForLine` reads first:
+ * the line's own slot, then its parents', because a variant started from another
+ * variant shows what THAT variant left its models at until somebody moves one here.
+ * Read from lib/reviews/linesRepo.cachedLines rather than awaited — this is called
+ * synchronously in the middle of putting a scene up — and the cache is warm for the
+ * same reason `activeLine` is: the room resolved its line before it connected.
  */
-function activePlacementSlot(): string | null {
+function activePlacementSlot(): { slot: string | null; order: string[] } {
   const line = useStore.getState().activeLine;
-  return line?.kind === 'variant' ? line.id : null;
+  if (!line || line.kind !== 'variant') return { slot: null, order: [] };
+  return { slot: line.id, order: placementSlotsFor(line.reviewId, line) };
 }
 
 /**
@@ -63,7 +72,7 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
   // Which line's positions this scene opens on — the main line's for every caller
   // that is not standing in a variant's room. Read once, before the async branch
   // below, so the two halves of a legacy parse cannot disagree about it.
-  const slot = activePlacementSlot();
+  const slots = activePlacementSlot();
 
   if (asset.modelHash && asset.importedFileName) {
     // Stored by hash: say what to show and let lib/scene/useSceneModelLoader
@@ -73,7 +82,7 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
     // exactly the same path, which is the point of having one.
     setRoomScene(applyStoredPlacements(
       curationScene(asset.modelHash, asset.importedFileName),
-      placementsForLine(asset, slot),
+      placementsForLine(asset, slots.slot, slots.order),
     ));
     return true;
   }
@@ -95,7 +104,7 @@ export function showCurationModel(asset: CurationAssetModel | undefined, logAs: 
       .then((parsed) => {
         setRoomScene(applyStoredPlacements(
           { models: [model], builtIn: null },
-          placementsForLine(asset, slot),
+          placementsForLine(asset, slots.slot, slots.order),
         ));
         upsertSceneModel(sceneModelEntry(model, parsed));
       })
@@ -207,8 +216,9 @@ export async function showReviewScene(
   // the rebuilt-key and the origin read want the line's own id whatever it is, while
   // the positions want the SLOT they live in, and the main line's slot has no id in it
   // at all — it is `asset.placements`, the field every review written before variants
-  // keeps its positions in.
-  const slot = activePlacementSlot();
+  // keeps its positions in. Batch BX added the order the slots are looked in: a variant
+  // of a variant opens on its parent's positions until somebody moves one here.
+  const slots = activePlacementSlot();
   // `force` is a room whose server has just said it has NEVER held a scene, so there
   // is nothing on screen for the guard to protect: the reason it exists — not putting
   // the database's copy back over a model somebody has since hidden or moved — cannot
@@ -264,7 +274,7 @@ export async function showReviewScene(
   // origin cannot be honoured opens on everything rather than on an empty room.
   state.setRoomScene(applyStoredPlacements(
     sceneFromRevisions(revisionsForSession(revisions, origin), unrecorded),
-    placementsForLine(asset, slot),
+    placementsForLine(asset, slots.slot, slots.order),
   ));
   return true;
 }

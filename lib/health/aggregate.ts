@@ -30,6 +30,7 @@ import { safeDetail, safeProvider } from './sanitize.ts';
 import {
   DEFAULT_AUTH_PROBE_URL,
   probeAuthService,
+  probeBackups,
   probeCaptureService,
   probeDatabase,
   type ProbeOptions,
@@ -416,6 +417,21 @@ export function buildChecks(config: ViewpointConfig, deps: HealthDeps): Check[] 
       slot: 'modelImport',
       provider: 'onshape',
       run: () => callHealthCheck(adapter),
+    });
+  }
+
+  // ── Backups (batch BY) ──────────────────────────────────────────────
+  // Only where the install says where its backups are: the compose file mounts the
+  // `db-backups` volume read-only on the api and sets BACKUP_STATUS_DIR. A deployment
+  // that backs up some other way reports nothing here rather than a false alarm.
+  const backupDir = env.BACKUP_STATUS_DIR?.trim();
+  if (backupDir) {
+    const hours = Number(env.BACKUP_INTERVAL_HOURS);
+    const interval = Number.isFinite(hours) && hours > 0 ? hours : 24;
+    checks.push({
+      slot: 'backup',
+      provider: 'local',
+      run: () => probeBackups(backupDir, interval * 2),
     });
   }
 

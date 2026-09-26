@@ -230,7 +230,13 @@ function stubBackend(state: World) {
         return new Response(JSON.stringify([created]), { status: 201 });
       }
       const adopted = url.includes('status=eq.adopted');
-      const lines = adopted ? state.lines.filter((l) => l['status'] === 'adopted') : state.lines;
+      // Filtered by review the way PostgREST filters it. Without this, a fixture that
+      // holds a line of ANOTHER review hands it to the handler as though the database
+      // had, and the refusal for "that line is not part of this design review" passes
+      // for the wrong reason — or does not happen at all.
+      const wanted = new URL(url).searchParams.get('review_id')?.replace('eq.', '') ?? null;
+      const own = wanted === null ? state.lines : state.lines.filter((l) => l['review_id'] === wanted);
+      const lines = adopted ? own.filter((l) => l['status'] === 'adopted') : own;
       return new Response(JSON.stringify(lines), { status: 200 });
     }
     return new Response('not found', { status: 404 });
@@ -431,22 +437,30 @@ describe('api/reviews/lines', () => {
     expect(body['name']).toBe('Glass-filled nylon');
   });
 
-  it('refuses a missing meeting in a review that HAS met, and writes nothing', async () => {
+  it('fills in the main line’s newest meeting when none was named', async () => {
+    // Batch BX replaced batch BQ's refusal here, and the reason it could is worth
+    // keeping: a missing meeting used to be refused in a review that HAS met because
+    // the endpoint could not tell a client that had not read from a line with nothing
+    // to leave from, and a variant with no parent session opens on the wrong model.
+    // It can tell now, because the request names the LINE and that line's own newest
+    // meeting is one read away — so the variant gets the meeting it should have got
+    // and the room opens on the model the map says it left from.
     const { calls } = stubBackend(world());
     const res = await callHandler(
       req({ action: 'explore', reviewId: REVIEW_ID, name: 'Glass-filled nylon' }),
       createMockRes(),
     );
-    // The missing id there is a client that did not read, not a line with nothing to
-    // leave from — and the variant would open on the wrong model.
-    expect(res.statusCode).toBe(400);
-    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('review_lines'))).toBe(false);
+    expect(res.statusCode).toBe(200);
+    const body = insertBody(calls);
+    expect(body['parent_line_id']).toBe(MAIN_ID);
+    expect(body['parent_session_id']).toBe('sess-4');
   });
 
-  it('counts a meeting recorded before lines existed as the main line’s, and refuses', async () => {
-    // `line_id` NULL is the main line's: that is where SessionMap draws such a meeting
-    // and where the schema's backfill puts it. Ignoring it would let a variant be started
-    // "from nowhere" in a review that has met three times.
+  it('starts from the main line with no meeting when its only one predates lines', async () => {
+    // `line_id` NULL is the main line's on the map and in the schema's backfill, but it
+    // is not a meeting any line can be said to have held yet — so this is exactly the
+    // case batch BQ added support for: a variant of a review that has never met on a
+    // line, started from what that line is showing now.
     const { calls } = stubBackend(world({
       lines: [mainLine()],
       sessions: [
@@ -457,8 +471,10 @@ describe('api/reviews/lines', () => {
       req({ action: 'explore', reviewId: REVIEW_ID, name: 'Glass-filled nylon' }),
       createMockRes(),
     );
-    expect(res.statusCode).toBe(400);
-    expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('review_lines'))).toBe(false);
+    expect(res.statusCode).toBe(200);
+    const body = insertBody(calls);
+    expect(body['parent_line_id']).toBe(MAIN_ID);
+    expect(body['parent_session_id']).toBeNull();
   });
 
   it('still checks the caller when no meeting was named', async () => {
@@ -488,7 +504,10 @@ describe('api/reviews/lines', () => {
 
     const rpc = rpcCall(calls, 'adopt_review_line');
     expect(rpc).toBeTruthy();
-    expect(rpc?.body).toEqual({ p_variant: VARIANT_ID, p_revision_ids: ['r-b2'] });
+    // All three arguments, and the middle one is the line the model is going onto:
+    // batch BX made the destination a fact the endpoint states rather than one the
+    // database function assumes.
+    expect(rpc?.body).toEqual({ p_variant: VARIANT_ID, p_target: MAIN_ID, p_revision_ids: ['r-b2'] });
   });
 
   it('refuses with the ONE plain question when both lines moved the same model', async () => {
@@ -497,22 +516,26 @@ describe('api/reviews/lines', () => {
     expect(res.statusCode).toBe(409);
     const body = res.body as { question?: string; keep?: unknown };
     expect(body.question).toBe('Keep Rev C from the main line or Rev B2 from Variant A?');
-    expect(body.keep).toEqual(['main', 'variant']);
+    // 'target', not 'main': from batch BX the destination is not always the main line,
+    // and a `keep: 'main'` answered for a merge into Variant A would be an answer about
+    // a line that is not in the question. The endpoint still READS 'main' as 'target'.
+    expect(body.keep).toEqual(['target', 'variant']);
     // Nothing was written while it was asking.
     expect(rpcCall(calls, 'adopt_review_line')).toBeUndefined();
   });
 
   it('writes the side that was chosen, once the question has been answered', async () => {
     const { calls } = stubBackend(world());
-    const kept = await callHandler(req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID, keep: 'main' }), createMockRes());
+    const kept = await callHandler(req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID, keep: 'target' }), createMockRes());
     expect(kept.statusCode).toBe(200);
-    expect(rpcCall(calls, 'adopt_review_line')?.body).toEqual({ p_variant: VARIANT_ID, p_revision_ids: ['r-c'] });
+    expect(rpcCall(calls, 'adopt_review_line')?.body)
+      .toEqual({ p_variant: VARIANT_ID, p_target: MAIN_ID, p_revision_ids: ['r-c'] });
 
     const taken = await callHandler(req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID, keep: 'variant' }), createMockRes());
     expect(taken.statusCode).toBe(200);
     const writes = calls.filter((c) => c.url.includes('rpc/adopt_review_line'));
     expect(writes).toHaveLength(2);
-    expect(writes[1]?.body).toEqual({ p_variant: VARIANT_ID, p_revision_ids: ['r-b2'] });
+    expect(writes[1]?.body).toEqual({ p_variant: VARIANT_ID, p_target: MAIN_ID, p_revision_ids: ['r-b2'] });
   });
 
   it('honours an adoption newer than the main line\'s last meeting when it works out the scene', async () => {
@@ -628,7 +651,7 @@ describe('api/reviews/lines', () => {
 
   // ─── The words ────────────────────────────────────────────────────────────
 
-  it('never answers with branch, fork, merge or commit', async () => {
+  it('never answers with branch, fork or commit', async () => {
     stubBackend(world());
     const answers: unknown[] = [
       (await callHandler(req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID }), createMockRes())).body,
@@ -636,6 +659,285 @@ describe('api/reviews/lines', () => {
       (await callHandler(req({ action: 'explore', reviewId: REVIEW_ID, parentSessionId: PARENT_SESSION }, { token: jwtFor(PARTICIPANT) }), createMockRes())).body,
     ];
     const said = JSON.stringify(answers).toLowerCase();
-    expect(said).not.toMatch(/branch|fork|merge|commit/);
+    expect(said).not.toMatch(/branch|fork|commit/);
+  });
+
+  it('says "merge" only where the user’s own word for it belongs', async () => {
+    // Batch BX: the button is "Merge into…" and a card that moved says "merged into
+    // Variant A 26 Sep", so the word is allowed — but only as a verb about what
+    // happened to a variant, never as a noun for the line itself and never in place of
+    // "variant". What is refused here is the sentence a refusal produces, because that
+    // is the one place this endpoint invents words.
+    stubBackend(world());
+    const refused = await callHandler(
+      req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID, targetLineId: VARIANT_ID }),
+      createMockRes(),
+    );
+    expect((refused.body as { error: string }).error).toBe('A variant cannot be merged into itself.');
+  });
+
+  // ─── Batch BX: a variant from any line, and a merge into any line ──────────
+  //
+  // The user's report was that a variant could only be started from the main line and
+  // only be merged back into it. Both halves are the same missing fact: nothing
+  // recorded WHICH LINE a variant came from, only which meeting, and a meeting was
+  // always one of the main line's. `parent_line_id` is the fact, and these are the
+  // things it has to make true at the endpoint — where the write happens and where a
+  // client cannot be trusted to have read anything first.
+
+  const CHILD_ID = 'line-b';
+
+  /** A variant started from Variant A, which is the shape batch BX makes possible. */
+  function childVariant(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return variant({
+      id: CHILD_ID, name: 'Lighter frame', letter: 'B',
+      parent_session_id: null, parent_line_id: VARIANT_ID,
+      created_at: '2026-06-01T09:00:00.000Z', ...overrides,
+    });
+  }
+
+  function insertBody(calls: RecordedCall[]): Record<string, unknown> {
+    const insert = calls.find((c) => c.method === 'POST' && c.url.includes('review_lines'));
+    expect(insert, 'no line was written').toBeDefined();
+    return (insert?.body ?? {}) as Record<string, unknown>;
+  }
+
+  it('starts a variant from another variant, recording both halves of where it came from', async () => {
+    const { calls } = stubBackend(world());
+
+    const res = await callHandler(
+      req({ action: 'explore', reviewId: REVIEW_ID, parentLineId: VARIANT_ID, name: 'Lighter frame' }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(200);
+    const body = insertBody(calls);
+    expect(body['parent_line_id']).toBe(VARIANT_ID);
+    // No meeting was named, so the parent line's own newest one is. That is the point of
+    // the endpoint doing the lookup rather than the client: the map has to draw the
+    // branch leaving from a stop, and the room has to open on the model that stop was
+    // looking at, and neither works from a null.
+    expect(body['parent_session_id']).toBe('sess-a1');
+    // Letters stay review-wide, so the second variant of this review is B whatever line
+    // it was started from.
+    expect(body['letter']).toBe('B');
+  });
+
+  it('starts a variant from a line that has never met, and leaves the meeting empty', async () => {
+    const state = world();
+    state.lines = [...state.lines, childVariant()];
+    const { calls } = stubBackend(state);
+
+    const res = await callHandler(
+      req({ action: 'explore', reviewId: REVIEW_ID, parentLineId: CHILD_ID, name: 'Carbon' }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(200);
+    const body = insertBody(calls);
+    expect(body['parent_line_id']).toBe(CHILD_ID);
+    expect(body['parent_session_id']).toBeNull();
+    expect(body['letter']).toBe('C');
+  });
+
+  it('takes the meeting’s own line when a meeting was named, over a line named beside it', async () => {
+    // A meeting is the more specific fact, and the map has to draw the branch leaving
+    // from the row the meeting is on — a branch leaving from a row that does not hold
+    // the stop is a line floating in mid-air.
+    const { calls } = stubBackend(world());
+
+    const res = await callHandler(
+      req({
+        action: 'explore', reviewId: REVIEW_ID,
+        parentSessionId: PARENT_SESSION, parentLineId: VARIANT_ID, name: 'Lighter frame',
+      }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(insertBody(calls)['parent_line_id']).toBe(MAIN_ID);
+  });
+
+  it('refuses to start a variant from a line nobody is exploring any more', async () => {
+    const state = world();
+    state.lines = [...state.lines, childVariant({ status: 'dropped', closed_at: '2026-06-02T09:00:00.000Z' })];
+    const { calls } = stubBackend(state);
+
+    const res = await callHandler(
+      req({ action: 'explore', reviewId: REVIEW_ID, parentLineId: CHILD_ID, name: 'Carbon' }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(409);
+    expect(calls.some((c) => c.method === 'POST' && c.url.includes('review_lines'))).toBe(false);
+  });
+
+  it('refuses a line of another review as the one to start from', async () => {
+    const state = world();
+    state.lines = [...state.lines, childVariant({ id: 'elsewhere', review_id: 'rev-2' })];
+    stubBackend(state);
+
+    const res = await callHandler(
+      req({ action: 'explore', reviewId: REVIEW_ID, parentLineId: 'elsewhere', name: 'Carbon' }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('merges into the line the request named, and sends it to the function', async () => {
+    const state = world();
+    state.lines = [...state.lines, childVariant()];
+    const { calls } = stubBackend(state);
+
+    const res = await callHandler(
+      req({ action: 'adopt', reviewId: REVIEW_ID, lineId: CHILD_ID, targetLineId: VARIANT_ID }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(200);
+    const call = rpcCall(calls, 'adopt_review_line');
+    expect(call, 'the merge was not written').toBeDefined();
+    const body = (call?.body ?? {}) as Record<string, unknown>;
+    expect(body['p_variant']).toBe(CHILD_ID);
+    // The three-argument function is the one that is called: the two-argument wrapper
+    // in the schema exists only so an older api bundle cannot break a review, and an
+    // endpoint that used it would merge every variant into the main line.
+    expect(body['p_target']).toBe(VARIANT_ID);
+    expect((res.body as { targetLineId?: string }).targetLineId).toBe(VARIANT_ID);
+  });
+
+  it('still merges into the main line when no target was named', async () => {
+    const { calls } = stubBackend(world());
+
+    const res = await callHandler(
+      req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID, keep: 'variant' }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(200);
+    const body = (rpcCall(calls, 'adopt_review_line')?.body ?? {}) as Record<string, unknown>;
+    expect(body['p_target']).toBe(MAIN_ID);
+  });
+
+  it('refuses to merge a variant into one of its own descendants', async () => {
+    // Taking A into B, which was started from A, would make B its own ancestor: every
+    // card on both lines would end up on a line whose history runs in a circle, and the
+    // map would have to draw a branch leaving from a row below itself.
+    const state = world();
+    state.lines = [...state.lines, childVariant()];
+    const { calls } = stubBackend(state);
+
+    const res = await callHandler(
+      req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID, targetLineId: CHILD_ID }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(409);
+    expect(rpcCall(calls, 'adopt_review_line')).toBeUndefined();
+  });
+
+  it('refuses a target that has been merged or dropped, and one that is not in this review', async () => {
+    const closed = world();
+    closed.lines = [...closed.lines, childVariant({ status: 'adopted', closed_at: '2026-06-02T09:00:00.000Z' })];
+    stubBackend(closed);
+    expect((await callHandler(
+      req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID, targetLineId: CHILD_ID }),
+      createMockRes(),
+    )).statusCode).toBe(409);
+
+    const elsewhere = world();
+    // `parent_line_id` null: this one is a line of ANOTHER review and nothing else about
+    // it. Left as a child of Variant A it would be refused as a descendant first, and
+    // the test would pass for the wrong reason.
+    elsewhere.lines = [...elsewhere.lines, childVariant({ id: 'other-review', review_id: 'rev-2', parent_line_id: null })];
+    stubBackend(elsewhere);
+    expect((await callHandler(
+      req({ action: 'adopt', reviewId: REVIEW_ID, lineId: VARIANT_ID, targetLineId: 'other-review' }),
+      createMockRes(),
+    )).statusCode).toBe(404);
+  });
+
+  it('asks the question about the TARGET line, not always about the main one', async () => {
+    // B left A at Rev A, A has since gone to Rev C and B has gone to Rev B2. Both
+    // moved the same model, so one plain question — and it has to name Variant A,
+    // because that is the line the answer is written onto.
+    const state = world({
+      lines: [mainLine(), variant(), childVariant({ parent_session_id: 'sess-a1' })],
+      sessions: [
+        { id: 'sess-a1', review_id: REVIEW_ID, line_id: VARIANT_ID, ended_at: '2026-06-01T16:00:00.000Z', revision_ids: ['r-a'], seq: 1 },
+        { id: 'sess-a2', review_id: REVIEW_ID, line_id: VARIANT_ID, ended_at: '2026-06-04T16:00:00.000Z', revision_ids: ['r-c'], seq: 2 },
+        { id: 'sess-b1', review_id: REVIEW_ID, line_id: CHILD_ID, ended_at: '2026-06-05T16:00:00.000Z', revision_ids: ['r-b2'], seq: 1 },
+      ],
+    });
+    const { calls } = stubBackend(state);
+
+    const asked = await callHandler(
+      req({ action: 'adopt', reviewId: REVIEW_ID, lineId: CHILD_ID, targetLineId: VARIANT_ID }),
+      createMockRes(),
+    );
+
+    expect(asked.statusCode).toBe(409);
+    expect((asked.body as { question?: string }).question)
+      .toBe('Keep Rev C from Variant A or Rev B2 from Variant B?');
+    expect((asked.body as { keep?: string[] }).keep).toEqual(['target', 'variant']);
+    expect(rpcCall(calls, 'adopt_review_line')).toBeUndefined();
+
+    // And the answer writes the scene the target line ends up showing.
+    const answered = await callHandler(
+      req({ action: 'adopt', reviewId: REVIEW_ID, lineId: CHILD_ID, targetLineId: VARIANT_ID, keep: 'variant' }),
+      createMockRes(),
+    );
+    expect(answered.statusCode).toBe(200);
+    expect((rpcCall(calls, 'adopt_review_line')?.body as Record<string, unknown>)?.['p_revision_ids'])
+      .toEqual(['r-b2']);
+  });
+
+  it('refuses to drop a variant that one of its own is still being explored from', async () => {
+    // The simplest rule that is also the correct one: B was started from A's answer, and
+    // dropping A leaves B starting from an answer the review has just rejected. Which of
+    // the two should go is a decision about B, and the sentence has to say so.
+    const state = world();
+    state.lines = [...state.lines, childVariant()];
+    const { calls } = stubBackend(state);
+
+    const res = await callHandler(
+      req({ action: 'drop', reviewId: REVIEW_ID, lineId: VARIANT_ID, reason: 'Too expensive to tool' }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(409);
+    // The SHORT label: the sentence has to fit on one line beside a button, and the
+    // person reading it is standing in a menu that has just named the variant in full.
+    expect((res.body as { error: string }).error)
+      .toBe('Variant B starts from this variant. Drop or merge it first.');
+    expect((res.body as { childLineId?: string }).childLineId).toBe(CHILD_ID);
+    expect(rpcCall(calls, 'drop_review_line')).toBeUndefined();
+  });
+
+  it('drops a variant whose own children are all finished with', async () => {
+    const state = world();
+    state.lines = [...state.lines, childVariant({ status: 'adopted', closed_at: '2026-06-02T09:00:00.000Z' })];
+    const { calls } = stubBackend(state);
+
+    const res = await callHandler(
+      req({ action: 'drop', reviewId: REVIEW_ID, lineId: VARIANT_ID, reason: 'Too expensive to tool' }),
+      createMockRes(),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(rpcCall(calls, 'drop_review_line')).toBeDefined();
+  });
+
+  it('passes on the function’s own refusal for a child started in the moment between', async () => {
+    // The api checks first so that it can name the child; the function checks inside its
+    // transaction so that the check cannot be raced. This is the second one answering.
+    stubBackend(world({ rpcAnswer: { ok: false, error: 'has_active_children' } }));
+    const res = await callHandler(
+      req({ action: 'drop', reviewId: REVIEW_ID, lineId: VARIANT_ID, reason: 'Too expensive to tool' }),
+      createMockRes(),
+    );
+    expect(res.statusCode).toBe(409);
+    expect((res.body as { error: string }).error).toContain('Drop or merge it first.');
   });
 });

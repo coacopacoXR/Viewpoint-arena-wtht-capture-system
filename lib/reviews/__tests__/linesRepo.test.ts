@@ -86,14 +86,17 @@ vi.mock('../../identity', () => ({
 }));
 
 import {
+  cachedLines,
   ensureMainLine,
   lastSessionOnLine,
   listLines,
+  listLinesForReviews,
   listOpenLineItems,
   listReviewCardRefs,
   listReviewSessions,
   nextSessionSeq,
   originRevisionIds,
+  placementSlotsFor,
   resetLineCache,
   resolveLine,
   updateLineItem,
@@ -537,6 +540,258 @@ describe('originRevisionIds — what a session starts from', () => {
     );
 
     await expect(originRevisionIds(REVIEW, 'line-a')).resolves.toEqual(['rev-b']);
+  });
+});
+
+// ─── Batch BX: a variant can come from, and go into, ANY line ───────────────
+//
+// Until this batch `parent_session_id` was the only record of where a variant came
+// from, so a variant could only leave from one of the MAIN line's meetings and could
+// only be taken back into the main line. Both ends are now a LINE of their own —
+// `parent_line_id` and `merged_into_line_id` — and every read that used to be able to
+// assume the main line was at the other end of the chain has to follow it instead.
+
+/** main ← A ← B ← C, none of them started from a meeting, so the chain is all there is. */
+function chainRows(): Record<string, unknown>[] {
+  return [
+    mainRow(),
+    variantRow({
+      id: 'line-a', letter: 'A', parent_session_id: null, parent_line_id: 'line-main',
+      created_at: '2026-09-05T09:00:00.000Z',
+    }),
+    variantRow({
+      id: 'line-b', letter: 'B', name: 'Lighter frame', parent_session_id: null,
+      parent_line_id: 'line-a', created_at: '2026-09-06T09:00:00.000Z',
+    }),
+    variantRow({
+      id: 'line-c', letter: 'C', name: 'Two ribs', parent_session_id: null,
+      parent_line_id: 'line-b', created_at: '2026-09-07T09:00:00.000Z',
+    }),
+  ];
+}
+
+function meetingRow(
+  lineId: string,
+  id: string,
+  seq: number,
+  endedAt: string,
+  revisionIds: string[],
+): Record<string, unknown> {
+  return {
+    id, title: `Session ${id}`, ended_at: endedAt, participant_count: 3,
+    line_id: lineId, seq, revision_ids: revisionIds,
+  };
+}
+
+function lineWithId(lines: readonly ReviewLine[], id: string): ReviewLine | null {
+  return lines.find((line) => line.id === id) ?? null;
+}
+
+describe('placementSlotsFor — the saved positions a line opens on', () => {
+  async function readChain(): Promise<ReviewLine[]> {
+    answerWith(chainRows());
+    return listLines(REVIEW);
+  }
+
+  it('answers the line\'s own slot and then every variant above it, nearest first', async () => {
+    const lines = await readChain();
+    // Variant C has had nothing moved on it yet, so its models stand wherever the line
+    // above it last put them. Stopping at its own empty slot would open the room on the
+    // main line's positions and quietly undo two variants' worth of framing.
+    expect(placementSlotsFor(REVIEW, lineWithId(lines, 'line-c'))).toEqual(['line-c', 'line-b', 'line-a']);
+  });
+
+  it('stops at the last variant, because the main line\'s positions are not a slot', async () => {
+    const lines = await readChain();
+    expect(placementSlotsFor(REVIEW, lineWithId(lines, 'line-a'))).toEqual(['line-a']);
+  });
+
+  it('answers [] for the main line and for no line at all', async () => {
+    const lines = await readChain();
+    expect(placementSlotsFor(REVIEW, lineWithId(lines, 'line-main'))).toEqual([]);
+    expect(placementSlotsFor(REVIEW, null)).toEqual([]);
+  });
+
+  it('reads the chain off the line\'s own review when the caller has no id to hand', async () => {
+    // lib/scene/showCurationModel is given a line and not a review, and it decides this
+    // synchronously while a scene is going up. [] there is not a neutral answer: it
+    // opens every variant on the main line's positions.
+    const lines = await readChain();
+    expect(placementSlotsFor(null, lineWithId(lines, 'line-c'))).toEqual(['line-c', 'line-b', 'line-a']);
+  });
+});
+
+describe('cachedLines', () => {
+  it('answers [] for a review whose lines were never read, without reading them', async () => {
+    // A page that is not a room, and an install with no database. Every caller reads []
+    // as "no chain to walk", which is the pre-BX answer and the right one for a review
+    // with no lines — so this must not become a read that a lobby page waits on.
+    expect(cachedLines('review-never-read')).toEqual([]);
+    expect(cachedLines(null)).toEqual([]);
+    expect(cachedLines('')).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('answers the lines a read already put there, and reads the table once', async () => {
+    answerWith(chainRows());
+    const lines = await listLines(REVIEW);
+    expect(cachedLines(REVIEW)).toEqual(lines);
+    expect(cachedLines(REVIEW).map((line) => line.id)).toEqual(['line-main', 'line-a', 'line-b', 'line-c']);
+    expect(calls.filter((call) => call.table === 'review_lines' && call.op === 'select')).toHaveLength(1);
+  });
+});
+
+describe('originRevisionIds — the walk up the parent lines', () => {
+  it('answers the nearest line above it that has met, not the main line and not null', async () => {
+    answerByTableAndLine(
+      { review_lines: chainRows() },
+      {
+        // C has never met, and neither has B above it…
+        'line-c': [],
+        'line-b': [],
+        // …so the answer is A's, which met and was looking at Rev A.
+        'line-a': [meetingRow('line-a', 'sess-a1', 1, '2026-09-08T16:00:00.000Z', ['r-a'])],
+        // The main line has moved on since, and its model is the one C is an alternative to.
+        'line-main': [meetingRow('line-main', 'sess-3', 3, '2026-09-09T16:00:00.000Z', ['r-main'])],
+      },
+    );
+
+    await expect(originRevisionIds(REVIEW, 'line-c')).resolves.toEqual(['r-a']);
+  });
+
+  it('answers a variant\'s OWN last meeting once it has met, however many lines are above it', async () => {
+    answerByTableAndLine(
+      { review_lines: chainRows() },
+      {
+        'line-b': [meetingRow('line-b', 'sess-b1', 1, '2026-09-08T16:00:00.000Z', ['r-b'])],
+        'line-a': [meetingRow('line-a', 'sess-a1', 1, '2026-09-09T16:00:00.000Z', ['r-a'])],
+        'line-main': [meetingRow('line-main', 'sess-3', 3, '2026-09-10T16:00:00.000Z', ['r-main'])],
+      },
+    );
+
+    // B2 starts from B1. Answering A's model here would put the people on B back on a
+    // scene they explored away from a meeting ago.
+    await expect(originRevisionIds(REVIEW, 'line-b')).resolves.toEqual(['r-b']);
+  });
+});
+
+describe('a merge is the business of the line it went into', () => {
+  /** Variant B, merged into Variant A after the main line last met. */
+  const mergedIntoVariant = variantRow({
+    id: 'line-b', letter: 'B', name: 'Two ribs', status: 'adopted', parent_session_id: null,
+    parent_line_id: 'line-a', created_at: '2026-09-06T09:00:00.000Z',
+    closed_at: '2026-09-20T16:00:00.000Z', merged_into_line_id: 'line-a',
+    adopted_revision_ids: ['r-merged'],
+  });
+  const MAIN_SESSIONS = {
+    'line-main': [meetingRow('line-main', 'sess-3', 3, '2026-09-09T16:00:00.000Z', ['r-main'])],
+    'line-a': [],
+    'line-b': [],
+  };
+
+  it('does not change what the main line opens on', async () => {
+    answerByTableAndLine(
+      { review_lines: [mainRow(), variantRow({ parent_line_id: 'line-main' }), mergedIntoVariant] },
+      MAIN_SESSIONS,
+    );
+
+    // Counting every merged variant of a review against its main line would open the
+    // main line's room on a model nobody took a decision about there, while the map
+    // goes on drawing the green return into Variant A.
+    await expect(originRevisionIds(REVIEW, 'line-main')).resolves.toEqual(['r-main']);
+  });
+
+  it('is what the variant it went into opens on, until that variant meets again', async () => {
+    answerByTableAndLine(
+      { review_lines: [mainRow(), variantRow({ parent_line_id: 'line-main' }), mergedIntoVariant] },
+      MAIN_SESSIONS,
+    );
+
+    // A variant is a destination now, so a merge into it is the same fact a merge into
+    // the main line has always been: the model the people on that line are looking at.
+    await expect(originRevisionIds(REVIEW, 'line-a')).resolves.toEqual(['r-merged']);
+  });
+
+  it('still counts a merge that named no destination, which is a row from before batch BX', async () => {
+    answerByTableAndLine(
+      {
+        review_lines: [
+          mainRow(),
+          variantRow({
+            id: 'line-old', letter: 'Z', status: 'adopted', closed_at: '2026-09-20T16:00:00.000Z',
+            adopted_revision_ids: ['r-old'],
+          }),
+        ],
+      },
+      MAIN_SESSIONS,
+    );
+
+    // Every merge that happened before this batch went into the main line, because that
+    // was the only line a variant could be taken into. Reading such a row as "went
+    // nowhere" would drop the model a review adopted months ago.
+    await expect(originRevisionIds(REVIEW, 'line-main')).resolves.toEqual(['r-old']);
+  });
+});
+
+// ─── A database that has not been upgraded since batch BX ───────────────────
+
+describe('a line read on a database without batch BX\'s columns', () => {
+  /** Answers 42703 for the wide column list and the rows for the narrow one. */
+  function routeMissingColumns(asked: string[]): void {
+    route.current = (table) => {
+      if (table !== 'review_lines') return { data: [], error: null };
+      const selects = calls.filter((call) => call.table === table && call.op === 'select');
+      const columns = String(selects[selects.length - 1]?.args[0] ?? '');
+      asked.push(columns);
+      if (columns.includes('parent_line_id')) {
+        return { data: null, error: { code: '42703', message: 'column "parent_line_id" does not exist' } };
+      }
+      return { data: [mainRow(), variantRow()], error: null };
+    };
+  }
+
+  it('asks again without them, and reads every variant as one that came from the main line', async () => {
+    const asked: string[] = [];
+    routeMissingColumns(asked);
+
+    const lines = await listLines(REVIEW);
+    expect(lines.map((line) => line.id)).toEqual(['line-main', 'line-a']);
+    // Such an install has no variant of a variant and no merge into one, because it
+    // could not write either. A null is the truth about the row, and "from the main
+    // line" is where every reader then puts it.
+    expect(lines[1]).toMatchObject({ parentLineId: null, mergedIntoLineId: null, dropReason: null });
+
+    expect(asked).toHaveLength(2);
+    expect(asked[0]).toContain('parent_line_id');
+    expect(asked[1]).toContain('parent_session_id');
+    for (const gone of ['parent_line_id', 'merged_into_line_id', 'drop_reason']) {
+      expect(asked[1]).not.toContain(gone);
+    }
+  });
+
+  it('does the same for the lobby\'s read of many reviews at once', async () => {
+    const asked: string[] = [];
+    routeMissingColumns(asked);
+
+    // One lobby card per review, and every card carries a miniature of that review's
+    // map: a column list this database does not have would empty all forty of them.
+    const grouped = await listLinesForReviews([REVIEW]);
+    expect(grouped[REVIEW]?.map((line) => line.id)).toEqual(['line-main', 'line-a']);
+    expect(asked).toHaveLength(2);
+  });
+
+  it('answers [] for a refusal that is not about a column, without asking twice', async () => {
+    let asks = 0;
+    route.current = (table) => {
+      if (table !== 'review_lines') return { data: [], error: null };
+      asks++;
+      return { data: null, error: { code: '42501', message: 'permission denied for table review_lines' } };
+    };
+
+    await expect(listLines(REVIEW)).resolves.toEqual([]);
+    // Fewer columns do not answer a permission refusal, so a retry would only make the
+    // room wait twice as long to be told no — and then show a review with no lines.
+    expect(asks).toBe(1);
   });
 });
 

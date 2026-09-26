@@ -283,7 +283,12 @@ describe('api/reviews/delete', () => {
     expect(rpc?.body).toEqual({ p_review: REVIEW_ID });
     // One call, not one per table: a review whose curation row is gone but whose
     // meetings are not is a tracker full of cards no review can be opened on.
-    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+    const posts = calls.filter((c) => c.method === 'POST');
+    expect(posts.filter((c) => !String(c.url).includes('audit_events'))).toHaveLength(1);
+    // And one audit row saying who deleted what (batch BY).
+    const audit = posts.filter((c) => String(c.url).includes('audit_events'));
+    expect(audit).toHaveLength(1);
+    expect(JSON.stringify(audit[0].body)).toContain('review_deleted');
   });
 
   it('lets an administrator delete a review they do not own', async () => {

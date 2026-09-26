@@ -260,15 +260,37 @@ export interface PlacementSlots {
  * the main line has it, and from the first drag it writes to its own slot and diverges.
  * An empty slot of its own — a variant whose models were all moved back to where they
  * arrived — is NOT the same as no slot, and is honoured as the empty list it is.
+ *
+ * BATCH BX made "no slot of its own" a WALK rather than a jump to the main line, and
+ * `slotOrder` is the walk: lib/reviews/lines.placementSlotOrder answers the line's own
+ * id followed by its ancestors', so a variant of a variant nobody has moved shows what
+ * its parent shows — which is the whole of "a variant starts from its parent line's
+ * current state", and which a jump straight to `placements` would have answered with
+ * the main line's positions instead. Omitted, and the order is the one id the caller
+ * named, which is exactly what this did before and what a caller with no lines in hand
+ * (the lobby's viewer, a test's fixtures) still wants.
  */
 export function placementsForLine(
   asset: PlacementSlots | null | undefined,
   lineId: string | null | undefined,
+  slotOrder?: readonly string[],
 ): readonly StoredPlacement[] | null | undefined {
   if (!asset) return undefined;
-  const id = typeof lineId === 'string' ? lineId.trim() : '';
-  if (id === '') return asset.placements;
-  return asset.linePlacements?.[id] ?? asset.placements;
+  const named = typeof lineId === 'string' ? lineId.trim() : '';
+  const order =
+    slotOrder && slotOrder.length > 0
+      ? slotOrder
+      : named === ''
+        ? []
+        : [named];
+  const slots = asset.linePlacements;
+  for (const id of order) {
+    const key = typeof id === 'string' ? id.trim() : '';
+    if (key === '') continue;
+    const slot = slots?.[key];
+    if (slot !== undefined && slot !== null) return slot;
+  }
+  return asset.placements;
 }
 
 /**

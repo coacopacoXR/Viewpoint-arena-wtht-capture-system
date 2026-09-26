@@ -322,6 +322,16 @@ export type SceneRefusalReason =
   | 'role-forbidden'
   | 'role-forbidden-setting'
   | 'scene-full'
+  // This room is on a variant the review has DROPPED (docs/plan/15-sessions-and-variants.md
+  // batch BX). A dropped line is kept for the record and its room is still reachable by
+  // address, so somebody can walk into it and move a model — and the room server would
+  // happily persist it, relay it, and let lib/scene/keepPlacements write it into the
+  // review's saved positions for a line nobody is exploring any more. It is a fact
+  // about the ROOM rather than about the person asking, which is why the server answers
+  // it before it looks anybody's role up: an owner refused here would otherwise be told
+  // "only the host can change the models", a sentence about a rule that is not the one
+  // standing in their way.
+  | 'dropped-line'
   // A SCENE_SEED that arrived after the room had already been seeded — two people
   // opened the same empty variant room at the same moment and both offered its
   // review's models. Not a refusal anybody did anything wrong, which is why the
@@ -616,6 +626,9 @@ export function describeSceneRefusal(reason: SceneRefusalReason): string {
   }
   if (reason === 'scene-full') {
     return `This room is already showing ${MAX_SCENE_MODELS} models. Hide or remove one before adding another.`;
+  }
+  if (reason === 'dropped-line') {
+    return 'This variant was dropped, so its model can no longer be changed.';
   }
   if (reason === 'already_seeded') {
     return 'Somebody else already put this review’s models up, so this room kept theirs.';

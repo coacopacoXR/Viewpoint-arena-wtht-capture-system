@@ -3,12 +3,16 @@
 // docs/plan/15-sessions-and-variants.md batch BO, from the sketch the user approved.
 // A card in the grid is four facts; this is the rest of them, and it exists because the
 // user's complaint was that the lobby gave no way to see inside a review before walking
-// into it. Everything here is READ: the model, the whole session map, every meeting with
-// who was in it and what it decided, and the minutes of the last one. The only writes it
-// offers are the two deletes, and both are the owner's and this install's administrators'
-// (lib/reviews/roles.ts `deleteReview`), both go through api/reviews/delete.ts, and both
-// ask INLINE rather than with window.confirm — a browser dialog cannot be styled to the
-// panel that offered it, cannot be tested, and freezes the page behind it while it waits.
+// into it. What it shows is READ: the model, the whole session map, every meeting with
+// who was in it and what it decided, and the minutes of the last one.
+//
+// WHAT IT WRITES is two different questions with two different answers. Changing the
+// review — its name (batch BQ), its variants and where they are merged or dropped
+// (batch BX) — is `can(role, 'editReview')` and belongs to its owners and editors. The
+// two DELETES are `deleteReview`: the owner and this install's administrators, and not
+// its editors. Both go through api/reviews/delete.ts, and every one of them asks INLINE
+// rather than with window.confirm — a browser dialog cannot be styled to the panel that
+// offered it, cannot be tested, and freezes the page behind it while it waits.
 //
 // "TURN IN 3D" is the one heavy thing on the page and it is lazy. The viewer pulls
 // three.js, which is hundreds of kilobyles nobody wants for a list of reviews, so it is
@@ -22,21 +26,25 @@
 // those four things for one review in parallel, so the panel uses it rather than making
 // the grid carry detail for sixty reviews to show one.
 
-import React, { Suspense, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { Box, Check, Pencil, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import SessionMap, { summaryLines } from '../review/SessionMap';
 import StartVariant from '../review/StartVariant';
+import { VariantActions } from '../review/VariantActions';
 import { Avatar } from './IdentityChip';
 import PeopleSection from './PeopleSection';
 import { useSessionMap } from '../../lib/reviews/useSessionMap';
+import { openLine } from '../../lib/reviews/openLine';
 import {
   MAIN_LINE_NAME,
-  lineLabel,
+  droppedLineReason,
+  hiddenLineCount,
+  lineLabelWithOrigin,
   lineStatusWord,
+  mergedIntoLabel,
   orderedLines,
-  roomPath,
   sessionLabel,
   type ReviewLine,
 } from '../../lib/reviews/lines';
@@ -53,6 +61,19 @@ const ReviewModelViewer = React.lazy(() => import('./ReviewModelViewer'));
 const LABEL = 'font-mono text-[9px] font-bold text-gray-400 uppercase tracking-widest';
 const BUTTON =
   'inline-flex items-center gap-1.5 px-3 py-2 rounded-md border text-[13px] font-semibold transition-colors disabled:opacity-50';
+
+/**
+ * A line the Lines list hides until asked for.
+ *
+ * The same question `hiddenLineCount` answers, spelled here rather than inferred from
+ * `lineStatusWord`, because the number in the toggle's label and the rows it reveals
+ * have to be the same set: a "Show dropped (2)" that produced three greyed rows is a
+ * list that does not do what it says. A dropped MAIN line is not in it either — a review
+ * whose own history was closed has no lobby row to hide, and the map is where that shows.
+ */
+function isDroppedLine(line: ReviewLine): boolean {
+  return line.kind === 'variant' && line.status === 'dropped';
+}
 
 export interface ReviewPreviewProps {
   review: LobbyReview;
@@ -88,6 +109,22 @@ export interface ReviewPreviewProps {
    */
   accountsOn?: boolean;
   onOpen: () => void;
+  /**
+   * How this host opens one line's room — `lineId` null for the main line.
+   *
+   * Every "open a line" in this panel goes through it: the Lines list, the session map
+   * drawn above it, and the panel that has just started a variant and wants to stand in
+   * it. The lobby passes its own `enterRoom`, which writes this browser's name first;
+   * omitted, lib/reviews/openLine is used, which does the same for everybody else and
+   * sends a browser with no name to the lobby to get one.
+   *
+   * A plain <Link to={roomPath(…)}> is never the answer, however convenient it looks
+   * here: pages/RoomPage admits an arrival by its router state or by the mark openLine
+   * leaves in sessionStorage, and a link carries neither — so it navigates to exactly
+   * the right address and is then bounced straight back to the lobby. That bounce is
+   * what "it is not possible to open variants from the lobby" actually was.
+   */
+  onOpenLine?: (lineId: string | null) => void;
   /** The review is gone; the caller drops it from the grid and clears the panel. */
   onDeleted: () => void;
   /** A session was deleted; the caller re-reads the grid's summaries. */
@@ -197,9 +234,11 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
   isMeetingHost = false,
   accountsOn = false,
   onOpen,
+  onOpenLine,
   onDeleted,
   onChanged,
 }) => {
+  const navigate = useNavigate();
   const map = useSessionMap(review.id);
   const [turned, setTurned] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -210,6 +249,8 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
   const [nameValue, setNameValue] = useState('');
   const [nameBusy, setNameBusy] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
+  // Whether the Lines list is showing the variants that were dropped. See the list.
+  const [showDropped, setShowDropped] = useState(false);
 
   // Another review selected: the 3D viewer of the last one must go, along with any
   // confirmation that was open on it. Unmounting is what disposes its geometry.
@@ -219,6 +260,7 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
     setError(null);
     setRenaming(false);
     setNameError(null);
+    setShowDropped(false);
   }, [review.id]);
 
   // The grid's summaries are already in hand, so they stand in until this review's own
@@ -226,6 +268,22 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
   // review that has met, which reads as a lost history rather than as a read in flight.
   const lines = map.lines.length > 0 ? map.lines : review.lines;
   const sessions = map.sessions.length > 0 ? map.sessions : review.sessions;
+
+  /**
+   * Open one of this review's lines, the way its host opens rooms.
+   *
+   * One function for all three places in this panel that open a line, because they must
+   * not disagree: a Lines row that went through the lobby's name form and a map panel
+   * that navigated by itself would answer the same press differently on a browser with
+   * no name yet — one would ask, the other would bounce.
+   */
+  const openAt = useCallback(
+    (lineId: string | null) => {
+      if (onOpenLine) onOpenLine(lineId);
+      else openLine(navigate, review.id, lineId);
+    },
+    [navigate, onOpenLine, review.id],
+  );
 
   const people = useMemo(() => peopleOf({ sessions }), [sessions]);
   const variants = useMemo(() => variantCountOf({ lines }), [lines]);
@@ -238,6 +296,14 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
   const latest = rows[0] ?? null;
 
   const lineOf = (lineId: string | null) => lines.find((line) => line.id === lineId) ?? null;
+
+  // What the Lines list draws: everything still being explored and everything merged,
+  // plus the dropped ones only once they have been asked for. See the list itself.
+  const dropped = hiddenLineCount(lines);
+  const visibleLines = useMemo(
+    () => orderedLines(lines).filter((line) => showDropped || !isDroppedLine(line)),
+    [lines, showDropped],
+  );
 
   /**
    * How many meetings a line has held.
@@ -455,66 +521,167 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
           reviewId={review.id}
           mayDelete={false}
           compact
+          // Its line panel's "Open this line's room" goes the same way the list below
+          // does, so this page's name form is submitted first. Without it the map opens
+          // the room by itself, and on a browser with no name yet that is a bounce back
+          // to the page the button was pressed on. See `onOpenLine` above.
+          onOpenLine={openAt}
           // A meeting's transcript is read for the one stop somebody clicks, so the
           // reader comes down with the rest of the map's data rather than the map
           // reaching for the database itself.
           readTranscript={map.readTranscript}
           onChanged={() => { map.refresh(); onChanged(); }}
           emptyMessage="No sessions recorded in this design review yet."
+          showDropped={showDropped}
+          onShowDroppedChange={setShowDropped}
         />
       </div>
 
-      {/* Every line of this review, and the way into each — batch BV.
+      {/* Every line of this review, and the way into each — batch BV, generalised by
+          batch BX.
 
-          The map above draws the lines, but a drawing is not a link, and the list
-          below is of SESSIONS: a variant started before anybody met had no row in it,
-          so this panel counted the variant in its header ("0 sessions · 1 variant")
-          and then offered no way to open it. That is the report this batch came from —
-          the variant's own room had kept every change, and from the lobby it did not
-          exist. One row per line, in the order the map draws them.
+          The map above draws the lines, but a drawing is not a way in, and the list
+          below this one is of SESSIONS: a variant started before anybody met had no row
+          in it, so this panel counted the variant in its header ("0 sessions · 1
+          variant") and then offered no way to open it. That was the first half of the
+          report this batch came from — the variant's own room had kept every change,
+          and from the lobby it did not exist.
 
-          An adopted or dropped line is greyed and carries no Open: it is finished
-          with, there is no meeting to walk into on it, and its record is its cards
-          and its place on the map. Rendered only where the review has lines at all,
-          so an ad-hoc room and an install with no database show no empty heading. */}
+          THE WAY IN IS A BUTTON AND NOT A LINK. It was a link, it looked like a link,
+          and pressing it did nothing at all: `roomPath` builds the right address, and
+          pages/RoomPage still turns away an arrival that comes with neither `fromLobby`
+          in its router state nor this review in `sessionStorage.vp_enteredRoom` — which
+          is every arrival a bare <Link> makes. That silent bounce was the second half of
+          the report ("it is not possible to open variants from the lobby"), and it is
+          why the row calls the host's opener instead of naming an address.
+
+          WHAT A ROW OFFERS depends on what the line is:
+
+            * Still being explored: Open, and — for a variant — its own "+ Variant" and
+              its own "Merge into…" and "Drop variant". Those three are the rest of the
+              report. A variant of a variant is the only way to answer a second question
+              about a side line without losing the first answer, and a merge that could
+              only ever go into the main line left two variants that turned out to agree
+              with no way to be brought together.
+            * Merged: no way in, and the line it went into with the date. Its meetings
+              continue there, so a row that offered to open it would open a room nobody
+              is in any more.
+            * Dropped: no way in, and the reason the meeting gave. Hidden until asked
+              for, because a dropped line is a record and not a choice, and a list where
+              the finished ones outnumber the live ones stops being a way in at all.
+
+          Rendered only where the review has lines at all, so an ad-hoc room and an
+          install with no database show no empty heading. */}
       {lines.length > 0 && (
         <div className="flex flex-col gap-2 px-4 py-3 border-b border-gray-100" data-testid="preview-lines">
-          <p className={LABEL}>Lines</p>
+          <div className="flex items-center gap-2">
+            <p className={LABEL}>Lines</p>
+            {dropped > 0 && (
+              <button
+                onClick={() => setShowDropped((value) => !value)}
+                aria-pressed={showDropped}
+                data-testid="show-dropped"
+                title={showDropped ? 'Hide the variants that were dropped' : 'Show the variants that were dropped'}
+                className="ml-auto font-mono text-[10px] font-semibold text-gray-500 hover:text-black transition-colors"
+              >
+                {showDropped ? 'Hide dropped' : `Show dropped (${dropped})`}
+              </button>
+            )}
+          </div>
           <ul className="flex flex-col gap-1.5">
-            {orderedLines(lines).map((line) => {
+            {visibleLines.map((line) => {
               const closed = lineStatusWord(line);
               const held = countOnLine(line);
-              const name = line.kind === 'main' ? MAIN_LINE_NAME : lineLabel(line) ?? 'Variant';
+              const live = closed === null;
+              const variantRow = line.kind === 'variant';
+              const name = variantRow
+                ? lineLabelWithOrigin(lines, line) ?? 'Variant'
+                : MAIN_LINE_NAME;
+              // What became of a line nobody is meeting on any more. Both halves are
+              // null on an install whose database predates the columns that hold them,
+              // and the row then says the one thing it does know — which is still true,
+              // and still better than a greyed name with no explanation beside it.
+              const went = mergedIntoLabel(lines, line);
+              const why = droppedLineReason(line);
+              const fate =
+                closed === 'adopted'
+                  ? went ?? 'This variant was adopted.'
+                  : closed === 'dropped'
+                    ? why
+                      ? `This variant was dropped: ${why}`
+                      : 'This variant was dropped.'
+                    : null;
               return (
                 <li
                   key={line.id}
                   data-testid="preview-line"
                   data-line={line.id}
                   data-status={closed ?? 'active'}
-                  className={clsx('flex items-center gap-2 text-xs', closed && 'opacity-50')}
+                  className={clsx(
+                    'flex flex-col gap-1',
+                    closed && 'opacity-60',
+                    // Dashed the way the map draws a dropped line's branch, so the two
+                    // say the same thing about it in the same panel.
+                    closed === 'dropped' && 'border-l-2 border-dashed border-gray-300 pl-2',
+                  )}
                 >
-                  <span className="flex-1 min-w-0 truncate text-gray-700" title={name}>
-                    {name}
-                    {line.kind === 'variant' && !closed && (
-                      <span className="text-gray-400"> · active</span>
-                    )}
-                    {closed && <span className="text-gray-400"> · {closed}</span>}
-                    <span className="text-gray-400">
-                      {' · '}{held} {held === 1 ? 'session' : 'sessions'}
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="flex-1 min-w-0 truncate text-gray-700" title={name}>
+                      {name}
+                      {variantRow && live && <span className="text-gray-400"> · active</span>}
+                      <span className="text-gray-400">
+                        {' · '}{held} {held === 1 ? 'session' : 'sessions'}
+                      </span>
                     </span>
-                  </span>
-                  {!closed && (
-                    <Link
-                      to={roomPath(review.id, line.kind === 'variant' ? line.id : null)}
-                      data-testid={line.kind === 'variant' ? 'open-variant' : 'open-main-line'}
-                      title={line.kind === 'variant' ? 'Open this variant’s room' : 'Open the main line’s room'}
-                      className={clsx(
-                        BUTTON,
-                        'px-2.5 py-1 text-[11px] bg-white border-gray-200 text-gray-600 hover:border-gray-400 hover:text-black shrink-0',
-                      )}
-                    >
-                      Open
-                    </Link>
+                    {live && (
+                      <button
+                        onClick={() => openAt(variantRow ? line.id : null)}
+                        data-testid={variantRow ? 'open-variant' : 'open-main-line'}
+                        title={variantRow ? 'Open this variant’s room' : 'Open the main line’s room'}
+                        className={clsx(
+                          BUTTON,
+                          'px-2.5 py-1 text-[11px] bg-white border-gray-200 text-gray-600 hover:border-gray-400 hover:text-black shrink-0',
+                        )}
+                      >
+                        Open
+                      </button>
+                    )}
+                    {/* Its own "+ Variant", on the variant's own row. The main line's
+                        row has none because the button in the actions list below
+                        already explores from it, and two buttons that start the same
+                        thing are a choice with one answer. */}
+                    {live && variantRow && mayEdit && (
+                      <StartVariant
+                        reviewId={review.id}
+                        lineId={line.id}
+                        mayEdit={mayEdit}
+                        isMeetingHost={isMeetingHost}
+                        label="+ Variant"
+                        look="row"
+                        inFlow
+                        data-testid="line-row-variant"
+                        onOpenLine={openAt}
+                        onStarted={() => { map.refresh(); onChanged(); }}
+                      />
+                    )}
+                  </div>
+                  {fate && (
+                    <p className="text-[11px] text-gray-500 leading-snug" data-testid="line-fate">{fate}</p>
+                  )}
+                  {/* Where a merge or a drop is decided from the lobby, for the same
+                      people the room offers them to. `lines` comes down with it so the
+                      chooser lists the review's live lines from the rows this panel
+                      has already read rather than asking for them a second time. */}
+                  {live && variantRow && mayEdit && (
+                    <VariantActions
+                      reviewId={review.id}
+                      variant={line}
+                      lines={lines}
+                      mayEdit={mayEdit}
+                      isMeetingHost={isMeetingHost}
+                      onOpenLine={openAt}
+                      onChanged={() => { map.refresh(); onChanged(); }}
+                    />
                   )}
                 </li>
               );
@@ -597,7 +764,11 @@ const ReviewPreview: React.FC<ReviewPreviewProps> = ({
             look="row"
             inFlow
             data-testid="preview-variant"
-            onStarted={onChanged}
+            onOpenLine={openAt}
+            // The panel's own read as well as the grid's: the Lines list above draws
+            // `map.lines` when it has any, so a grid re-read on its own would leave the
+            // variant that was just started out of the very list that offers to open it.
+            onStarted={() => { map.refresh(); onChanged(); }}
           />
         )}
         {/* Filtered to this review: the tracker reads ?review= the way it reads

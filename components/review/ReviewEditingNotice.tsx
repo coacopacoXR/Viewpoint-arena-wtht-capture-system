@@ -35,6 +35,22 @@ const ReviewEditingNotice: React.FC<{
   const someoneElseEditing = editing !== null && editing.userId !== localUserId;
   const editorName = editing?.name || 'Somebody';
 
+  /**
+   * The room's answer to a press of Edit.
+   *
+   * Three answers, and the third is not about this person: 'busy' names a colleague
+   * and comes with the take-over, 'role' names the review's roster, and 'dropped'
+   * names the LINE — this room is a variant the review has finished with, so there is
+   * no edit for anybody to hold and nothing to take over. A dropped variant is kept on
+   * the session map for the record and its room is still reachable by address, which
+   * is how somebody comes to press Edit in one.
+   */
+  const refusalText = (reason: 'busy' | 'role' | 'dropped', name: string | null): string => {
+    if (reason === 'busy') return `${name || 'Somebody'} is editing`;
+    if (reason === 'dropped') return 'This variant was dropped, so it can no longer be edited.';
+    return 'Editing this review is for its owner and its editors';
+  };
+
   if (!someoneElseEditing && !refusal && !notice) return null;
 
   return (
@@ -61,9 +77,7 @@ const ReviewEditingNotice: React.FC<{
       {refusal && (
         <div className="pointer-events-auto flex items-center gap-3 px-4 py-2.5 rounded-lg bg-white shadow-lg border border-amber-400">
           <span className="text-xs text-gray-800">
-            {refusal.reason === 'busy'
-              ? `${refusal.editorName || 'Somebody'} is editing`
-              : 'Editing this review is for its owner and its editors'}
+            {refusalText(refusal.reason, refusal.editorName)}
           </span>
           {refusal.reason === 'busy' && (
             <>

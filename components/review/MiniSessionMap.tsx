@@ -115,7 +115,13 @@ function currentStop(layout: SessionMapLayout): MapStop | null {
 }
 
 export interface MiniSessionMapProps {
-  /** The review's lines: its main line and every variant, adopted and dropped alike. */
+  /**
+   * The review's lines: its main line and every variant, adopted and dropped alike.
+   *
+   * Dropped ones are not DRAWN — see the filter below. They are still wanted in the
+   * prop, because a card's job is to describe the review and "this review has tried and
+   * rejected two answers" is part of that; it is the drawing that has no room for them.
+   */
   lines: readonly ReviewLine[];
   /** Every session of the review, on every line. */
   sessions: readonly LineSession[];
@@ -130,9 +136,29 @@ export interface MiniSessionMapProps {
  * second thing to aim at inside a 34px strip would be a control nobody can hit twice.
  */
 export const MiniSessionMap: React.FC<MiniSessionMapProps> = ({ lines, sessions, className }) => {
+  // Dropped lines are hidden, and there is deliberately no toggle here. Batch BX: a
+  // dropped variant is an answer the review tried and rejected, and it is kept for the
+  // record — but the record is the map and the Lines list, both of which have a "Show
+  // dropped" toggle. A 34px strip on a lobby card has room for the shape of the review
+  // as it stands and nothing else, and a row of grey dashes in it reads as a drawing
+  // that went wrong rather than as history. Merged lines stay: they are part of how the
+  // review got to where it is, and the green return into the line they went to is the
+  // most informative thing this miniature can say.
+  const drawn = useMemo(() => lines.filter((line) => line.status !== 'dropped'), [lines]);
+  const droppedIds = useMemo(
+    () => new Set(lines.filter((line) => line.status === 'dropped').map((line) => line.id)),
+    [lines],
+  );
+  // A meeting held on a line that is not drawn has no row to sit on, so it goes too. It
+  // is not lost: the session it belongs to is still in the tracker and still on the map.
+  const drawnSessions = useMemo(
+    () => sessions.filter((session) => !session.lineId || !droppedIds.has(session.lineId)),
+    [droppedIds, sessions],
+  );
+
   // No revisions and no cards: those two only ever produce the labels SessionMap puts
   // under and above a stop, and this drawing has no room for a single character.
-  const layout = useMemo(() => layoutSessionMap(lines, sessions, [], []), [lines, sessions]);
+  const layout = useMemo(() => layoutSessionMap(drawn, drawnSessions, [], []), [drawn, drawnSessions]);
   const current = useMemo(() => currentStop(layout), [layout]);
 
   // A review that has not met has no shape to show, and an empty box where a picture
@@ -147,7 +173,7 @@ export const MiniSessionMap: React.FC<MiniSessionMapProps> = ({ lines, sessions,
 
   const unit = unitOf(layout.height);
   const dash = `${unit * DASH} ${unit * DASH}`;
-  const variants = lines.filter((line) => line.kind === 'variant').length;
+  const variants = drawn.filter((line) => line.kind === 'variant').length;
   const label =
     variants === 0
       ? 'Main line, no variants'

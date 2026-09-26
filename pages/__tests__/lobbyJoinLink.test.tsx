@@ -20,6 +20,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { useReviewSetupStore } from '../../lib/reviewSetupStore';
+import { resetLineCache } from '../../lib/reviews/linesRepo';
 import type { MyReview } from '../../lib/reviewParticipantsRepo';
 
 const { tables, mineMock, createReviewMock, summaryMock, configHolder } = vi.hoisted(() => ({
@@ -117,7 +118,7 @@ function curation(id: string, over: Record<string, unknown> = {}) {
   };
 }
 
-async function renderLobby(state?: { joinRoomId?: string }) {
+async function renderLobby(state?: { joinRoomId?: string; joinLineId?: string | null }) {
   render(
     <MemoryRouter initialEntries={[{ pathname: '/', state: state ?? null }]}>
       <Routes>
@@ -139,6 +140,10 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   useReviewSetupStore.getState().discardDraft();
+  // lib/reviews/linesRepo caches the answer per review for the life of the module, and
+  // an empty answer is cached like any other — so a test that puts rows in the table
+  // after one that read it would be reading the first test's `[]`.
+  resetLineCache();
   for (const key of Object.keys(tables)) delete tables[key];
   tables['review_curations'] = [curation('r1', { title: 'Door hinge' }), curation('r2', { title: 'Bike frame' })];
   tables['review_members'] = [];
@@ -351,11 +356,16 @@ describe('the lobby — arriving by a link, and arriving as a guest', () => {
     localStorage.clear();
     await renderLobby();
     expect(screen.getByTestId('lobby-name-field')).toBeInTheDocument();
-    // Filling it in takes the inline field away; the chip's copy is then the only one.
+    // Typing in it keeps it on screen. It used to vanish on the first letter, so a
+    // name could never be finished and Enter could never be pressed.
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('lobby-name-field'), { target: { value: 'A' } });
+    });
+    expect(screen.getByTestId('lobby-name-field')).toHaveValue('A');
     await act(async () => {
       fireEvent.change(screen.getByTestId('lobby-name-field'), { target: { value: 'Alex Chen' } });
     });
-    expect(screen.queryByTestId('lobby-name-field')).toBeNull();
+    expect(screen.getByTestId('lobby-name-field')).toHaveValue('Alex Chen');
   });
 
   it('holds the colour, the role and Sign out behind the name chip', async () => {
@@ -379,5 +389,132 @@ describe('the lobby — arriving by a link, and arriving as a guest', () => {
     await renderLobby();
     expect(screen.queryByTestId('lobby-admin-link')).toBeNull();
     expect(screen.getByTestId('lobby-tracker-link')).toBeInTheDocument();
+  });
+});
+
+// ─── Batch BX: the line an arrival named ────────────────────────────────────
+//
+// The room will not admit a browser that has no name, so lib/reviews/openLine sends a
+// nameless one HERE with the review AND the line in its router state and lets this page
+// ask. What is pinned below is that the second half survives the asking: the lobby used
+// to read only `joinRoomId`, so a person who pressed "Open" on Variant B, typed their
+// name and pressed Enter arrived on the MAIN line — a different meeting looking at a
+// different model, with nothing on screen to say the variant they asked for had been
+// lost on the way.
+
+describe('the lobby — the line an arrival named', () => {
+  /** One review_lines row, shaped the way the table holds it. */
+  function lineRow(id: string, over: Record<string, unknown> = {}) {
+    return {
+      id, review_id: 'r1', kind: 'variant', name: 'Frame forward', letter: 'B',
+      parent_session_id: null, parent_line_id: null, merged_into_line_id: null,
+      drop_reason: null, status: 'active', created_by: null, created_by_name: 'Coaco',
+      created_at: '2026-09-19T09:00:00.000Z', closed_at: null, ...over,
+    };
+  }
+
+  it('enters the line the bounce named, once it has asked for a name', async () => {
+    localStorage.clear();
+    await renderLobby({ joinRoomId: REVIEW_ID, joinLineId: LINE_ID });
+    expect(screen.getByTestId('lobby-name-field')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('lobby-name-field'), { target: { value: 'Alex Chen' } });
+    await act(async () => {
+      // Enter in the name field finishes what this browser came here to do. It used to
+      // start a NEW review, which is the last thing somebody arriving by a link wants.
+      fireEvent.keyDown(screen.getByTestId('lobby-name-field'), { key: 'Enter' });
+    });
+
+    expect(screen.getByTestId('room-path').textContent).toBe(`/room/${REVIEW_ID}`);
+    expect(screen.getByTestId('room-search').textContent).toBe(`?line=${LINE_ID}`);
+    expect(createReviewMock).not.toHaveBeenCalled();
+    // The mark the room's own entry guard reads on a reload, written by the same helper
+    // lib/reviews/openLine writes rather than by a literal spelled a fourth time.
+    expect(sessionStorage.getItem('vp_enteredRoom')).toBe(REVIEW_ID);
+  });
+
+  it('lets the link in the box name a different line than the bounce did', async () => {
+    // The box is the authority once somebody has typed in it: they may have been sent to
+    // one line and pasted a link to another, and guessing which they meant is how a
+    // person ends up in a meeting nobody invited them to.
+    await renderLobby({ joinRoomId: REVIEW_ID, joinLineId: LINE_ID });
+    fireEvent.change(screen.getByTestId('lobby-name-field'), { target: { value: 'Alex Chen' } });
+
+    fireEvent.change(screen.getByLabelText('Room code or link'), {
+      target: { value: '/room/other-review?line=other-line' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('join-button'));
+    });
+
+    expect(screen.getByTestId('room-path').textContent).toBe('/room/other-review');
+    expect(screen.getByTestId('room-search').textContent).toBe('?line=other-line');
+  });
+
+  it('enters the line from the invited preview’s Join, not only from the box', async () => {
+    summaryMock.current = {
+      id: 'invited-1', title: 'The one you were invited to', description: '', viewpoint_count: 0,
+      pin_count: 0, slide_count: 0, listed: false, thumbnail: null,
+      created_at: '2026-09-01T09:00:00.000Z', updated_at: '2026-09-20T09:00:00.000Z',
+    };
+    await renderLobby({ joinRoomId: 'invited-1', joinLineId: LINE_ID });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('preview-join'));
+    });
+    expect(screen.getByTestId('room-path').textContent).toBe('/room/invited-1');
+    expect(screen.getByTestId('room-search').textContent).toBe(`?line=${LINE_ID}`);
+  });
+
+  /**
+   * A lobby whose selected review has a main line and one variant, standing at the panel.
+   *
+   * The fake supabase answers every table whole and applies no filters, so the rows are
+   * the review's by `review_id` and the panel reads them through the real
+   * lib/reviews/linesRepo — which caches, hence the reset after seeding.
+   */
+  async function renderLobbyWithLines() {
+    tables['review_lines'] = [
+      lineRow('line-main', {
+        kind: 'main', name: 'Main line', letter: null, created_at: '2026-09-18T09:00:00.000Z',
+      }),
+      lineRow('line-b'),
+    ];
+    resetLineCache();
+    await renderLobby();
+    const card = screen
+      .getAllByTestId('review-card')
+      .find((each) => each.textContent?.includes('Door hinge'));
+    await act(async () => {
+      fireEvent.click(card?.querySelector('button') as HTMLElement);
+    });
+    await waitFor(() => expect(screen.getByTestId('preview-title')).toHaveTextContent('Door hinge'));
+  }
+
+  it('opens a variant from inside the preview panel through the lobby’s own door', async () => {
+    // The panel's rows are buttons that call back into this page rather than links that
+    // name an address, because the lobby has a name to write first. This is the half the
+    // panel's own test cannot see: that the callback it is handed really does produce an
+    // address with the line in it.
+    await renderLobbyWithLines();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('open-variant'));
+    });
+    expect(screen.getByTestId('room-path').textContent).toBe('/room/r1');
+    expect(screen.getByTestId('room-search').textContent).toBe('?line=line-b');
+    expect(sessionStorage.getItem('vp_enteredRoom')).toBe('r1');
+  });
+
+  it('opens the main line from the same panel as the address with no ?line= in it', async () => {
+    // Every link already in circulation for a review opens exactly the room it always
+    // did, and the main line is the one a reload of that room has to resolve to.
+    await renderLobbyWithLines();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('open-main-line'));
+    });
+    expect(screen.getByTestId('room-path').textContent).toBe('/room/r1');
+    expect(screen.getByTestId('room-search').textContent).toBe('');
   });
 });

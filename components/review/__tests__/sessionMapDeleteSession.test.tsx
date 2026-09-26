@@ -41,7 +41,7 @@ const MAIN_ID = 'line-main';
 
 const MAIN: ReviewLine = {
   id: MAIN_ID, reviewId: REVIEW, kind: 'main', name: 'Main line', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: '',
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null, status: 'active', createdBy: null, createdByName: '',
   createdAt: '2026-03-01T09:00:00.000Z', closedAt: null,
 };
 

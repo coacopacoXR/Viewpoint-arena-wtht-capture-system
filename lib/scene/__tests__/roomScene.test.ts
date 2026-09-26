@@ -581,6 +581,11 @@ const EVERY_REFUSAL: Record<SceneRefusalReason, true> = {
   'role-forbidden': true,
   'role-forbidden-setting': true,
   'scene-full': true,
+  // Batch BX (docs/plan/15): a dropped variant's room is still reachable by address,
+  // and its model is a record rather than a live scene. The refusal is about the ROOM,
+  // not about the person, which is why it has a sentence of its own — "only the host
+  // can change the models" would name a rule that is not the one in the way.
+  'dropped-line': true,
   // Batch BQ2: two connections offered the same never-seeded room its review's models
   // at the same moment. It has a sentence like any other reason, and the client drops
   // it without showing it — see the SCENE_REFUSED handler in lib/usePartyPresence.

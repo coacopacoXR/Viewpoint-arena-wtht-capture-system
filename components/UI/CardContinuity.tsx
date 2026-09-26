@@ -24,6 +24,7 @@ import {
   cardLineLabel,
   closedCardLabel,
   lineById,
+  mergedIntoLabel,
   shortLineLabel,
   type ReviewLine,
 } from '../../lib/reviews/lines';
@@ -86,10 +87,11 @@ const CardContinuityLine: React.FC<{ item: TrackerItem; className?: string }> = 
  * TWO EXCEPTIONS, both from batch BL, and both because a card that has been through
  * a variant can no longer be described by the line it is on:
  *
- *   Adopted. Its `line_id` is the main line now but its meeting's `seq` is a number
- *   on the VARIANT, so "Main line · S2" would name a meeting that has nothing to do
- *   with this card. What it says instead is where it was raised and when the review
- *   took it in: "Raised in Variant A · adopted 12 Oct".
+ *   Adopted. Its `line_id` is the line it was merged into now but its meeting's `seq`
+ *   is a number on the VARIANT, so "Main line · S2" would name a meeting that has
+ *   nothing to do with this card. What it says instead is where it was raised and where
+ *   it went: "Raised in Variant B · merged into Variant A 26 Sep", or "… · adopted 26
+ *   Sep" on an install whose database cannot name the destination.
  *
  *   Dropped with its variant. It was closed by the drop rather than by a decision
  *   about the engineering, and the reason is the thing worth reading:
@@ -112,7 +114,18 @@ export const CardLineLabel: React.FC<{ item: TrackerItem; className?: string }> 
 
   const moved = item.origin_line_id != null && item.origin_line_id !== lineId;
   if (moved && origin) {
-    const adopted = adoptedCardLabel(origin, item.adopted_at ?? null);
+    // Batch BX gave a merge somewhere to go other than the main line, and the sentence
+    // has to follow it: "Raised in Variant B · adopted 26 Sep" about a merge into
+    // Variant A sends the reader looking for the card on the review's front page when
+    // the model it was raised against is standing on a side line. Null on an install
+    // whose database has no merged_into_line_id yet, and the sentence then says
+    // "adopted 26 Sep" — what it has always said, and still true of a card whose
+    // destination nobody recorded.
+    const adopted = adoptedCardLabel(
+      origin,
+      item.adopted_at ?? null,
+      mergedIntoLabel(reviewLines, origin),
+    );
     if (adopted) return <span title={adopted} className={style}>{adopted}</span>;
     // Adopted with no moment recorded — an install whose database predates the
     // column. Where it was raised is still true and is still not this line.

@@ -46,6 +46,7 @@ import { identityOf } from '../../lib/config/schema.ts';
 import { can } from '../../lib/reviews/roles.ts';
 import { shortLineLabel, toReviewLine, type ReviewLine } from '../../lib/reviews/lines.ts';
 import { postgrestFetch } from '../_lib/postgrest.ts';
+import { countsDetail, recordAudit } from '../_lib/audit.ts';
 import {
   bodyRecord,
   bodyString,
@@ -54,6 +55,7 @@ import {
   json,
   rpc,
   storeFailure,
+  type Caller,
   type RpcAnswer,
 } from './_lib/reviewCaller.ts';
 
@@ -138,7 +140,21 @@ function refusal(answer: RpcAnswer, reviewId: string): { status: number; error: 
   return { status: 502, error: 'That could not be deleted. Try again.' };
 }
 
-async function deleteReview(res: VercelResponse, reviewId: string): Promise<void> {
+/** The review's name for an audit row; empty when it cannot be read. */
+async function readReviewTitle(reviewId: string): Promise<string> {
+  try {
+    const res = await postgrestFetch(`review_curations?id=eq.${enc(reviewId)}&select=title&limit=1`);
+    if (!res || !res.ok) return '';
+    const rows = (await res.json()) as Array<{ title?: unknown }>;
+    return typeof rows[0]?.title === 'string' ? rows[0].title : '';
+  } catch {
+    return '';
+  }
+}
+
+async function deleteReview(res: VercelResponse, reviewId: string, caller: Caller): Promise<void> {
+  // Read before it is gone, for the audit row.
+  const title = await readReviewTitle(reviewId);
   const answer = await rpc('rpc/delete_review', { p_review: reviewId }, TAG);
   const refused = refusal(answer, reviewId);
   if (refused) {
@@ -146,6 +162,11 @@ async function deleteReview(res: VercelResponse, reviewId: string): Promise<void
     res.status(refused.status).json({ error: refused.error });
     return;
   }
+  await recordAudit({
+    action: 'review_deleted', roomId: reviewId, actorId: caller.accountId, actorName: caller.name,
+    subjectId: reviewId, subjectName: title,
+    detail: countsDetail([[countOf(answer, 'sessions'), 'session', 'sessions'], [countOf(answer, 'items'), 'card', 'cards']]),
+  });
   res.status(200).json({
     ok: true,
     action: 'review',
@@ -159,6 +180,7 @@ async function deleteSession(
   res: VercelResponse,
   reviewId: string,
   sessionId: string,
+  caller: Caller,
 ): Promise<void> {
   if (!(await sessionBelongsTo(sessionId, reviewId))) {
     res.status(404).json({ error: 'That session is not part of this design review.' });
@@ -182,6 +204,11 @@ async function deleteSession(
     res.status(refused.status).json({ error: refused.error });
     return;
   }
+  await recordAudit({
+    action: 'session_deleted', roomId: reviewId, actorId: caller.accountId, actorName: caller.name,
+    subjectId: sessionId, subjectName: await readReviewTitle(reviewId),
+    detail: countsDetail([[countOf(answer, 'items'), 'card', 'cards']]),
+  });
   res.status(200).json({
     ok: true,
     action: 'session',
@@ -250,9 +277,9 @@ export async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === 'review') {
-      await deleteReview(res, reviewId);
+      await deleteReview(res, reviewId, caller);
     } else if (sessionId) {
-      await deleteSession(res, reviewId, sessionId);
+      await deleteSession(res, reviewId, sessionId, caller);
     }
   } catch (err) {
     const failure = storeFailure(err);

@@ -666,9 +666,11 @@ interface AppState {
    * Structured rather than a sentence because 'busy' comes with a button: the
    * person who was refused can ask to take over, which is a second EDITING_START
    * with force. 'role' has nothing to offer — the tools are not this person's —
-   * and is only ever shown as the reason the Edit button did nothing.
+   * and is only ever shown as the reason the Edit button did nothing. So is
+   * 'dropped', which is not about this person at all: the room is on a variant the
+   * review has finished with, so there is no edit for anybody to hold.
    */
-  reviewEditRefusal: { reason: 'busy' | 'role'; editorName: string | null } | null;
+  reviewEditRefusal: { reason: 'busy' | 'role' | 'dropped'; editorName: string | null } | null;
 
   // --- NEW: Comments Display State ---
   commentsExpandedInScene: boolean; // Toggle all comments expanded in 3D
@@ -801,7 +803,7 @@ interface AppState {
   // --- Editing the design review actions (batch BH) ---
   setReviewEditing: (editing: { userId: string; name: string } | null) => void;
   setReviewEditNotice: (message: string | null) => void;
-  setReviewEditRefusal: (refusal: { reason: 'busy' | 'role'; editorName: string | null } | null) => void;
+  setReviewEditRefusal: (refusal: { reason: 'busy' | 'role' | 'dropped'; editorName: string | null } | null) => void;
   /**
    * Which transform the amber strip is applying to the SELECTED scene model.
    * In the store rather than in the strip's component because the thing being

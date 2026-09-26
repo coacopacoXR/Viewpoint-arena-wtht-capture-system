@@ -18,14 +18,14 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { LobbyReview } from '../../../lib/lobby/useLobbyData';
 import type { LineSession, SessionCardRef } from '../../../lib/reviews/linesRepo';
 import type { ReviewLine } from '../../../lib/reviews/lines';
 import type { ModelRevision } from '../../../lib/reviews/revisionsRepo';
 
-const { mapData, deletes, viewer } = vi.hoisted(() => ({
+const { mapData, deletes, viewer, opened } = vi.hoisted(() => ({
   mapData: {
     current: {
       lines: [] as ReviewLine[],
@@ -39,6 +39,8 @@ const { mapData, deletes, viewer } = vi.hoisted(() => ({
   deletes: { review: vi.fn(), session: vi.fn() },
   /** Bumped by the module factory, which runs when — and only when — the chunk loads. */
   viewer: { imports: 0 },
+  /** Every call lib/reviews/openLine was asked to make, for a panel with no host door. */
+  opened: { call: vi.fn() },
 }));
 
 vi.mock('../../../lib/reviews/useSessionMap', () => ({
@@ -48,6 +50,14 @@ vi.mock('../../../lib/reviews/useSessionMap', () => ({
 vi.mock('../../../lib/reviews/deleteClient', () => ({
   deleteReview: (...args: unknown[]) => deletes.review(...args),
   deleteSession: (...args: unknown[]) => deletes.session(...args),
+}));
+
+// Only `openLine` is faked, and the rest of the module is spread in because the panel is
+// not the only thing that reaches it: the session map and the two variant components it
+// embeds read the same module, and a mock that answered one export would break them.
+vi.mock('../../../lib/reviews/openLine', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../lib/reviews/openLine')>()),
+  openLine: (...args: unknown[]) => opened.call(...args),
 }));
 
 // The lazy boundary under test. vi.mock replaces the module, and the FACTORY is what
@@ -62,10 +72,16 @@ const ReviewPreview = (await import('../ReviewPreview')).default;
 
 const MAIN: ReviewLine = {
   id: 'line-main', reviewId: 'r1', kind: 'main', name: 'Main line', letter: null,
-  parentSessionId: null, status: 'active', createdBy: null, createdByName: 'Coaco',
+  parentSessionId: null, parentLineId: null, mergedIntoLineId: null, dropReason: null,
+  status: 'active', createdBy: null, createdByName: 'Coaco',
   createdAt: '2026-09-20T09:00:00.000Z', closedAt: null,
 };
 
+/**
+ * A variant that was merged, with NO destination recorded — an install whose database
+ * predates `merged_into_line_id`. The row then falls back to the status word, which is
+ * still true; `MERGED` below is the one that can name where it went.
+ */
 const VARIANT: ReviewLine = {
   ...MAIN, id: 'line-a', kind: 'variant', name: 'Steel hinge pin', letter: 'A',
   parentSessionId: 's1', status: 'adopted', closedAt: '2026-09-23T09:00:00.000Z',
@@ -134,6 +150,7 @@ beforeEach(() => {
   armDetail();
   deletes.review.mockReset().mockResolvedValue({ ok: true, sessions: 3, items: 6 });
   deletes.session.mockReset().mockResolvedValue({ ok: true, items: 2 });
+  opened.call.mockReset();
   // `viewer.imports` is deliberately NOT reset: it counts module loads, and a module is
   // loaded once per run no matter how many panels mount. Resetting it would make the
   // laziness assertion depend on which test pressed the button first.
@@ -360,32 +377,62 @@ describe('the preview panel — its lines, and the way into each', () => {
 
   it('lists the main line and every variant, each with the room it opens', () => {
     mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE, VARIANT] };
-    renderPanel();
+    const onOpenLine = vi.fn();
+    renderPanel({ onOpenLine });
 
     const rows = screen.getAllByTestId('preview-line');
     expect(rows).toHaveLength(3);
     // In the order the map above it draws them: the main line first, then the variants
     // in the order they were started.
     expect(rows.map((row) => row.getAttribute('data-line'))).toEqual(['line-main', 'line-b', 'line-a']);
-    // The main line's address carries no ?line= — every link already in circulation for
-    // a review opens exactly the room it always did.
-    expect(screen.getByTestId('open-main-line').getAttribute('href')).toBe('/room/r1');
-    expect(screen.getByTestId('open-variant').getAttribute('href')).toBe('/room/r1?line=line-b');
+    // A BUTTON and not a link, which is the whole of batch BX's first half: the row used
+    // to be a <Link> to `roomPath`, which is the right address, and pages/RoomPage still
+    // turned the arrival away because it admits one by its router state or by the mark
+    // lib/reviews/openLine leaves behind — neither of which a link carries. So it
+    // navigated and bounced straight back here, which is what "it is not possible to open
+    // variants from the lobby" was.
+    expect(screen.getByTestId('open-main-line').tagName).toBe('BUTTON');
+    expect(screen.getByTestId('open-variant').tagName).toBe('BUTTON');
+
+    // null is the main line, whose address deliberately carries no ?line= — every link
+    // already in circulation for a review opens exactly the room it always did.
+    fireEvent.click(screen.getByTestId('open-main-line'));
+    expect(onOpenLine).toHaveBeenLastCalledWith(null);
+    fireEvent.click(screen.getByTestId('open-variant'));
+    expect(onOpenLine).toHaveBeenLastCalledWith('line-b');
     expect(screen.getByTestId('preview-lines')).toHaveTextContent('Variant B · Frame forward');
+  });
+
+  it('opens through lib/reviews/openLine when its host has no door of its own', () => {
+    // The lobby passes `onOpenLine` because it has a name form to submit first. Every
+    // other host of this panel — and every test that does not think about it — gets the
+    // shared opener, which writes the same mark the lobby's `enterRoom` writes and so is
+    // admitted by the room. What must never happen is the panel navigating by itself.
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE] };
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('open-variant'));
+    expect(opened.call).toHaveBeenCalledTimes(1);
+    expect(opened.call.mock.calls[0]?.slice(1)).toEqual(['r1', 'line-b']);
+
+    fireEvent.click(screen.getByTestId('open-main-line'));
+    expect(opened.call.mock.calls[1]?.slice(1)).toEqual(['r1', null]);
   });
 
   it('offers a way into a variant that has never met, which is the whole of the batch', () => {
     mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE], sessions: [] };
-    renderPanel({ review: review({ sessions: [], lines: [MAIN, ACTIVE] }) });
+    const onOpenLine = vi.fn();
+    renderPanel({ review: review({ sessions: [], lines: [MAIN, ACTIVE] }), onOpenLine });
 
-    expect(screen.getByTestId('open-variant').getAttribute('href')).toBe('/room/r1?line=line-b');
+    fireEvent.click(screen.getByTestId('open-variant'));
+    expect(onOpenLine).toHaveBeenCalledWith('line-b');
     expect(screen.getByTestId('preview-lines')).toHaveTextContent('0 sessions');
     expect(screen.getByTestId('preview-lines')).toHaveTextContent('active');
   });
 
   it('greys a line that is finished with, and offers no way into it', () => {
     // An adopted or dropped variant has no meeting to walk into. Its record is its cards
-    // and its place on the map, so it stays on the list and loses the link.
+    // and its place on the map, so it stays on the list and loses the way in.
     mapData.current = { ...mapData.current, lines: [MAIN, VARIANT] };
     renderPanel();
 
@@ -395,6 +442,7 @@ describe('the preview panel — its lines, and the way into each', () => {
     expect(closed?.getAttribute('data-status')).toBe('adopted');
     expect(closed?.textContent).toContain('adopted');
     expect(closed?.querySelector('a')).toBeNull();
+    expect(closed?.querySelector('button')).toBeNull();
     // The main line is not finished with, so it keeps its way in.
     expect(screen.getByTestId('open-main-line')).toBeInTheDocument();
   });
@@ -423,5 +471,156 @@ describe('the preview panel — its lines, and the way into each', () => {
     renderPanel({ review: review({ lines: [], sessions: [] }) });
 
     expect(screen.queryByTestId('preview-lines')).toBeNull();
+  });
+});
+
+// ─── Batch BX: where a line came from, where it went, and the ones that are over ──
+//
+// Three things the user reported at once: a variant could not be opened from the lobby
+// (pinned above), a variant could only ever be merged into the main line, and a variant
+// that had been dropped still showed up as though it were somewhere to go. What is pinned
+// here is the second half — that the list says where a line came from and where it went,
+// that a dropped one is out of the way until somebody asks for it, and that the panel
+// offers a variant OF A VARIANT from the variant's own row.
+
+describe('the preview panel — a line’s origin, its end, and the ones it hides', () => {
+  /** A variant still being explored, started from the main line. */
+  const ACTIVE: ReviewLine = {
+    ...MAIN, id: 'line-b', kind: 'variant', name: 'Frame forward', letter: 'B',
+    parentSessionId: null, parentLineId: 'line-main', status: 'active', closedAt: null,
+    createdAt: '2026-09-19T09:00:00.000Z',
+  };
+
+  /** The same variant after a merge into Variant A, with the destination recorded. */
+  const MERGED: ReviewLine = {
+    ...ACTIVE, id: 'line-a', name: 'Steel hinge pin', letter: 'A', parentLineId: 'line-main',
+    status: 'adopted', mergedIntoLineId: 'line-b', closedAt: '2026-09-23T09:00:00.000Z',
+    createdAt: '2026-09-20T09:00:00.000Z',
+  };
+
+  /** A dropped one. Its stored reason carries the prefix `droppedLineReason` strips. */
+  const DROPPED: ReviewLine = {
+    ...ACTIVE, id: 'line-c', name: 'Printed bracket', letter: 'C', parentLineId: 'line-b',
+    status: 'dropped', dropReason: 'Dropped with Variant C: Too expensive to tool',
+    closedAt: '2026-09-24T09:00:00.000Z', createdAt: '2026-09-21T09:00:00.000Z',
+  };
+
+  const rowOf = (lineId: string): HTMLElement | undefined =>
+    screen.getAllByTestId('preview-line').find((row) => row.getAttribute('data-line') === lineId);
+
+  /**
+   * Scoped to the Lines list, because the session map this panel embeds has a toggle of
+   * its own with the SAME test id and the same words. Two "Show dropped (N)" buttons on
+   * one screen is deliberate — they are the same offer on two drawings of the same fact,
+   * and a panel whose list and whose map disagreed about what was hidden would be worse
+   * than either — so a test that means one of them has to say which.
+   */
+  const linesPanel = () => within(screen.getByTestId('preview-lines'));
+
+  it('says where a variant came from, so a variant of a variant is not a second answer to the same question', () => {
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE, DROPPED], sessions: [] };
+    renderPanel();
+    // Variant C was started from Variant B, and the row says so rather than leaving the
+    // reader to work out from the map above which line it left.
+    expect(linesPanel().getByTestId('show-dropped')).toBeInTheDocument();
+    fireEvent.click(linesPanel().getByTestId('show-dropped'));
+    expect(rowOf('line-c')?.textContent).toContain('Variant C · Printed bracket · from Variant B');
+    expect(rowOf('line-b')?.textContent).toContain('Variant B · Frame forward · from Main line');
+  });
+
+  it('says where a merged variant went, and offers no way into it', () => {
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE, MERGED], sessions: [] };
+    renderPanel();
+
+    const merged = rowOf('line-a');
+    expect(merged?.getAttribute('data-status')).toBe('adopted');
+    expect(merged?.textContent).toContain('merged into Variant B 23 Sep');
+    // Its meetings continue on the line it went into; a row that offered to open it would
+    // open a room nobody is in any more.
+    expect(merged?.querySelector('button')).toBeNull();
+    expect(rowOf('line-b')?.querySelector('[data-testid="open-variant"]')).not.toBeNull();
+  });
+
+  it('hides a dropped variant until it is asked for, and then says why it was dropped', () => {
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE, MERGED, DROPPED], sessions: [] };
+    renderPanel();
+
+    // Out of the way by default: it is a record and not a choice, and a list where the
+    // finished lines outnumber the live ones stops being a way in at all.
+    expect(screen.getAllByTestId('preview-line').map((row) => row.getAttribute('data-line')))
+      .toEqual(['line-main', 'line-b', 'line-a']);
+    const toggle = linesPanel().getByTestId('show-dropped');
+    expect(toggle).toHaveTextContent('Show dropped (1)');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(toggle);
+    expect(screen.getAllByTestId('preview-line').map((row) => row.getAttribute('data-line')))
+      .toEqual(['line-main', 'line-b', 'line-a', 'line-c']);
+    const dropped = rowOf('line-c');
+    expect(dropped?.getAttribute('data-status')).toBe('dropped');
+    // The reason the meeting agreed, without the "Dropped with Variant C:" prefix the
+    // CARDS carry — under the variant's own name that prefix says the same thing twice.
+    expect(dropped?.textContent).toContain('This variant was dropped: Too expensive to tool');
+    expect(dropped?.textContent).not.toContain('Dropped with');
+    expect(dropped?.querySelector('button')).toBeNull();
+    expect(linesPanel().getByTestId('show-dropped')).toHaveTextContent('Hide dropped');
+    expect(linesPanel().getByTestId('show-dropped')).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(linesPanel().getByTestId('show-dropped'));
+    expect(screen.getAllByTestId('preview-line')).toHaveLength(3);
+  });
+
+  it('has no toggle at all for a review with nothing dropped', () => {
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE], sessions: [] };
+    renderPanel();
+    expect(linesPanel().queryByTestId('show-dropped')).toBeNull();
+  });
+
+  it('offers a variant OF A VARIANT from the variant’s own row', () => {
+    // The second half of the report: a variant could only be started from the review, so
+    // there was no way to answer a second question about a side line without losing the
+    // first answer. The row's own button starts one from THAT line.
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE], sessions: [] };
+    renderPanel({ mayEdit: true });
+
+    const rowButton = screen.getByTestId('line-row-variant');
+    expect(rowButton.closest('[data-testid="preview-line"]')?.getAttribute('data-line')).toBe('line-b');
+    // The main line's row has none: the actions list at the bottom already offers that
+    // one, and two buttons that start the same thing are a choice with one answer.
+    expect(rowOf('line-main')?.querySelector('[data-testid="line-row-variant"]')).toBeNull();
+    expect(screen.getByTestId('preview-variant')).toBeInTheDocument();
+  });
+
+  it('offers to merge a variant into another line, and to drop it, from the same row', () => {
+    // Neither was reachable from the lobby at all before this batch: the map embedded
+    // above is a diagram (`mayDelete` false, no line actions), so the only place a merge
+    // could be started was inside a room — and the merge it offered had one destination.
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE], sessions: [] };
+    renderPanel({ mayEdit: true });
+
+    const row = rowOf('line-b');
+    expect(row?.querySelector('[data-testid="merge-variant"]')).not.toBeNull();
+    expect(row?.querySelector('[data-testid="drop-variant-open"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('merge-variant'));
+    const chooser = screen.getByTestId('merge-chooser');
+    expect(chooser).toHaveTextContent('Merge Variant B into');
+    // The main line is the only other line still being explored here, and it is the one
+    // already selected — a chooser that opens with nothing selected makes somebody read
+    // a list before they can press the obvious thing.
+    const targets = screen.getAllByTestId('merge-target');
+    expect(targets.map((target) => target.getAttribute('data-line'))).toEqual(['line-main']);
+    expect(targets[0]).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('offers no merge and no drop to somebody who may not change the review', () => {
+    mapData.current = { ...mapData.current, lines: [MAIN, ACTIVE], sessions: [] };
+    renderPanel({ mayEdit: false });
+
+    expect(screen.queryByTestId('merge-variant')).toBeNull();
+    expect(screen.queryByTestId('drop-variant-open')).toBeNull();
+    expect(screen.queryByTestId('line-row-variant')).toBeNull();
+    // Reading a line and opening one are not changing the review.
+    expect(screen.getByTestId('open-variant')).toBeInTheDocument();
   });
 });
