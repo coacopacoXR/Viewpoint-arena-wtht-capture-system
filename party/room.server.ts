@@ -813,12 +813,18 @@ export default class RoomServer implements Party.Server {
    *
    * Only the person editing can stop it, which is what makes a stray or replayed
    * EDITING_STOP from somebody else unable to end a colleague's session. A stop
-   * from anyone else is dropped without a word: there is nothing for them to act
-   * on and nothing for the room to hear.
+   * from anyone else does not change the lock, but the sender is told who holds it:
+   * a browser that believes it is editing when it is not (found live, 2026-09-26 —
+   * it left a room mid-edit and carried the flag into the next one) pressed Done
+   * and heard nothing, so Done looked broken. The answer goes to that connection
+   * only; the room hears nothing.
    */
   private stopEditing(conn: Party.Connection): void {
     const userId = this.connToUser.get(conn.id);
-    if (!userId || this.editing?.userId !== userId) return;
+    if (!userId || this.editing?.userId !== userId) {
+      conn.send(JSON.stringify({ type: 'EDITING_STATE', payload: this.editingStatePayload() } as RoomMessage));
+      return;
+    }
     this.clearEditing();
   }
 

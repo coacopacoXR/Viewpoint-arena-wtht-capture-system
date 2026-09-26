@@ -557,6 +557,13 @@ export function usePartyPresence(roomId: string | undefined): UsePartyPresenceRe
     // puts its models back up.
     clearModelFileCache();
     useStore.getState().setRoomScene(emptyScene());
+    // And nobody is editing until this room says so. The flag lives in the store and
+    // is only ever set from the room's EDITING_STATE, so leaving a room mid-edit
+    // (the Lobby link, a variant) carried it into every room opened after that —
+    // the next room sends EDITING_STATE only while somebody IS editing, so nothing
+    // ever cleared it, and Done asked a room that did not think you were editing
+    // (user, 2026-09-26: "it gets stuck there and it is not possible to press done").
+    useStore.getState().setReviewEditing(null);
 
     // Knock. PRESENCE is how a connection tells the server who it is, and the
     // server's knock gate answers it (admitted, or parked in the host's

@@ -357,6 +357,22 @@ describe('room.server — editing the review (identity on)', () => {
     expect(server.editing).toEqual({ userId: 'owner-1', name: 'Paco' });
     expect(editingStates(relayed(server))).toHaveLength(0);
     expect(sent(editorConn).filter((m) => m.type === 'EDITING_REFUSED')).toHaveLength(0);
+    // …but the sender is told who does hold it, so a browser that wrongly thought it
+    // was editing corrects itself instead of pressing a Done that does nothing.
+    expect(sent(editorConn).filter((m) => m.type === 'EDITING_STATE').map((m) => m.payload))
+      .toEqual([{ editorUserId: 'owner-1', editorName: 'Paco' }]);
+  });
+
+  it('answers a Done in a room nobody is editing with "nobody", to that connection only', async () => {
+    const server = roomWith(OWNED);
+    const ownerConn = await person(server, 'c-owner', 'owner-1', 'Paco', tokenFor(OWNER_ACCOUNT, { name: OWNER_NAME }));
+    server.room.broadcast.mockClear();
+
+    await editing(server, ownerConn, 'EDITING_STOP');
+
+    expect(editingStates(relayed(server))).toHaveLength(0);
+    expect(sent(ownerConn).filter((m) => m.type === 'EDITING_STATE').map((m) => m.payload))
+      .toEqual([{ editorUserId: null, editorName: null }]);
   });
 
   it('releases the lock when the person holding it leaves the room', async () => {
